@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install:*)",
+      "Bash(where node:*)",
+      "Bash(cmd.exe /c \"where npm\")",
+      "Bash(export PATH=\"$PATH:/c/Program Files/nodejs:/c/Users/mobilise/AppData/Roaming/npm\")",
+      "Bash(npm --version)",
+      "Read(//c/Program Files/**)",
+      "Read(//c//**)",
+      "Read(//c/Users/mobilise/Desktop/Development Projects/PLI_Portal/frontend/$APPDATA/**)",
+      "Read(//c/Users/mobilise/AppData/Roaming/**)",
+      "Read(//c/Program Files \\(x86\\)/**)",
+      "Bash(cmd.exe /c \"npm --version\")",
+      "Bash(cmd.exe /c \"mongod --version\")",
+      "Bash(cmd.exe /c \"mongosh --version\")",
+      "Bash(cmd.exe /c \"where mongod\")",
+      "Bash(ls \"/c/Program Files \\(x86\\)/MongoDB/\")",
+      "Bash(cmd.exe /c \"sc query MongoDB\")",
+      "Bash(cmd.exe /c \"node --version && npm --version\")",
+      "Bash(export PATH=\"$PATH:/c/Program Files/nodejs\")",
+      "Bash(npm run:*)",
+      "Bash(export 'PATH=$PATH:/c/Program Files/nodejs')",
+      "Bash(npx kill-port:*)",
+      "Bash(cmd.exe /c \"netstat -ano | findstr :5000\")",
+      "Bash(node -e \":*)"
+    ]
+  }
+}
