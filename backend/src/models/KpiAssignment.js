@@ -1,72 +1,45 @@
-const mongoose = require('mongoose');
+const { DataTypes } = require('sequelize');
+const sequelize = require('../config/database');
 const { KPI_STATUS } = require('../config/constants');
 
-const kpiAssignmentSchema = new mongoose.Schema(
+const KpiAssignment = sequelize.define(
+  'KpiAssignment',
   {
-    financialYear: {
-      type: String,
-      required: true,
+    id: {
+      type: DataTypes.UUID,
+      defaultValue: DataTypes.UUIDV4,
+      primaryKey: true,
     },
-    month: {
-      type: Number,
-      required: true,
-      min: 1,
-      max: 12,
-    },
-    quarter: {
-      type: String,
-      required: true,
-      enum: ['Q1', 'Q2', 'Q3', 'Q4'],
-    },
-    employee: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
-      required: true,
-    },
-    manager: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
-      required: true,
-    },
-    createdBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
-    },
+    financialYear: { type: DataTypes.STRING(16), allowNull: false },
+    month: { type: DataTypes.INTEGER, allowNull: false },
+    quarter: { type: DataTypes.ENUM('Q1', 'Q2', 'Q3', 'Q4'), allowNull: false },
+    employeeId: { type: DataTypes.UUID, allowNull: false },
+    managerId: { type: DataTypes.UUID, allowNull: false },
+    createdById: { type: DataTypes.UUID, allowNull: true },
     status: {
-      type: String,
-      enum: Object.values(KPI_STATUS),
-      default: KPI_STATUS.DRAFT,
+      // Hardcoded ENUM string to match DB column after migration script.
+      type: DataTypes.ENUM(
+        'draft', 'assigned', 'commitment_submitted',
+        'employee_submitted', 'manager_reviewed',
+        'final_reviewed', 'final_approved', 'locked'
+      ),
+      defaultValue: KPI_STATUS.DRAFT,
     },
-    totalWeightage: {
-      type: Number,
-      default: 0,
-    },
-    isLocked: {
-      type: Boolean,
-      default: false,
-    },
-    lockedAt: Date,
-    lockedBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
-    },
-    employeeSubmittedAt: Date,
-    managerReviewedAt: Date,
-    finalReviewedAt: Date,
-    monthlyWeightedScore: {
-      type: Number,
-      default: null, // calculated after final review
-    },
+    totalWeightage: { type: DataTypes.DECIMAL(10, 2), defaultValue: 0 },
+    isLocked: { type: DataTypes.BOOLEAN, defaultValue: false },
+    lockedAt: { type: DataTypes.DATE, allowNull: true },
+    lockedById: { type: DataTypes.UUID, allowNull: true },
+    committedAt: { type: DataTypes.DATE, allowNull: true },
+    employeeSubmittedAt: { type: DataTypes.DATE, allowNull: true },
+    managerReviewedAt: { type: DataTypes.DATE, allowNull: true },
+    finalReviewedAt: { type: DataTypes.DATE, allowNull: true },   // legacy
+    finalApprovedAt: { type: DataTypes.DATE, allowNull: true },
+    monthlyWeightedScore: { type: DataTypes.DECIMAL(10, 4), allowNull: true },
   },
   {
-    timestamps: true,
+    tableName: 'kpi_assignments',
+    indexes: [{ unique: true, fields: ['employeeId', 'financialYear', 'month'] }],
   }
 );
 
-// One assignment per employee per FY + month
-kpiAssignmentSchema.index({ employee: 1, financialYear: 1, month: 1 }, { unique: true });
-kpiAssignmentSchema.index({ manager: 1, financialYear: 1, month: 1 });
-kpiAssignmentSchema.index({ status: 1 });
-kpiAssignmentSchema.index({ financialYear: 1, quarter: 1 });
-
-module.exports = mongoose.model('KpiAssignment', kpiAssignmentSchema);
+module.exports = KpiAssignment;

@@ -1,39 +1,50 @@
+const { Op } = require('sequelize');
 const User = require('../models/User');
+const Department = require('../models/Department');
 const KpiAssignment = require('../models/KpiAssignment');
 const { KPI_STATUS } = require('../config/constants');
-const { NotFoundError, ConflictError } = require('../utils/errors');
+const { NotFoundError } = require('../utils/errors');
 const { createAuditLog } = require('../middleware/auditLogger');
+
+const userIncludes = [
+  { model: Department, as: 'department', attributes: ['id', 'name', 'code'] },
+  { model: User, as: 'manager', attributes: ['id', 'name', 'employeeCode', 'email'] },
+];
 
 const getUsers = async (query = {}) => {
   const { page = 1, limit = 20, search, department, role, isActive } = query;
-  const filter = {};
+  const where = {};
 
   if (search) {
-    // Also search by manager name: find managers matching the search term
-    const matchingManagers = await User.find({
-      name: { $regex: search, $options: 'i' },
-    }).select('_id').lean();
-    const managerIds = matchingManagers.map((m) => m._id);
+    const matchingManagers = await User.findAll({
+      where: { name: { [Op.like]: `%${search}%` } },
+      attributes: ['id'],
+    });
+    const managerIds = matchingManagers.map((m) => m.id);
 
-    filter.$or = [
-      { name: { $regex: search, $options: 'i' } },
-      { employeeCode: { $regex: search, $options: 'i' } },
-      { email: { $regex: search, $options: 'i' } },
-      ...(managerIds.length > 0 ? [{ manager: { $in: managerIds } }] : []),
+    const or = [
+      { name: { [Op.like]: `%${search}%` } },
+      { employeeCode: { [Op.like]: `%${search}%` } },
+      { email: { [Op.like]: `%${search}%` } },
     ];
+    if (managerIds.length) {
+      or.push({ managerId: { [Op.in]: managerIds } });
+    }
+    where[Op.or] = or;
   }
-  if (department) filter.department = department;
-  if (role) filter.role = role;
-  if (isActive !== undefined) filter.isActive = isActive === 'true';
+  if (department) where.departmentId = department;
+  if (role) where.role = role;
+  if (isActive !== undefined) where.isActive = isActive === 'true';
 
-  const total = await User.countDocuments(filter);
-  const users = await User.find(filter)
-    .select('-passwordHash')
-    .populate('department', 'name code')
-    .populate('manager', 'name employeeCode')
-    .sort({ name: 1 })
-    .skip((page - 1) * limit)
-    .limit(Number(limit));
+  const total = await User.count({ where });
+  const users = await User.findAll({
+    where,
+    attributes: { exclude: ['passwordHash'] },
+    include: userIncludes,
+    order: [['name', 'ASC']],
+    offset: (page - 1) * limit,
+    limit: Number(limit),
+  });
 
   return {
     users,
@@ -47,69 +58,99 @@ const getUsers = async (query = {}) => {
 };
 
 const getUserById = async (id) => {
-  const user = await User.findById(id)
-    .select('-passwordHash')
-    .populate('department', 'name code')
-    .populate('manager', 'name employeeCode email');
+  const user = await User.findByPk(id, {
+    attributes: { exclude: ['passwordHash'] },
+    include: userIncludes,
+  });
   if (!user) throw new NotFoundError('User');
   return user;
 };
 
-const createUser = async (data, createdBy) => {
-  // Set passwordHash from password field
-  const userData = {
-    ...data,
-    passwordHash: data.password,
+const mapCreateBody = (data) => {
+  const { department, manager, password, ...rest } = data;
+  return {
+    ...rest,
+    email: data.email?.toLowerCase?.() || data.email,
+    employeeCode: data.employeeCode?.toUpperCase?.() || data.employeeCode,
+    departmentId: department || null,
+    managerId: manager || null,
+    passwordHash: password,
   };
-  delete userData.password;
+};
 
-  const user = await User.create(userData);
+const createUser = async (data, createdBy) => {
+  const user = await User.create(mapCreateBody(data));
 
   await createAuditLog({
     entityType: 'user',
-    entityId: user._id,
+    entityId: user.id,
     action: 'created',
     changedBy: createdBy,
     newValue: { employeeCode: user.employeeCode, name: user.name, role: user.role },
   });
 
-  return user.toJSON();
+  const full = await User.findByPk(user.id, {
+    attributes: { exclude: ['passwordHash'] },
+    include: userIncludes,
+  });
+  return full.get({ plain: true });
 };
 
 const updateUser = async (id, data, updatedBy) => {
-  const user = await User.findById(id);
+  const user = await User.findByPk(id);
   if (!user) throw new NotFoundError('User');
 
   const oldValue = {
     name: user.name,
     email: user.email,
     role: user.role,
-    department: user.department,
-    manager: user.manager,
+    departmentId: user.departmentId,
+    managerId: user.managerId,
     isActive: user.isActive,
   };
 
-  // If password is being reset by admin
-  if (data.password) {
-    data.passwordHash = data.password;
-    data.mustChangePassword = true;
-    delete data.password;
+  const patch = { ...data };
+  if (patch.password) {
+    patch.passwordHash = patch.password;
+    patch.mustChangePassword = true;
+    delete patch.password;
   }
+  if (patch.department !== undefined) {
+    patch.departmentId = patch.department;
+    delete patch.department;
+  }
+  if (patch.manager !== undefined) {
+    patch.managerId = patch.manager;
+    delete patch.manager;
+  }
+  if (patch.email) patch.email = patch.email.toLowerCase();
 
-  // If employee is being deactivated (exit from organisation), cascade:
-  // 1. Auto-disable KPI review applicability
-  // 2. Lock all their open/in-progress KPI assignments
   const wasActive = oldValue.isActive;
-  const isBeingDeactivated = wasActive && data.isActive === false;
+  const isBeingDeactivated = wasActive && patch.isActive === false;
+  const hasManagerChanged = patch.managerId !== undefined && String(oldValue.managerId || '') !== String(patch.managerId || '');
 
   if (isBeingDeactivated) {
-    data.kpiReviewApplicable = false;
+    patch.kpiReviewApplicable = false;
   }
 
-  Object.assign(user, data);
+  Object.assign(user, patch);
   await user.save();
 
-  // Cascade: freeze all open KPI assignments for deactivated employee
+  if (hasManagerChanged) {
+    const [reassignedCount] = await KpiAssignment.update(
+      { managerId: user.managerId || null },
+      { where: { employeeId: user.id } }
+    );
+    await createAuditLog({
+      entityType: 'user',
+      entityId: user.id,
+      action: 'manager_changed',
+      changedBy: updatedBy,
+      oldValue: { managerId: oldValue.managerId || null },
+      newValue: { managerId: user.managerId || null, reassignedOpenAssignments: reassignedCount },
+    });
+  }
+
   if (isBeingDeactivated) {
     const openStatuses = [
       KPI_STATUS.DRAFT,
@@ -118,19 +159,17 @@ const updateUser = async (id, data, updatedBy) => {
       KPI_STATUS.MANAGER_REVIEWED,
       KPI_STATUS.FINAL_REVIEWED,
     ];
-
-    const frozenAssignments = await KpiAssignment.updateMany(
-      { employee: user._id, status: { $in: openStatuses } },
-      { status: KPI_STATUS.LOCKED }
+    const [affected] = await KpiAssignment.update(
+      { status: KPI_STATUS.LOCKED },
+      { where: { employeeId: user.id, status: { [Op.in]: openStatuses } } }
     );
-
-    if (frozenAssignments.modifiedCount > 0) {
+    if (affected > 0) {
       await createAuditLog({
         entityType: 'kpi_assignment',
-        entityId: user._id,
+        entityId: user.id,
         action: 'bulk_locked_on_exit',
         changedBy: updatedBy,
-        oldValue: { openAssignments: frozenAssignments.modifiedCount },
+        oldValue: { openAssignments: affected },
         newValue: { status: 'locked', reason: 'Employee deactivated' },
       });
     }
@@ -138,21 +177,27 @@ const updateUser = async (id, data, updatedBy) => {
 
   await createAuditLog({
     entityType: 'user',
-    entityId: user._id,
+    entityId: user.id,
     action: 'updated',
     changedBy: updatedBy,
     oldValue,
     newValue: data,
   });
 
-  return user.toJSON();
+  const full = await User.findByPk(user.id, {
+    attributes: { exclude: ['passwordHash'] },
+    include: userIncludes,
+  });
+  return full.get({ plain: true });
 };
 
 const getTeamByManager = async (managerId) => {
-  return User.find({ manager: managerId, isActive: true })
-    .select('-passwordHash')
-    .populate('department', 'name code')
-    .sort({ name: 1 });
+  return User.findAll({
+    where: { managerId, isActive: true },
+    attributes: { exclude: ['passwordHash'] },
+    include: [{ model: Department, as: 'department', attributes: ['id', 'name', 'code'] }],
+    order: [['name', 'ASC']],
+  });
 };
 
 module.exports = { getUsers, getUserById, createUser, updateUser, getTeamByManager };

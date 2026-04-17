@@ -1,9 +1,9 @@
+const { ValidationError, UniqueConstraintError } = require('sequelize');
 const { AppError } = require('../utils/errors');
 
 const errorHandler = (err, req, res, _next) => {
-  // Mongoose validation error
-  if (err.name === 'ValidationError' && err.errors) {
-    const details = Object.values(err.errors).map((e) => ({
+  if (err instanceof ValidationError) {
+    const details = err.errors.map((e) => ({
       field: e.path,
       message: e.message,
     }));
@@ -13,24 +13,33 @@ const errorHandler = (err, req, res, _next) => {
     });
   }
 
-  // Mongoose duplicate key
-  if (err.code === 11000) {
-    const field = Object.keys(err.keyValue)[0];
+  if (err instanceof UniqueConstraintError) {
+    const field = err.errors?.[0]?.path || 'field';
     return res.status(409).json({
       success: false,
       error: { message: `Duplicate value for ${field}` },
     });
   }
 
-  // Mongoose cast error (invalid ObjectId)
-  if (err.name === 'CastError') {
+  if (err.name === 'SequelizeForeignKeyConstraintError') {
     return res.status(400).json({
       success: false,
-      error: { message: `Invalid ${err.path}: ${err.value}` },
+      error: { message: 'Invalid reference (foreign key constraint)' },
     });
   }
 
-  // Our custom AppError
+  if (
+    err.name === 'SequelizeConnectionError' ||
+    err.name === 'SequelizeConnectionRefusedError' ||
+    err.name === 'SequelizeHostNotReachableError' ||
+    err.name === 'SequelizeAccessDeniedError'
+  ) {
+    return res.status(503).json({
+      success: false,
+      error: { message: 'Database unavailable. Please try again shortly.' },
+    });
+  }
+
   if (err instanceof AppError) {
     return res.status(err.statusCode).json({
       success: false,
@@ -38,7 +47,6 @@ const errorHandler = (err, req, res, _next) => {
     });
   }
 
-  // Unknown error
   console.error('Unhandled error:', err);
   return res.status(500).json({
     success: false,

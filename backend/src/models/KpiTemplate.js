@@ -1,54 +1,33 @@
-const mongoose = require('mongoose');
+const { DataTypes } = require('sequelize');
+const sequelize = require('../config/database');
 const { KPI_CATEGORIES, KPI_UNITS } = require('../config/constants');
 
-const kpiTemplateSchema = new mongoose.Schema(
+const KpiTemplate = sequelize.define(
+  'KpiTemplate',
   {
-    name: {
-      type: String,
-      required: true,
-      trim: true,
+    id: {
+      type: DataTypes.UUID,
+      defaultValue: DataTypes.UUIDV4,
+      primaryKey: true,
     },
-    description: {
-      type: String,
-      trim: true,
-    },
+    name: { type: DataTypes.STRING(512), allowNull: false },
+    description: { type: DataTypes.TEXT, allowNull: true },
     category: {
-      type: String,
-      enum: KPI_CATEGORIES,
-      default: 'Other',
+      type: DataTypes.ENUM(...KPI_CATEGORIES),
+      defaultValue: 'Other',
     },
     unit: {
-      type: String,
-      enum: KPI_UNITS,
-      default: 'Number',
+      type: DataTypes.ENUM(...KPI_UNITS),
+      defaultValue: 'Number',
     },
-    defaultWeightage: {
-      type: Number,
-    },
-    defaultTargetValue: {
-      type: Number,
-    },
-    defaultThresholdValue: {
-      type: Number,
-    },
-    defaultStretchTarget: {
-      type: Number,
-    },
-    isActive: {
-      type: Boolean,
-      default: true,
-    },
-    createdBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
-    },
+    defaultWeightage: { type: DataTypes.INTEGER, allowNull: true },
+    defaultTargetValue: { type: DataTypes.DECIMAL(14, 4), allowNull: true },
+    defaultThresholdValue: { type: DataTypes.DECIMAL(14, 4), allowNull: true },
+    defaultStretchTarget: { type: DataTypes.DECIMAL(14, 4), allowNull: true },
+    isActive: { type: DataTypes.BOOLEAN, defaultValue: true },
+    createdById: { type: DataTypes.UUID, allowNull: true },
   },
-  {
-    timestamps: true,
-  }
+  { tableName: 'kpi_templates' }
 );
 
-kpiTemplateSchema.index({ isActive: 1, category: 1 });
-kpiTemplateSchema.index({ name: 'text' });
-
-module.exports = mongoose.model('KpiTemplate', kpiTemplateSchema);
+module.exports = KpiTemplate;

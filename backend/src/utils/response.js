@@ -1,12 +1,14 @@
 /**
  * Standardized API response helpers
  */
+const { renameIdsForClient } = require('./renameIds');
 
 const sendSuccess = (res, data, message = 'Success', statusCode = 200) => {
+  const payload = data !== undefined && data !== null ? renameIdsForClient(data) : data;
   return res.status(statusCode).json({
     success: true,
     message,
-    data,
+    data: payload,
   });
 };
 
@@ -14,7 +16,7 @@ const sendPaginated = (res, data, pagination, message = 'Success') => {
   return res.status(200).json({
     success: true,
     message,
-    data,
+    data: renameIdsForClient(data),
     pagination,
   });
 };

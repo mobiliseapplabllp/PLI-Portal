@@ -1,31 +1,44 @@
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { getAdminDashboardApi } from '../../api/dashboard.api';
 import PageHeader from '../../components/common/PageHeader';
 import StatCard from '../../components/common/StatCard';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
 import { getCurrentFinancialYear, MONTHS, QUARTER_MAP, KPI_STATUS_LABELS } from '../../utils/constants';
 import { formatScore } from '../../utils/formatters';
-import { HiOutlineUserGroup, HiOutlineShieldCheck, HiOutlineChartBar, HiOutlineLockClosed } from 'react-icons/hi';
+import {
+  HiOutlineUserGroup,
+  HiOutlineShieldCheck,
+  HiOutlineChartBar,
+  HiOutlineLockClosed,
+  HiOutlineExclamation,
+  HiOutlineArrowRight,
+} from 'react-icons/hi';
 
 const STATUS_BAR_COLORS = {
   draft: 'bg-gray-400',
   assigned: 'bg-blue-500',
+  commitment_submitted: 'bg-sky-400',
   employee_submitted: 'bg-yellow-500',
   manager_reviewed: 'bg-purple-500',
-  final_reviewed: 'bg-green-500',
+  final_approved: 'bg-emerald-500',
+  final_reviewed: 'bg-emerald-400',  // legacy — same visual band
   locked: 'bg-red-500',
 };
 
 const STATUS_DOT_COLORS = {
   draft: 'bg-gray-400',
   assigned: 'bg-blue-500',
+  commitment_submitted: 'bg-sky-400',
   employee_submitted: 'bg-yellow-500',
   manager_reviewed: 'bg-purple-500',
-  final_reviewed: 'bg-green-500',
+  final_approved: 'bg-emerald-500',
+  final_reviewed: 'bg-emerald-400',
   locked: 'bg-red-500',
 };
 
 export default function AdminDashboard() {
+  const navigate = useNavigate();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -43,18 +56,26 @@ export default function AdminDashboard() {
   const currentMonthName = MONTHS.find((m) => m.value === currentMonthNum)?.label || '';
   const currentQuarter = QUARTER_MAP[currentMonthNum] || '';
 
-  // Build status map
+  // Build status map — merge final_reviewed into final_approved for display
   const statusMap = {};
   let totalAssignments = 0;
   data?.statusCounts?.forEach((s) => {
-    statusMap[s._id] = s.count;
+    const key = s._id === 'final_reviewed' ? 'final_approved' : s._id;
+    statusMap[key] = (statusMap[key] || 0) + s.count;
     totalAssignments += s.count;
   });
 
   const lockedCount = statusMap.locked || 0;
+  const pendingFinalApproval = (statusMap.manager_reviewed || 0);
 
   // Ordered statuses for the distribution bar
-  const statusOrder = ['draft', 'assigned', 'employee_submitted', 'manager_reviewed', 'final_reviewed', 'locked'];
+  const statusOrder = [
+    'draft', 'assigned', 'commitment_submitted',
+    'employee_submitted', 'manager_reviewed', 'final_approved', 'locked',
+  ];
+
+  // Final Approver Activity — pending by dept
+  const pendingByDept = data?.pendingQuarterlyByDept || [];
 
   return (
     <div>
@@ -94,8 +115,9 @@ export default function AdminDashboard() {
           color="green"
         />
         <StatCard
-          title="Pending Final Reviews"
-          value={data?.pendingFinalReviews}
+          title="Pending Final Approval"
+          value={pendingFinalApproval}
+          subtitle="Manager reviewed — awaiting final approver"
           icon={HiOutlineShieldCheck}
           color="yellow"
         />
@@ -114,7 +136,6 @@ export default function AdminDashboard() {
           <h3 className="text-lg font-semibold text-gray-800 mb-4">Status Distribution</h3>
           {totalAssignments > 0 ? (
             <>
-              {/* Stacked bar */}
               <div className="flex h-8 rounded-lg overflow-hidden mb-4">
                 {statusOrder.map((status) => {
                   const count = statusMap[status] || 0;
@@ -136,16 +157,13 @@ export default function AdminDashboard() {
                   );
                 })}
               </div>
-              {/* Legend */}
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                 {statusOrder.map((status) => {
                   const count = statusMap[status] || 0;
                   return (
                     <div key={status} className="flex items-center gap-2">
                       <span className={`w-3 h-3 rounded-full flex-shrink-0 ${STATUS_DOT_COLORS[status]}`} />
-                      <span className="text-xs text-gray-600">
-                        {KPI_STATUS_LABELS[status] || status}
-                      </span>
+                      <span className="text-xs text-gray-600">{KPI_STATUS_LABELS[status] || status}</span>
                       <span className="text-xs font-bold text-gray-800 ml-auto">{count}</span>
                     </div>
                   );
@@ -169,9 +187,7 @@ export default function AdminDashboard() {
                     <div className="flex items-center justify-between mb-1">
                       <span className="text-sm font-medium text-gray-700">{dept._id || 'Unassigned'}</span>
                       <div className="flex items-center gap-3">
-                        <span className="text-xs text-gray-500">
-                          {dept.locked}/{dept.total} locked
-                        </span>
+                        <span className="text-xs text-gray-500">{dept.locked}/{dept.total} locked</span>
                         <span className="text-sm font-bold text-gray-800 w-10 text-right">{completionPct}%</span>
                       </div>
                     </div>
@@ -198,6 +214,38 @@ export default function AdminDashboard() {
         </div>
       </div>
 
+      {/* Final Approver Activity card */}
+      {pendingByDept.length > 0 && (
+        <div className="card mb-6">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold text-gray-800">Final Approver Activity</h3>
+            <span className="text-xs text-amber-600 bg-amber-50 px-2 py-1 rounded-full font-medium">
+              {pendingByDept.reduce((s, d) => s + (d.count || 0), 0)} awaiting quarterly approval
+            </span>
+          </div>
+          <div className="space-y-2">
+            {pendingByDept.map((dept) => (
+              <div
+                key={dept.departmentId || dept.departmentName}
+                className="flex items-center justify-between p-3 rounded-lg bg-amber-50 border border-amber-100 hover:bg-amber-100 transition-colors cursor-pointer"
+                onClick={() => navigate(`/admin/review?dept=${dept.departmentId}&status=manager_reviewed`)}
+              >
+                <div className="flex items-center gap-3">
+                  <HiOutlineExclamation className="w-5 h-5 text-amber-500 flex-shrink-0" />
+                  <div>
+                    <p className="text-sm font-medium text-gray-800">{dept.departmentName || dept.departmentId}</p>
+                    <p className="text-xs text-amber-600">
+                      {dept.count} employee{dept.count !== 1 ? 's' : ''} awaiting quarterly approval
+                    </p>
+                  </div>
+                </div>
+                <HiOutlineArrowRight className="w-4 h-4 text-amber-500" />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Department summary table */}
       <div className="card">
         <h3 className="text-lg font-semibold text-gray-800 mb-4">Department Summary</h3>
@@ -206,11 +254,11 @@ export default function AdminDashboard() {
             <table className="min-w-full divide-y divide-gray-200">
               <thead className="bg-gray-50">
                 <tr>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Department</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Total</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Locked</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Completion</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Avg Score</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase">Department</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase">Total</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase">Locked</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase">Completion</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase">Avg Score</th>
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
@@ -224,10 +272,7 @@ export default function AdminDashboard() {
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-2">
                           <div className="flex-1 bg-gray-100 rounded-full h-2 max-w-[100px]">
-                            <div
-                              className="h-full rounded-full bg-primary-500"
-                              style={{ width: `${pct}%` }}
-                            />
+                            <div className="h-full rounded-full bg-primary-500" style={{ width: `${pct}%` }} />
                           </div>
                           <span className="text-xs font-medium text-gray-600 w-8">{pct}%</span>
                         </div>

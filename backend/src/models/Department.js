@@ -1,27 +1,19 @@
-const mongoose = require('mongoose');
+const { DataTypes } = require('sequelize');
+const sequelize = require('../config/database');
 
-const departmentSchema = new mongoose.Schema(
+const Department = sequelize.define(
+  'Department',
   {
-    code: {
-      type: String,
-      required: true,
-      unique: true,
-      trim: true,
-      uppercase: true,
+    id: {
+      type: DataTypes.UUID,
+      defaultValue: DataTypes.UUIDV4,
+      primaryKey: true,
     },
-    name: {
-      type: String,
-      required: true,
-      trim: true,
-    },
-    isActive: {
-      type: Boolean,
-      default: true,
-    },
+    code: { type: DataTypes.STRING(32), allowNull: false, unique: true },
+    name: { type: DataTypes.STRING(255), allowNull: false },
+    isActive: { type: DataTypes.BOOLEAN, defaultValue: true },
   },
-  {
-    timestamps: true,
-  }
+  { tableName: 'departments' }
 );
 
-module.exports = mongoose.model('Department', departmentSchema);
+module.exports = Department;

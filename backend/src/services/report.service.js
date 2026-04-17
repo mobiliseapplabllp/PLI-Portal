@@ -1,73 +1,115 @@
+const { QueryTypes, Op } = require('sequelize');
+const sequelize = require('../config/database');
 const KpiAssignment = require('../models/KpiAssignment');
 const KpiItem = require('../models/KpiItem');
+const QuarterlyApproval = require('../models/QuarterlyApproval');
 const PliRule = require('../models/PliRule');
+const PliSlab = require('../models/PliSlab');
+const User = require('../models/User');
+const Department = require('../models/Department');
 const { getMonthsInQuarter } = require('../utils/quarterHelper');
 const { calculateQuarterlyScore, matchPliSlab } = require('../utils/scoreCalculator');
 
-/**
- * Monthly KPI report for individual or filtered set
- */
+const assignmentIncludes = [
+  {
+    model: User,
+    as: 'employee',
+    attributes: ['id', 'name', 'employeeCode', 'email', 'designation', 'departmentId'],
+    include: [
+      { model: Department, as: 'department', attributes: ['id', 'name', 'code'] },
+      { model: User, as: 'manager', attributes: ['id', 'name', 'employeeCode', 'email'] },
+    ],
+  },
+  { model: User, as: 'manager', attributes: ['id', 'name', 'employeeCode'] },
+];
+
+const withCurrentManager = (assignment) => {
+  const plain = assignment?.get ? assignment.get({ plain: true }) : assignment;
+  if (!plain) return plain;
+  return {
+    ...plain,
+    currentManager: plain.employee?.manager || null,
+  };
+};
+
 const getMonthlyReport = async (query) => {
-  const filter = {};
-  if (query.financialYear) filter.financialYear = query.financialYear;
-  if (query.month) filter.month = Number(query.month);
-  if (query.employee) filter.employee = query.employee;
+  const where = {};
+  if (query.financialYear) where.financialYear = query.financialYear;
+  if (query.month) where.month = Number(query.month);
+  if (query.employee) where.employeeId = query.employee;
 
-  const assignments = await KpiAssignment.find(filter)
-    .populate('employee', 'name employeeCode department')
-    .populate('manager', 'name employeeCode')
-    .sort({ month: 1 });
+  const assignments = await KpiAssignment.findAll({
+    where,
+    include: assignmentIncludes,
+    order: [['month', 'ASC']],
+  });
 
-  // Attach items for each assignment
   const results = [];
   for (const a of assignments) {
-    const items = await KpiItem.find({ kpiAssignment: a._id });
-    results.push({ assignment: a, items });
+    const items = await KpiItem.findAll({
+      where: { kpiAssignmentId: a.id },
+      order: [['createdAt', 'ASC']],
+    });
+    results.push({ assignment: withCurrentManager(a), items });
   }
 
   return results;
 };
 
-/**
- * Quarterly summary report with PLI recommendation
- */
 const getQuarterlyReport = async (query) => {
   const { financialYear, quarter } = query;
   const months = getMonthsInQuarter(quarter);
 
-  // Get ALL assignments for the quarter (not just locked) so we can show status info
-  const allAssignments = await KpiAssignment.find({
-    financialYear,
-    month: { $in: months },
-  })
-    .populate('employee', 'name employeeCode department designation')
-    .populate('manager', 'name employeeCode');
+  const allAssignments = await KpiAssignment.findAll({
+    where: { financialYear, month: { [Op.in]: months } },
+    include: assignmentIncludes,
+  });
 
-  // Group by employee
   const employeeMap = {};
   for (const a of allAssignments) {
-    const empId = a.employee._id.toString();
+    const emp = a.employee;
+    const empId = emp.id;
     if (!employeeMap[empId]) {
       employeeMap[empId] = {
-        employee: a.employee,
-        manager: a.manager,
+        employee: emp,
+        manager: a.employee?.manager || a.manager,
         months: {},
       };
     }
     employeeMap[empId].months[a.month] = {
-      score: a.status === 'locked' ? a.monthlyWeightedScore : null,
+      score: a.status === 'locked' ? Number(a.monthlyWeightedScore) : null,
       status: a.status,
     };
   }
 
-  // Get PLI rules
-  const pliRule = await PliRule.findOne({ financialYear, quarter, isActive: true });
+  const pliRule = await PliRule.findOne({
+    where: { financialYear, quarter, isActive: true },
+    include: [{ model: PliSlab, as: 'slabs', separate: true, order: [['minScore', 'ASC']] }],
+  });
 
-  // Calculate quarterly scores (only locked months count towards score)
-  const results = Object.values(employeeMap).map((entry) => {
+  const slabs = pliRule?.slabs?.map((s) => s.get({ plain: true })) || [];
+
+  // Fetch quarterly approvals for this FY + quarter to get final quarterly scores
+  const employeeIds = Object.keys(employeeMap);
+  const quarterlyApprovals = await QuarterlyApproval.findAll({
+    where: { financialYear, quarter, employeeId: employeeIds, status: 'approved' },
+    attributes: ['employeeId', 'quarterlyScore'],
+  });
+  const quarterlyApprovalMap = {};
+  for (const qa of quarterlyApprovals) {
+    quarterlyApprovalMap[qa.employeeId] = Number(qa.quarterlyScore);
+  }
+
+  return Object.values(employeeMap).map((entry) => {
     const monthlyScores = months.map((m) => entry.months[m]?.score ?? null);
-    const quarterlyScore = calculateQuarterlyScore(monthlyScores);
-    const pliSlab = pliRule ? matchPliSlab(quarterlyScore, pliRule.slabs) : null;
+    // Prefer final-approved quarterly score; fall back to avg of monthly scores (legacy)
+    const empId = entry.employee.id;
+    const quarterlyScore = quarterlyApprovalMap[empId] != null
+      ? quarterlyApprovalMap[empId]
+      : calculateQuarterlyScore(monthlyScores);
+    const quarterlyScoreSource = quarterlyApprovalMap[empId] != null ? 'final_approved' : 'estimated';
+
+    const pliSlab = pliRule ? matchPliSlab(quarterlyScore, slabs) : null;
 
     return {
       employee: entry.employee,
@@ -81,67 +123,68 @@ const getQuarterlyReport = async (query) => {
         return acc;
       }, {}),
       quarterlyScore,
+      quarterlyScoreSource,
       allMonthsLocked: months.every((m) => entry.months[m]?.status === 'locked'),
       pliRecommendation: pliSlab,
     };
   });
-
-  return results;
 };
 
-/**
- * Department performance report
- */
 const getDepartmentReport = async (query) => {
-  const filter = {};
-  if (query.financialYear) filter.financialYear = query.financialYear;
-  if (query.month) filter.month = Number(query.month);
+  const replacements = {};
+  let sqlWhere = '1=1';
+  if (query.financialYear) {
+    sqlWhere += ' AND a.financialYear = :fy';
+    replacements.fy = query.financialYear;
+  }
+  if (query.month) {
+    sqlWhere += ' AND a.month = :month';
+    replacements.month = Number(query.month);
+  }
 
-  return KpiAssignment.aggregate([
-    { $match: filter },
-    {
-      $lookup: {
-        from: 'users',
-        localField: 'employee',
-        foreignField: '_id',
-        as: 'emp',
-      },
-    },
-    { $unwind: '$emp' },
-    {
-      $lookup: {
-        from: 'departments',
-        localField: 'emp.department',
-        foreignField: '_id',
-        as: 'dept',
-      },
-    },
-    { $unwind: { path: '$dept', preserveNullAndEmptyArrays: true } },
-    {
-      $group: {
-        _id: { department: '$dept.name', departmentId: '$dept._id' },
-        totalAssignments: { $sum: 1 },
-        avgScore: { $avg: '$monthlyWeightedScore' },
-        locked: { $sum: { $cond: [{ $eq: ['$status', 'locked'] }, 1, 0] } },
-        pending: { $sum: { $cond: [{ $ne: ['$status', 'locked'] }, 1, 0] } },
-      },
-    },
-    { $sort: { '_id.department': 1 } },
-  ]);
+  const rows = await sequelize.query(
+    `
+    SELECT
+      d.name AS departmentName,
+      d.id AS departmentId,
+      COUNT(a.id) AS totalAssignments,
+      AVG(a.monthlyWeightedScore) AS avgScore,
+      SUM(CASE WHEN a.status = 'locked' THEN 1 ELSE 0 END) AS locked,
+      SUM(CASE WHEN a.status != 'locked' THEN 1 ELSE 0 END) AS pending
+    FROM kpi_assignments a
+    INNER JOIN users u ON u.id = a.employeeId
+    LEFT JOIN departments d ON d.id = u.departmentId
+    WHERE ${sqlWhere}
+    GROUP BY d.id, d.name
+    ORDER BY d.name ASC
+    `,
+    { replacements, type: QueryTypes.SELECT }
+  );
+
+  return rows.map((r) => ({
+    _id: { department: r.departmentName, departmentId: r.departmentId },
+    totalAssignments: Number(r.totalAssignments),
+    avgScore: r.avgScore != null ? Number(r.avgScore) : null,
+    locked: Number(r.locked),
+    pending: Number(r.pending),
+  }));
 };
 
-/**
- * Pending submissions report
- */
 const getPendingReport = async (query) => {
-  const filter = { status: { $nin: ['locked', 'final_reviewed'] } };
-  if (query.financialYear) filter.financialYear = query.financialYear;
-  if (query.month) filter.month = Number(query.month);
+  // Exclude locked and both final status variants (new final_approved + legacy final_reviewed)
+  const where = { status: { [Op.notIn]: ['locked', 'final_approved', 'final_reviewed'] } };
+  if (query.financialYear) where.financialYear = query.financialYear;
+  if (query.month) where.month = Number(query.month);
 
-  return KpiAssignment.find(filter)
-    .populate('employee', 'name employeeCode department')
-    .populate('manager', 'name employeeCode')
-    .sort({ status: 1, month: 1 });
+  const assignments = await KpiAssignment.findAll({
+    where,
+    include: assignmentIncludes,
+    order: [
+      ['status', 'ASC'],
+      ['month', 'ASC'],
+    ],
+  });
+  return assignments.map(withCurrentManager);
 };
 
 module.exports = { getMonthlyReport, getQuarterlyReport, getDepartmentReport, getPendingReport };

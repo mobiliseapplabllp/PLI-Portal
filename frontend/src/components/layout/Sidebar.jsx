@@ -13,11 +13,12 @@ import {
   HiOutlineClipboardCheck,
   HiOutlineOfficeBuilding,
   HiOutlineDocumentText,
-  HiOutlineEye,
   HiOutlineTable,
   HiOutlineChevronLeft,
   HiOutlineChevronRight,
+  HiOutlineViewGridAdd,
 } from 'react-icons/hi';
+import { ROLE_CONFIG } from '../../utils/constants';
 
 const navItems = {
   employee: [
@@ -35,17 +36,34 @@ const navItems = {
     { to: '/employee/kpis', label: 'My KPIs', icon: HiOutlineClipboardList },
     { to: '/employee/quarterly', label: 'Quarterly Summary', icon: HiOutlineChartBar },
   ],
+  hr_admin: [
+    { to: '/hr-admin/dashboard', label: 'Dashboard', icon: HiOutlineHome },
+    { section: 'KPI Management' },
+    { to: '/hr-admin/kpi-plans', label: 'KPI Plans', icon: HiOutlineClipboardList },
+    { to: '/admin/kpi-templates', label: 'KPI Templates', icon: HiOutlineViewGridAdd },
+    { section: 'Reports' },
+    { to: '/admin/reports', label: 'Reports', icon: HiOutlineChartBar },
+  ],
+  final_approver: [
+    { to: '/final-approver/dashboard', label: 'Dashboard', icon: HiOutlineHome },
+    { section: 'Final Approval' },
+    { to: '/final-approver/workbench', label: 'Approval Workbench', icon: HiOutlineClipboardCheck },
+    { section: 'Reports' },
+    { to: '/admin/reports', label: 'Reports', icon: HiOutlineChartBar },
+  ],
   admin: [
     { to: '/admin/dashboard', label: 'Dashboard', icon: HiOutlineHome },
     { to: '/admin/employees', label: 'Employees', icon: HiOutlineUserGroup },
     { to: '/admin/departments', label: 'Departments', icon: HiOutlineOfficeBuilding },
     { to: '/admin/cycles', label: 'Appraisal Cycles', icon: HiOutlineCalendar },
     { to: '/admin/review-table', label: 'Review Table', icon: HiOutlineTable },
-    { to: '/admin/final-review', label: 'Final Review', icon: HiOutlineShieldCheck },
+    { to: '/admin/final-review', label: 'Final Approval Overview', icon: HiOutlineShieldCheck },
     { to: '/admin/kpi-templates', label: 'KPI Templates', icon: HiOutlineCollection },
     { to: '/admin/pli-rules', label: 'PLI Rules', icon: HiOutlineCog },
     { to: '/admin/reports', label: 'Reports', icon: HiOutlineDocumentReport },
     { to: '/admin/audit-logs', label: 'Audit Logs', icon: HiOutlineDocumentText },
+    { section: 'HR Admin View' },
+    { to: '/hr-admin/kpi-plans', label: 'KPI Plans', icon: HiOutlineClipboardList },
     { section: 'My Team' },
     { to: '/manager/team', label: 'My Team', icon: HiOutlineUserGroup },
     { to: '/manager/assign-kpis', label: 'Assign KPIs', icon: HiOutlineClipboardCheck },
@@ -61,6 +79,7 @@ export default function Sidebar({ collapsed, onToggle, onNavClick }) {
   if (!user) return null;
 
   const items = navItems[user.role] || [];
+  const roleConfig = ROLE_CONFIG[user.role] || ROLE_CONFIG.employee;
 
   const linkClass = ({ isActive }) =>
     `flex items-center ${collapsed ? 'justify-center' : 'gap-3'} px-4 py-2.5 rounded-lg text-sm font-medium transition-colors ${
@@ -75,11 +94,16 @@ export default function Sidebar({ collapsed, onToggle, onNavClick }) {
         collapsed ? 'w-16' : 'w-64'
       } h-full bg-white border-r border-gray-200 flex flex-col transition-all duration-200 ease-in-out`}
     >
-      {/* Logo */}
-      <div className="h-16 flex items-center justify-between px-4 border-b border-gray-200">
+      {/* Role-accented header */}
+      <div className={`h-16 flex items-center justify-between px-4 border-b border-gray-200 bg-gradient-to-r ${roleConfig.accentClass}`}>
         <div className={`flex items-center ${collapsed ? 'justify-center w-full' : ''}`}>
-          <HiOutlineCollection className="w-7 h-7 text-primary-600 flex-shrink-0" />
-          {!collapsed && <span className="ml-2 text-lg font-bold text-gray-900 whitespace-nowrap">PLI Portal</span>}
+          <HiOutlineCollection className="w-7 h-7 text-white flex-shrink-0" />
+          {!collapsed && (
+            <div className="ml-2">
+              <div className="text-xs text-white/70 leading-none">PLI Portal</div>
+              <div className="text-sm font-bold text-white leading-tight whitespace-nowrap">{roleConfig.label}</div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -96,7 +120,7 @@ export default function Sidebar({ collapsed, onToggle, onNavClick }) {
             )
           ) : (
             <NavLink
-              key={item.to}
+              key={`${item.to}-${idx}`}
               to={item.to}
               className={linkClass}
               title={collapsed ? item.label : undefined}

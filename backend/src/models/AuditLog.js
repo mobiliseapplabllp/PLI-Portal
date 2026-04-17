@@ -1,42 +1,23 @@
-const mongoose = require('mongoose');
+const { DataTypes } = require('sequelize');
+const sequelize = require('../config/database');
 
-const auditLogSchema = new mongoose.Schema(
+const AuditLog = sequelize.define(
+  'AuditLog',
   {
-    entityType: {
-      type: String,
-      required: true,
-      enum: ['user', 'department', 'kpi_assignment', 'kpi_item', 'appraisal_cycle', 'pli_rule'],
+    id: {
+      type: DataTypes.UUID,
+      defaultValue: DataTypes.UUIDV4,
+      primaryKey: true,
     },
-    entityId: {
-      type: mongoose.Schema.Types.ObjectId,
-      required: true,
-    },
-    action: {
-      type: String,
-      required: true,
-    },
-    changedBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
-      required: true,
-    },
-    oldValue: {
-      type: mongoose.Schema.Types.Mixed,
-    },
-    newValue: {
-      type: mongoose.Schema.Types.Mixed,
-    },
-    ipAddress: {
-      type: String,
-    },
+    entityType: { type: DataTypes.STRING(64), allowNull: false },
+    entityId: { type: DataTypes.UUID, allowNull: false },
+    action: { type: DataTypes.STRING(64), allowNull: false },
+    changedById: { type: DataTypes.UUID, allowNull: false },
+    oldValue: { type: DataTypes.JSON, allowNull: true },
+    newValue: { type: DataTypes.JSON, allowNull: true },
+    ipAddress: { type: DataTypes.STRING(64), allowNull: true },
   },
-  {
-    timestamps: true,
-  }
+  { tableName: 'audit_logs' }
 );
 
-auditLogSchema.index({ entityType: 1, entityId: 1 });
-auditLogSchema.index({ changedBy: 1 });
-auditLogSchema.index({ createdAt: -1 });
-
-module.exports = mongoose.model('AuditLog', auditLogSchema);
+module.exports = AuditLog;

@@ -6,17 +6,21 @@
  * Managers & Employees: {code}@mobilise.co.in / password123
  */
 require('dotenv').config();
-const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
-
-const User = require('../src/models/User');
-const Department = require('../src/models/Department');
-const AppraisalCycle = require('../src/models/AppraisalCycle');
-const PliRule = require('../src/models/PliRule');
-const KpiAssignment = require('../src/models/KpiAssignment');
-const KpiItem = require('../src/models/KpiItem');
-const Notification = require('../src/models/Notification');
-const AuditLog = require('../src/models/AuditLog');
+const sequelize = require('../src/config/database');
+require('../src/models/associations');
+const {
+  User,
+  Department,
+  AppraisalCycle,
+  PliRule,
+  PliSlab,
+  KpiAssignment,
+  KpiItem,
+  Notification,
+  AuditLog,
+  KpiTemplate,
+} = require('../src/models/associations');
 
 // ══════════════════════════════════════════════════════════════
 //  COMPLETE EMPLOYEE LIST WITH REPORTING HIERARCHY
@@ -167,24 +171,25 @@ function makeEmail(code) {
 
 const seed = async () => {
   try {
-    await mongoose.connect(process.env.MONGODB_URI);
-    console.log('Connected to MongoDB');
+    await sequelize.authenticate();
+    console.log('Connected to MySQL');
+    await sequelize.sync();
+    console.log('Schema synced');
 
-    // ── Clear ALL existing data ──
-    await Promise.all([
-      User.deleteMany({}),
-      Department.deleteMany({}),
-      AppraisalCycle.deleteMany({}),
-      PliRule.deleteMany({}),
-      KpiAssignment.deleteMany({}),
-      KpiItem.deleteMany({}),
-      Notification.deleteMany({}),
-      AuditLog.deleteMany({}),
-    ]);
+    await KpiItem.destroy({ where: {} });
+    await KpiAssignment.destroy({ where: {} });
+    await Notification.destroy({ where: {} });
+    await AuditLog.destroy({ where: {} });
+    await PliSlab.destroy({ where: {} });
+    await PliRule.destroy({ where: {} });
+    await AppraisalCycle.destroy({ where: {} });
+    await KpiTemplate.destroy({ where: {} });
+    await User.update({ managerId: null }, { where: {} });
+    await User.destroy({ where: {} });
+    await Department.destroy({ where: {} });
     console.log('Cleared ALL existing data');
 
-    // ── Create departments ──
-    const departments = await Department.insertMany([
+    const departments = await Department.bulkCreate([
       { code: 'TECH', name: 'Technology' },
       { code: 'SALES', name: 'Sales' },
       { code: 'HR', name: 'Human Resources' },
@@ -193,7 +198,9 @@ const seed = async () => {
     ]);
     console.log('Created departments:', departments.length);
     const deptMap = {};
-    departments.forEach((d) => { deptMap[d.code] = d._id; });
+    departments.forEach((d) => {
+      deptMap[d.code] = d.id;
+    });
 
     // ══════════════════════════════════════════════════════════════
     //  CREATE ALL USERS (2-pass: create first, then set managers)
@@ -212,13 +219,13 @@ const seed = async () => {
       email: 'admin@mobilise.co.in',
       passwordHash: plainPassword,
       role: 'admin',
-      department: deptMap.OPS,
+      departmentId: deptMap.OPS,
       designation: 'Admin',
       joiningDate: new Date('2020-01-01'),
       mustChangePassword: false,
     });
-    codeToId['MLP001'] = admin._id;
-    adminId = admin._id;
+    codeToId['MLP001'] = admin.id;
+    adminId = admin.id;
     console.log('Created admin:', admin.email, '(' + admin.employeeCode + ')');
 
     // Create remaining users via insertMany (pre-hashed password)
@@ -230,37 +237,31 @@ const seed = async () => {
         email: makeEmail(emp.code),
         passwordHash: hashedPassword,
         role: emp.role,
-        department: deptMap.OPS,
+        departmentId: deptMap.OPS,
         designation: emp.role === 'manager' ? 'Manager' : 'Employee',
         joiningDate: new Date('2024-01-01'),
         mustChangePassword: false,
         isActive: true,
       }));
 
-    const createdUsers = await User.insertMany(othersToCreate);
-    createdUsers.forEach((u) => { codeToId[u.employeeCode] = u._id; });
+    const createdUsers = await User.bulkCreate(othersToCreate);
+    createdUsers.forEach((u) => {
+      codeToId[u.employeeCode] = u.id;
+    });
     console.log('Created users:', createdUsers.length);
 
-    // Pass 2: Set manager references
-    const bulkOps = employeeData
-      .filter((e) => e.managerCode) // skip admin (null manager)
-      .map((emp) => ({
-        updateOne: {
-          filter: { employeeCode: emp.code },
-          update: { $set: { manager: codeToId[emp.managerCode] } },
-        },
-      }));
-
-    if (bulkOps.length > 0) {
-      const result = await User.bulkWrite(bulkOps);
-      console.log('Set manager references:', result.modifiedCount);
+    for (const emp of employeeData.filter((e) => e.managerCode)) {
+      await User.update(
+        { managerId: codeToId[emp.managerCode] },
+        { where: { employeeCode: emp.code } }
+      );
     }
+    console.log('Set manager references');
 
-    // Mark some employees as KPI review not applicable
     const kpiNotApplicableCodes = ['MLP159', 'MLP160', 'MLP161', 'MLP162', 'MLP163'];
-    await User.updateMany(
-      { employeeCode: { $in: kpiNotApplicableCodes } },
-      { kpiReviewApplicable: false }
+    await User.update(
+      { kpiReviewApplicable: false },
+      { where: { employeeCode: kpiNotApplicableCodes } }
     );
     console.log('Marked 5 employees as KPI review not applicable:', kpiNotApplicableCodes.join(', '));
 
@@ -314,7 +315,7 @@ const seed = async () => {
       return new Date(calYear, nextMonth - 1, day);
     }
 
-    const cycles = await AppraisalCycle.insertMany(
+    const cycles = await AppraisalCycle.bulkCreate(
       cycleMonths.map((c) => ({
         financialYear: FY,
         month: c.month,
@@ -323,7 +324,7 @@ const seed = async () => {
         employeeSubmissionDeadline: getDeadline(c.month, 5),
         managerReviewDeadline: getDeadline(c.month, 10),
         finalReviewDeadline: getDeadline(c.month, 15),
-        createdBy: adminId,
+        createdById: adminId,
       }))
     );
     console.log('Created appraisal cycles:', cycles.length);
@@ -338,13 +339,22 @@ const seed = async () => {
     ];
 
     for (const q of ['Q1', 'Q2', 'Q3', 'Q4']) {
-      await PliRule.create({
+      const rule = await PliRule.create({
         financialYear: FY,
         quarter: q,
-        slabs: standardSlabs,
         remarks: `Standard PLI payout rules for FY ${FY} ${q}`,
-        createdBy: adminId,
+        createdById: adminId,
+        isActive: true,
       });
+      await PliSlab.bulkCreate(
+        standardSlabs.map((s) => ({
+          pliRuleId: rule.id,
+          minScore: s.minScore,
+          maxScore: s.maxScore,
+          payoutPercentage: s.payoutPercentage,
+          label: s.label,
+        }))
+      );
     }
     console.log('Created PLI rules for all 4 quarters');
 
@@ -381,9 +391,9 @@ const seed = async () => {
             financialYear: FY,
             month: cm.month,
             quarter: cm.quarter,
-            employee: empId,
-            manager: mgrId,
-            createdBy: mgrId,
+            employeeId: empId,
+            managerId: mgrId,
+            createdById: mgrId,
             status: 'assigned',
             totalWeightage,
             isLocked: false,
@@ -391,12 +401,12 @@ const seed = async () => {
         }
       }
 
-      const createdAssignments = await KpiAssignment.insertMany(assignmentDocs);
+      const createdAssignments = await KpiAssignment.bulkCreate(assignmentDocs);
       assignmentCount += createdAssignments.length;
 
       for (const assignment of createdAssignments) {
         itemDocs.push({
-          kpiAssignment: assignment._id,
+          kpiAssignmentId: assignment.id,
           title: 'Attendance',
           description: 'On-time attendance percentage for the month.',
           category: 'Operational',
@@ -411,7 +421,7 @@ const seed = async () => {
 
         if (assignment.month === 4) {
           itemDocs.push({
-            kpiAssignment: assignment._id,
+            kpiAssignmentId: assignment.id,
             title: 'Claude Training Completion',
             description: 'Complete assigned Claude AI training modules. Target is 100% completion.',
             category: 'Development',
@@ -427,7 +437,7 @@ const seed = async () => {
       }
 
       if (itemDocs.length > 0) {
-        const createdItems = await KpiItem.insertMany(itemDocs);
+        const createdItems = await KpiItem.bulkCreate(itemDocs);
         itemCount += createdItems.length;
       }
 

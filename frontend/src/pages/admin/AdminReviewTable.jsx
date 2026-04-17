@@ -1,20 +1,21 @@
 import { useEffect, useState } from 'react';
-import { getAdminOverviewApi, finalReviewApi, lockAssignmentApi, unlockAssignmentApi } from '../../api/kpiAssignments.api';
+import { getAdminOverviewApi, lockAssignmentApi, unlockAssignmentApi } from '../../api/kpiAssignments.api';
 import PageHeader from '../../components/common/PageHeader';
 import FilterBar from '../../components/common/FilterBar';
 import StatusBadge from '../../components/common/StatusBadge';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
 import ConfirmDialog from '../../components/common/ConfirmDialog';
 import toast from 'react-hot-toast';
-import { getMonthName } from '../../utils/formatters';
-import { getCurrentFinancialYear } from '../../utils/constants';
+import { getMonthName, formatScore } from '../../utils/formatters';
+import { getCurrentFinancialYear, KPI_STATUS } from '../../utils/constants';
 
 export default function AdminReviewTable() {
-  const [filters, setFilters] = useState(() => ({ financialYear: getCurrentFinancialYear(), month: String(new Date().getMonth() + 1) }));
+  const [filters, setFilters] = useState(() => ({
+    financialYear: getCurrentFinancialYear(),
+    month: String(new Date().getMonth() + 1),
+  }));
   const [allData, setAllData] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [adminInputs, setAdminInputs] = useState({});
-  const [submitting, setSubmitting] = useState({});
   const [expandedEmployee, setExpandedEmployee] = useState(null);
   const [confirmLock, setConfirmLock] = useState(null);
 
@@ -22,60 +23,11 @@ export default function AdminReviewTable() {
     if (!filters.financialYear || !filters.month) return;
     setLoading(true);
     getAdminOverviewApi(filters)
-      .then((res) => {
-        setAllData(res.data.data || []);
-        const inputs = {};
-        (res.data.data || []).forEach((entry) => {
-          entry.items.forEach((item) => {
-            inputs[item._id] = {
-              finalValue: item.finalValue ?? '',
-              finalScore: item.finalScore ?? '',
-              finalComment: item.finalComment ?? '',
-            };
-          });
-        });
-        setAdminInputs(inputs);
-      })
+      .then((res) => setAllData(res.data.data || []))
       .finally(() => setLoading(false));
   };
 
   useEffect(() => { loadData(); }, [filters.financialYear, filters.month]);
-
-  const handleInputChange = (itemId, field, value) => {
-    setAdminInputs((prev) => ({
-      ...prev,
-      [itemId]: { ...prev[itemId], [field]: value },
-    }));
-  };
-
-  const handleFinalReview = async (assignmentId, items) => {
-    const payload = items.map((item) => ({
-      id: item._id,
-      finalValue: Number(adminInputs[item._id]?.finalValue),
-      finalScore: Number(adminInputs[item._id]?.finalScore),
-      finalComment: adminInputs[item._id]?.finalComment || '',
-    }));
-
-    if (payload.some((i) => isNaN(i.finalValue) || isNaN(i.finalScore))) {
-      toast.error('Please fill all admin values and scores');
-      return;
-    }
-    if (payload.some((i) => i.finalScore < 0 || i.finalScore > 100)) {
-      toast.error('Scores must be between 0 and 100');
-      return;
-    }
-
-    setSubmitting((prev) => ({ ...prev, [assignmentId]: true }));
-    try {
-      await finalReviewApi(assignmentId, { items: payload });
-      toast.success('Final review submitted');
-      loadData();
-    } catch (err) {
-      toast.error(err.response?.data?.error?.message || 'Submission failed');
-    } finally {
-      setSubmitting((prev) => ({ ...prev, [assignmentId]: false }));
-    }
-  };
 
   const handleLock = async (assignmentId) => {
     try {
@@ -98,20 +50,9 @@ export default function AdminReviewTable() {
     }
   };
 
-  // Compute live average when admin types
-  const getLiveAverage = (item) => {
-    const values = [];
-    if (item.employeeValue != null) values.push(Number(item.employeeValue));
-    if (item.managerValue != null) values.push(Number(item.managerValue));
-    const adminVal = adminInputs[item._id]?.finalValue;
-    if (adminVal !== '' && adminVal != null && !isNaN(Number(adminVal))) values.push(Number(adminVal));
-    if (values.length === 0) return null;
-    return (values.reduce((s, v) => s + v, 0) / values.length).toFixed(1);
-  };
-
   return (
     <div>
-      <PageHeader title="Admin Review Table" subtitle="View all submissions and provide final assessment" />
+      <PageHeader title="Admin Review Table" subtitle="View all KPI submissions and final approver decisions" />
 
       <FilterBar filters={filters} onChange={setFilters} showQuarter={false} />
 
@@ -127,69 +68,72 @@ export default function AdminReviewTable() {
 
       {/* Summary row */}
       {!loading && allData.length > 0 && (
-        <div className="mb-4 flex gap-3 text-sm">
+        <div className="mb-4 flex flex-wrap gap-2 text-sm">
           <span className="px-3 py-1 bg-gray-100 rounded-full">Total: {allData.length}</span>
-          <span className="px-3 py-1 bg-yellow-100 text-yellow-700 rounded-full">
-            Pending Review: {allData.filter((d) => d.assignment.status === 'manager_reviewed').length}
+          <span className="px-3 py-1 bg-purple-100 text-purple-700 rounded-full">
+            Pending Final Approval: {allData.filter((d) => d.assignment.status === KPI_STATUS.MANAGER_REVIEWED).length}
           </span>
-          <span className="px-3 py-1 bg-green-100 text-green-700 rounded-full">
-            Reviewed: {allData.filter((d) => d.assignment.status === 'final_reviewed').length}
+          <span className="px-3 py-1 bg-emerald-100 text-emerald-700 rounded-full">
+            Final Approved: {allData.filter((d) => [KPI_STATUS.FINAL_APPROVED, 'final_reviewed'].includes(d.assignment.status)).length}
           </span>
           <span className="px-3 py-1 bg-red-100 text-red-700 rounded-full">
-            Locked: {allData.filter((d) => d.assignment.status === 'locked').length}
+            Locked: {allData.filter((d) => d.assignment.status === KPI_STATUS.LOCKED).length}
           </span>
         </div>
       )}
 
       {!loading && allData.map((entry) => {
         const { assignment, items, overallAverageScore } = entry;
+        const displayManager = assignment.currentManager || assignment.manager;
         const isExpanded = expandedEmployee === assignment._id;
-        const canFinalReview = assignment.status === 'manager_reviewed';
-        const canLock = assignment.status === 'final_reviewed';
-        const canUnlock = assignment.status === 'locked';
-        const isLocked = assignment.status === 'locked';
+        const canLock = [KPI_STATUS.FINAL_APPROVED, 'final_reviewed'].includes(assignment.status);
+        const canUnlock = assignment.status === KPI_STATUS.LOCKED;
+        const isLocked = assignment.status === KPI_STATUS.LOCKED;
 
         return (
-          <div key={assignment._id} className={`card mb-4 ${isLocked ? 'border-red-200 bg-red-50/20' : ''}`}>
-            {/* Employee Header Row */}
+          <div key={assignment._id} className={`card mb-4 ${isLocked ? 'border-gray-300 bg-gray-50/30' : ''}`}>
+            {/* Header row */}
             <div
               className="flex items-center justify-between cursor-pointer"
               onClick={() => setExpandedEmployee(isExpanded ? null : assignment._id)}
             >
-              <div className="flex items-center gap-4">
-                <div>
-                  <h3 className="font-semibold text-gray-900">{assignment.employee?.name}</h3>
-                  <p className="text-sm text-gray-500">
-                    {assignment.employee?.employeeCode} | {assignment.employee?.designation}
-                    {assignment.manager && <span> | Manager: {assignment.manager.name}</span>}
-                  </p>
-                </div>
+              <div>
+                <h3 className="font-semibold text-gray-900">{assignment.employee?.name}</h3>
+                <p className="text-sm text-gray-500">
+                  {assignment.employee?.employeeCode}
+                  {assignment.employee?.designation ? ` · ${assignment.employee.designation}` : ''}
+                  {displayManager ? ` · Mgr: ${displayManager.name}` : ''}
+                  {' · '}{getMonthName(assignment.month)} {assignment.financialYear}
+                </p>
               </div>
               <div className="flex items-center gap-3">
                 <StatusBadge status={assignment.status} />
-                {overallAverageScore != null && (
-                  <span className="text-sm font-bold text-green-700 bg-green-50 px-2 py-0.5 rounded">
-                    Avg: {overallAverageScore}
-                  </span>
-                )}
                 {assignment.monthlyWeightedScore != null && (
                   <span className="text-sm font-bold text-primary-700 bg-primary-50 px-2 py-0.5 rounded">
-                    Final: {assignment.monthlyWeightedScore}
+                    Score: {formatScore(assignment.monthlyWeightedScore)}
                   </span>
                 )}
-                <div className="flex gap-1">
-                  {canLock && (
-                    <button onClick={(e) => { e.stopPropagation(); setConfirmLock(assignment._id); }} className="btn-danger text-xs px-2 py-1">Lock</button>
-                  )}
-                  {canUnlock && (
-                    <button onClick={(e) => { e.stopPropagation(); handleUnlock(assignment._id); }} className="btn-secondary text-xs px-2 py-1">Unlock</button>
-                  )}
-                </div>
+                {canLock && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setConfirmLock(assignment._id); }}
+                    className="text-xs px-2 py-1 rounded bg-red-50 text-red-700 hover:bg-red-100 border border-red-200 font-medium"
+                  >
+                    Lock
+                  </button>
+                )}
+                {canUnlock && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); handleUnlock(assignment._id); }}
+                    className="text-xs px-2 py-1 rounded bg-gray-100 text-gray-600 hover:bg-gray-200 border border-gray-200 font-medium"
+                  >
+                    Unlock
+                  </button>
+                )}
                 <span className="text-gray-400">{isExpanded ? '▲' : '▼'}</span>
               </div>
             </div>
 
-            {/* Expanded KPI Table - All 3 columns + average */}
+            {/* Expanded KPI table */}
             {isExpanded && (
               <div className="mt-4">
                 <div className="overflow-x-auto border border-gray-200 rounded-lg">
@@ -199,23 +143,17 @@ export default function AdminReviewTable() {
                         <th className="px-3 py-2 text-left font-semibold text-gray-600 w-44">KPI Title</th>
                         <th className="px-3 py-2 text-center font-semibold text-gray-600 w-16">Target</th>
                         <th className="px-3 py-2 text-center font-semibold text-gray-600 w-16">Weight</th>
-
-                        {/* Column 1: Employee */}
-                        <th className="px-3 py-2 text-center font-semibold text-blue-700 bg-blue-50 w-24">Emp Value</th>
-                        <th className="px-3 py-2 text-center font-semibold text-blue-700 bg-blue-50 w-40">Emp Comment</th>
-
-                        {/* Column 2: Manager */}
-                        <th className="px-3 py-2 text-center font-semibold text-purple-700 bg-purple-50 w-24">Mgr Value</th>
-                        <th className="px-3 py-2 text-center font-semibold text-purple-700 bg-purple-50 w-20">Mgr Score</th>
-                        <th className="px-3 py-2 text-center font-semibold text-purple-700 bg-purple-50 w-40">Mgr Comment</th>
-
-                        {/* Column 3: Admin */}
-                        <th className="px-3 py-2 text-center font-semibold text-orange-700 bg-orange-50 w-24">Admin Value</th>
-                        <th className="px-3 py-2 text-center font-semibold text-orange-700 bg-orange-50 w-20">Admin Score</th>
-                        <th className="px-3 py-2 text-center font-semibold text-orange-700 bg-orange-50 w-40">Admin Comment</th>
-
-                        {/* Column 4: Average */}
-                        <th className="px-3 py-2 text-center font-semibold text-green-700 bg-green-100 w-24">Avg Result</th>
+                        {/* Employee */}
+                        <th className="px-3 py-2 text-center font-semibold text-blue-700 bg-blue-50 w-28">Emp Commitment</th>
+                        <th className="px-3 py-2 text-center font-semibold text-amber-700 bg-amber-50 w-28">Emp Achievement</th>
+                        <th className="px-3 py-2 text-center font-semibold text-blue-700 bg-blue-50 w-36">Emp Comment</th>
+                        {/* Manager */}
+                        <th className="px-3 py-2 text-center font-semibold text-indigo-700 bg-indigo-50 w-28">Mgr Status</th>
+                        <th className="px-3 py-2 text-center font-semibold text-indigo-700 bg-indigo-50 w-36">Mgr Comment</th>
+                        {/* Final Approver */}
+                        <th className="px-3 py-2 text-center font-semibold text-cyan-700 bg-cyan-50 w-28">Final Decision</th>
+                        <th className="px-3 py-2 text-center font-semibold text-cyan-700 bg-cyan-50 w-24">Achieved %</th>
+                        <th className="px-3 py-2 text-left font-semibold text-cyan-700 bg-cyan-50 w-36">Final Comment</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
@@ -223,92 +161,61 @@ export default function AdminReviewTable() {
                         <tr key={item._id} className="hover:bg-gray-50">
                           <td className="px-3 py-2">
                             <div className="font-medium">{item.title}</div>
-                            <div className="text-xs text-gray-400">{item.category} | {item.unit}</div>
+                            <div className="text-xs text-gray-400">{item.category} · {item.unit}</div>
                           </td>
                           <td className="px-3 py-2 text-center">{item.targetValue}</td>
                           <td className="px-3 py-2 text-center">{item.weightage}%</td>
 
-                          {/* Employee (read-only) */}
-                          <td className="px-3 py-2 text-center bg-blue-50/30 font-medium">
-                            {item.employeeValue ?? '—'}
+                          {/* Employee commitment */}
+                          <td className="px-3 py-2 text-center bg-blue-50/20">
+                            {item.employeeCommitmentStatus
+                              ? <span className="text-xs font-medium text-blue-700">{item.employeeCommitmentStatus}</span>
+                              : <span className="text-gray-300">—</span>}
                           </td>
-                          <td className="px-3 py-2 bg-blue-50/30 text-xs">{item.employeeComment || '—'}</td>
-
-                          {/* Manager (read-only) */}
-                          <td className="px-3 py-2 text-center bg-purple-50/30 font-medium">
-                            {item.managerValue ?? '—'}
+                          {/* Employee achievement */}
+                          <td className="px-3 py-2 text-center bg-amber-50/20">
+                            {item.employeeStatus
+                              ? <span className="text-xs font-medium text-amber-700">{item.employeeStatus}</span>
+                              : item.employeeValue != null
+                              ? <span className="text-xs bg-gray-200 text-gray-500 px-1 rounded">Legacy: {item.employeeValue}</span>
+                              : <span className="text-gray-300">—</span>}
                           </td>
-                          <td className="px-3 py-2 text-center bg-purple-50/30">
-                            {item.managerScore ?? '—'}
-                          </td>
-                          <td className="px-3 py-2 bg-purple-50/30 text-xs">{item.managerComment || '—'}</td>
-
-                          {/* Admin (editable if canFinalReview) */}
-                          <td className="px-3 py-2 bg-orange-50/30">
-                            {canFinalReview ? (
-                              <input
-                                type="number"
-                                value={adminInputs[item._id]?.finalValue ?? ''}
-                                onChange={(e) => handleInputChange(item._id, 'finalValue', e.target.value)}
-                                className="input-field text-center text-sm py-1"
-                                placeholder="Value"
-                              />
-                            ) : (
-                              <span className="font-medium">{item.finalValue ?? '—'}</span>
-                            )}
-                          </td>
-                          <td className="px-3 py-2 bg-orange-50/30">
-                            {canFinalReview ? (
-                              <input
-                                type="number"
-                                min="0"
-                                max="100"
-                                value={adminInputs[item._id]?.finalScore ?? ''}
-                                onChange={(e) => handleInputChange(item._id, 'finalScore', e.target.value)}
-                                className="input-field text-center text-sm py-1"
-                                placeholder="0-100"
-                              />
-                            ) : (
-                              <span className="font-medium">{item.finalScore ?? '—'}</span>
-                            )}
-                          </td>
-                          <td className="px-3 py-2 bg-orange-50/30">
-                            {canFinalReview ? (
-                              <input
-                                type="text"
-                                value={adminInputs[item._id]?.finalComment ?? ''}
-                                onChange={(e) => handleInputChange(item._id, 'finalComment', e.target.value)}
-                                className="input-field text-sm py-1"
-                                placeholder="Comment"
-                              />
-                            ) : (
-                              <span className="text-xs">{item.finalComment || '—'}</span>
-                            )}
+                          <td className="px-3 py-2 text-xs text-gray-500 bg-blue-50/10">
+                            {item.employeeComment || '—'}
                           </td>
 
-                          {/* Average (auto-calculated) */}
-                          <td className="px-3 py-2 text-center bg-green-100/40">
-                            <span className="font-bold text-green-700 text-base">
-                              {getLiveAverage(item) ?? '—'}
-                            </span>
+                          {/* Manager */}
+                          <td className="px-3 py-2 text-center bg-indigo-50/20">
+                            {item.managerStatus
+                              ? <span className="text-xs font-semibold text-indigo-700">{item.managerStatus}</span>
+                              : item.managerScore != null
+                              ? <span className="text-xs bg-gray-200 text-gray-500 px-1 rounded">Legacy: {formatScore(item.managerScore)}</span>
+                              : <span className="text-gray-300">—</span>}
+                          </td>
+                          <td className="px-3 py-2 text-xs text-gray-500 bg-indigo-50/10">
+                            {item.managerComment || '—'}
+                          </td>
+
+                          {/* Final Approver Decision (read-only) */}
+                          <td className="px-3 py-2 text-center bg-cyan-50/20">
+                            {item.finalApproverStatus
+                              ? <span className="text-xs font-semibold text-cyan-700">{item.finalApproverStatus}</span>
+                              : item.finalScore != null
+                              ? <span className="text-xs bg-gray-200 text-gray-500 px-1 rounded">Legacy: {formatScore(item.finalScore)}</span>
+                              : <span className="text-gray-300">—</span>}
+                          </td>
+                          <td className="px-3 py-2 text-center bg-cyan-50/20">
+                            {item.finalApproverAchievedWeightage != null
+                              ? <span className="text-xs font-semibold text-cyan-700">{item.finalApproverAchievedWeightage}%</span>
+                              : <span className="text-gray-300">—</span>}
+                          </td>
+                          <td className="px-3 py-2 text-xs text-gray-500 bg-cyan-50/10">
+                            {item.finalApproverComment || item.finalComment || '—'}
                           </td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
-                </div>
-
-                {/* Action buttons */}
-                <div className="mt-3 flex justify-end gap-2">
-                  {canFinalReview && (
-                    <button
-                      onClick={() => handleFinalReview(assignment._id, items)}
-                      disabled={submitting[assignment._id]}
-                      className="btn-primary"
-                    >
-                      {submitting[assignment._id] ? 'Submitting...' : 'Submit Final Review'}
-                    </button>
-                  )}
                 </div>
               </div>
             )}

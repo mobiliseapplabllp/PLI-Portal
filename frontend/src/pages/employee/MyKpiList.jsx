@@ -2,13 +2,16 @@ import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import { fetchAssignments } from '../../store/kpiSlice';
-import { getAssignmentByIdApi, employeeSubmitApi } from '../../api/kpiAssignments.api';
+import { getAssignmentByIdApi, commitKpiApi, employeeSubmitApi } from '../../api/kpiAssignments.api';
 import PageHeader from '../../components/common/PageHeader';
 import Pagination from '../../components/common/Pagination';
 import StatusBadge from '../../components/common/StatusBadge';
 import FilterBar from '../../components/common/FilterBar';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
 import EmptyState from '../../components/common/EmptyState';
+import StatusSelector from '../../components/common/StatusSelector';
+import CommitVsAchieveRow from '../../components/common/CommitVsAchieveRow';
+import WorkflowStepper from '../../components/common/WorkflowStepper';
 import { getMonthName, formatScore, formatDate } from '../../utils/formatters';
 import { getCurrentFinancialYear, KPI_STATUS } from '../../utils/constants';
 import toast from 'react-hot-toast';
@@ -29,23 +32,17 @@ export default function MyKpiList() {
     };
   });
 
-  // Track which row is expanded
   const [expandedId, setExpandedId] = useState(null);
-  // Store fetched items per assignment id
   const [expandedData, setExpandedData] = useState({});
-  // Loading state for expanded row
   const [expandLoading, setExpandLoading] = useState(null);
-  // Inline form data keyed by assignment id -> item id -> { employeeValue, employeeComment }
+  // inlineForm[assignmentId][itemId] = { status, comment }
   const [inlineForm, setInlineForm] = useState({});
-  // Submitting state
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    // Always pass employee=self so managers see their OWN KPIs, not their team's
     dispatch(fetchAssignments({ ...filters, employee: user._id }));
   }, [dispatch, filters, user._id]);
 
-  // Collapse expanded row when filters change
   useEffect(() => {
     setExpandedId(null);
     setExpandedData({});
@@ -61,31 +58,34 @@ export default function MyKpiList() {
 
       setExpandedId(assignmentId);
 
-      // Already fetched
-      if (expandedData[assignmentId]) {
-        return;
-      }
+      if (expandedData[assignmentId]) return;
 
       setExpandLoading(assignmentId);
       try {
         const res = await getAssignmentByIdApi(assignmentId);
         const { assignment, items } = res.data.data;
 
-        setExpandedData((prev) => ({
-          ...prev,
-          [assignmentId]: { assignment, items },
-        }));
+        setExpandedData((prev) => ({ ...prev, [assignmentId]: { assignment, items } }));
 
-        // Initialize form data for this assignment's items
+        // Build initial form state per mode
+        const isCommit = assignment.status === KPI_STATUS.ASSIGNED;
+        const isAchieve = assignment.status === KPI_STATUS.COMMITMENT_SUBMITTED;
+
         const initial = {};
         items.forEach((item) => {
           initial[item._id] = {
-            employeeValue: item.employeeValue ?? '',
-            employeeComment: item.employeeComment ?? '',
+            status: isCommit
+              ? (item.employeeCommitmentStatus || '')
+              : isAchieve
+              ? (item.employeeStatus || '')
+              : '',
+            comment: isCommit
+              ? (item.employeeCommitmentComment || '')
+              : (item.employeeComment || ''),
           };
         });
         setInlineForm((prev) => ({ ...prev, [assignmentId]: initial }));
-      } catch (err) {
+      } catch {
         toast.error('Failed to load KPI details');
         setExpandedId(null);
       } finally {
@@ -100,10 +100,7 @@ export default function MyKpiList() {
       ...prev,
       [assignmentId]: {
         ...prev[assignmentId],
-        [itemId]: {
-          ...prev[assignmentId]?.[itemId],
-          [field]: value,
-        },
+        [itemId]: { ...prev[assignmentId]?.[itemId], [field]: value },
       },
     }));
   };
@@ -112,35 +109,46 @@ export default function MyKpiList() {
     const data = expandedData[assignmentId];
     if (!data) return;
 
+    const form = inlineForm[assignmentId] || {};
+    const isCommit = data.assignment.status === KPI_STATUS.ASSIGNED;
+    const isAchieve = data.assignment.status === KPI_STATUS.COMMITMENT_SUBMITTED;
+
+    if (!isCommit && !isAchieve) return;
+
     const items = data.items.map((item) => ({
       id: item._id,
-      employeeValue: Number(inlineForm[assignmentId]?.[item._id]?.employeeValue),
-      employeeComment: inlineForm[assignmentId]?.[item._id]?.employeeComment || '',
+      ...(isCommit
+        ? {
+            employeeCommitmentStatus: form[item._id]?.status,
+            employeeCommitmentComment: form[item._id]?.comment || '',
+          }
+        : {
+            employeeStatus: form[item._id]?.status,
+            employeeComment: form[item._id]?.comment || '',
+          }),
     }));
 
-    if (items.some((i) => isNaN(i.employeeValue))) {
-      toast.error('Please fill all actual values');
+    const anyMissing = items.some((i) =>
+      isCommit ? !i.employeeCommitmentStatus : !i.employeeStatus
+    );
+    if (anyMissing) {
+      toast.error('Please select a status for all KPI items');
       return;
     }
 
     setSubmitting(true);
     try {
-      await employeeSubmitApi(assignmentId, { items });
-      toast.success('Self-assessment submitted successfully');
-      // Refresh the list
+      if (isCommit) {
+        await commitKpiApi(assignmentId, { items });
+        toast.success('Commitment submitted');
+      } else {
+        await employeeSubmitApi(assignmentId, { items });
+        toast.success('Achievement submitted');
+      }
       dispatch(fetchAssignments({ ...filters, employee: user._id }));
-      // Clear expanded state for this assignment so it re-fetches with new status
       setExpandedId(null);
-      setExpandedData((prev) => {
-        const next = { ...prev };
-        delete next[assignmentId];
-        return next;
-      });
-      setInlineForm((prev) => {
-        const next = { ...prev };
-        delete next[assignmentId];
-        return next;
-      });
+      setExpandedData((prev) => { const n = { ...prev }; delete n[assignmentId]; return n; });
+      setInlineForm((prev) => { const n = { ...prev }; delete n[assignmentId]; return n; });
     } catch (err) {
       toast.error(err.response?.data?.error?.message || 'Submission failed');
     } finally {
@@ -148,22 +156,11 @@ export default function MyKpiList() {
     }
   };
 
-  const getWeightageColor = (totalWeightage) => {
-    if (totalWeightage === 100) return 'text-green-600';
-    if (totalWeightage < 100) return 'text-yellow-600';
+  const getWeightageColor = (w) => {
+    if (w === 100) return 'text-green-600';
+    if (w < 100) return 'text-yellow-600';
     return 'text-red-600';
   };
-
-  const columns = [
-    { key: 'expand', label: '', width: '40px' },
-    { key: 'period', label: 'Period' },
-    { key: 'quarter', label: 'Quarter' },
-    { key: 'manager', label: 'Manager' },
-    { key: 'assignedOn', label: 'Assigned On' },
-    { key: 'totalWeightage', label: 'Weightage' },
-    { key: 'status', label: 'Status' },
-    { key: 'score', label: 'Score' },
-  ];
 
   if (user?.kpiReviewApplicable === false) {
     return (
@@ -188,274 +185,246 @@ export default function MyKpiList() {
       ) : !assignments || assignments.length === 0 ? (
         <EmptyState message="No KPI assignments found" />
       ) : (
-        <div className="overflow-x-auto border border-gray-200 rounded-lg">
-          <table className="min-w-full divide-y divide-gray-200">
-            <thead className="bg-gray-50">
-              <tr>
-                {columns.map((col) => (
-                  <th
-                    key={col.key}
-                    className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider"
-                    style={col.width ? { width: col.width } : {}}
-                  >
-                    {col.label}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody className="bg-white divide-y divide-gray-200">
-              {assignments.map((row) => {
-                const isExpanded = expandedId === row._id;
-                const detail = expandedData[row._id];
-                const isLoadingDetail = expandLoading === row._id;
-                const canSubmit = row.status === KPI_STATUS.ASSIGNED;
+        <div className="space-y-3">
+          {assignments.map((row) => {
+            const isExpanded = expandedId === row._id;
+            const detail = expandedData[row._id];
+            const isLoadingDetail = expandLoading === row._id;
 
-                return (
-                  <InlineExpandableRow
-                    key={row._id}
-                    row={row}
-                    isExpanded={isExpanded}
-                    isLoadingDetail={isLoadingDetail}
-                    detail={detail}
-                    canSubmit={canSubmit}
-                    submitting={submitting}
-                    inlineForm={inlineForm[row._id] || {}}
-                    columns={columns}
-                    getWeightageColor={getWeightageColor}
-                    onToggleExpand={() => toggleExpand(row._id)}
-                    onNavigate={() => navigate(`/employee/kpis/${row._id}`)}
-                    onInlineChange={(itemId, field, value) =>
-                      handleInlineChange(row._id, itemId, field, value)
-                    }
-                    onInlineSubmit={() => handleInlineSubmit(row._id)}
-                  />
-                );
-              })}
-            </tbody>
-          </table>
+            const isCommit = row.status === KPI_STATUS.ASSIGNED;
+            const isAchieve = row.status === KPI_STATUS.COMMITMENT_SUBMITTED;
+            const canAct = isCommit || isAchieve;
+
+            return (
+              <div key={row._id} className="card">
+                {/* Row header */}
+                <div
+                  className="flex items-center justify-between cursor-pointer py-1"
+                  onClick={() => toggleExpand(row._id)}
+                >
+                  <div className="flex items-center gap-3">
+                    <span className="text-gray-400">
+                      {isExpanded
+                        ? <HiChevronDown className="w-5 h-5" />
+                        : <HiChevronRight className="w-5 h-5" />}
+                    </span>
+                    <div>
+                      <p className="font-semibold text-gray-900">
+                        {getMonthName(row.month)} {row.financialYear}
+                        <span className="ml-2 text-sm font-normal text-gray-500">({row.quarter})</span>
+                      </p>
+                      <p className="text-xs text-gray-400">
+                        Manager: {row.currentManager?.name || row.manager?.name || '—'} &bull; Assigned {formatDate(row.createdAt)}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    {canAct && (
+                      <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${isCommit ? 'bg-primary-100 text-primary-700' : 'bg-amber-100 text-amber-700'}`}>
+                        {isCommit ? 'Submit Commitment' : 'Submit Achievement'}
+                      </span>
+                    )}
+                    <StatusBadge status={row.status} />
+                    <span className={`text-sm font-semibold ${getWeightageColor(row.totalWeightage)}`}>
+                      {row.totalWeightage}%
+                    </span>
+                    {row.monthlyWeightedScore != null && (
+                      <span className="text-sm font-bold text-primary-700 bg-primary-50 px-2 py-0.5 rounded">
+                        {formatScore(row.monthlyWeightedScore)}
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Expanded detail */}
+                {isExpanded && (
+                  <div className="mt-4 border-t pt-4">
+                    {isLoadingDetail ? (
+                      <div className="flex justify-center py-6">
+                        <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary-600" />
+                      </div>
+                    ) : detail ? (
+                      <ExpandedDetail
+                        assignment={detail.assignment}
+                        items={detail.items}
+                        form={inlineForm[row._id] || {}}
+                        canAct={canAct}
+                        isCommit={isCommit}
+                        submitting={submitting}
+                        onFormChange={(itemId, field, value) => handleInlineChange(row._id, itemId, field, value)}
+                        onSubmit={() => handleInlineSubmit(row._id)}
+                        onNavigate={() => navigate(`/employee/kpis/${row._id}`)}
+                      />
+                    ) : (
+                      <p className="text-sm text-gray-400 text-center py-4">Failed to load — click to retry.</p>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
 
-      <Pagination pagination={pagination} onPageChange={(p) => setFilters({ ...filters, page: p })} />
+      <div className="mt-4">
+        <Pagination pagination={pagination} onPageChange={(p) => setFilters({ ...filters, page: p })} />
+      </div>
     </div>
   );
 }
 
-/**
- * A single row + its expandable detail section
- */
-function InlineExpandableRow({
-  row,
-  isExpanded,
-  isLoadingDetail,
-  detail,
-  canSubmit,
-  submitting,
-  inlineForm,
-  columns,
-  getWeightageColor,
-  onToggleExpand,
-  onNavigate,
-  onInlineChange,
-  onInlineSubmit,
-}) {
+function ExpandedDetail({ assignment, items, form, canAct, isCommit, submitting, onFormChange, onSubmit, onNavigate }) {
+  const isReadOnly = !canAct;
+  const isAchieve = !isCommit && canAct;
+
+  // Progress bar
+  const filled = items.filter((item) => form[item._id]?.status).length;
+  const progressPct = items.length > 0 ? Math.round((filled / items.length) * 100) : 0;
+
   return (
-    <>
-      {/* Main row */}
-      <tr className="hover:bg-gray-50">
-        {/* Expand chevron */}
-        <td className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap">
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onToggleExpand();
-            }}
-            className="p-1 rounded hover:bg-gray-200 transition-colors"
-            title={isExpanded ? 'Collapse' : 'Expand to see KPI items'}
-          >
-            {isExpanded ? (
-              <HiChevronDown className="w-5 h-5 text-gray-500" />
-            ) : (
-              <HiChevronRight className="w-5 h-5 text-gray-500" />
-            )}
-          </button>
-        </td>
-        {/* Period - clickable to navigate */}
-        <td
-          className="px-4 py-3 text-sm text-primary-600 font-medium whitespace-nowrap cursor-pointer hover:underline"
-          onClick={onNavigate}
-        >
-          {getMonthName(row.month)} {row.financialYear}
-        </td>
-        <td className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap">{row.quarter}</td>
-        <td className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap">{row.manager?.name}</td>
-        <td className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap">
-          {formatDate(row.createdAt)}
-        </td>
-        <td className="px-4 py-3 text-sm whitespace-nowrap">
-          <span className={`font-semibold ${getWeightageColor(row.totalWeightage)}`}>
-            {row.totalWeightage}%
-          </span>
-        </td>
-        <td className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap">
-          <StatusBadge status={row.status} />
-        </td>
-        <td className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap">
-          {formatScore(row.monthlyWeightedScore)}
-        </td>
-      </tr>
+    <div className="space-y-4">
+      {/* Workflow stepper */}
+      <WorkflowStepper status={assignment.status} />
 
-      {/* Expanded detail section */}
-      {isExpanded && (
-        <tr>
-          <td colSpan={columns.length} className="px-0 py-0">
-            <div className="bg-gray-50 border-t border-b border-gray-200 px-6 py-4">
-              {isLoadingDetail ? (
-                <div className="flex items-center justify-center py-6">
-                  <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary-600"></div>
-                  <span className="ml-3 text-sm text-gray-500">Loading KPI items...</span>
+      {/* Mode banner */}
+      {canAct && (
+        <div className={`rounded-lg border px-4 py-3 ${isCommit ? 'bg-primary-50 border-primary-200' : 'bg-amber-50 border-amber-200'}`}>
+          <p className={`text-sm font-medium ${isCommit ? 'text-primary-800' : 'text-amber-800'}`}>
+            {isCommit
+              ? `Commit to your targets for ${getMonthName(assignment.month)} ${assignment.financialYear}`
+              : `Submit your actual achievement for ${getMonthName(assignment.month)} ${assignment.financialYear}`}
+          </p>
+          {items.length > 0 && (
+            <div className="mt-2">
+              <div className="flex justify-between text-xs text-gray-500 mb-1">
+                <span>{filled} of {items.length} filled</span>
+                <span>{progressPct}%</span>
+              </div>
+              <div className="w-full bg-white/70 rounded-full h-1.5 overflow-hidden border border-gray-200">
+                <div
+                  className={`h-full rounded-full transition-all ${isCommit ? 'bg-primary-500' : 'bg-amber-500'}`}
+                  style={{ width: `${progressPct}%` }}
+                />
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* KPI items */}
+      <div className="space-y-3">
+        {items.map((item) => {
+          const id = item._id;
+          const fd = form[id] || {};
+
+          return (
+            <div key={id} className="bg-gray-50 rounded-xl border border-gray-200 p-4 space-y-3">
+              {/* Item header */}
+              <div className="flex justify-between items-start">
+                <div>
+                  <p className="font-semibold text-gray-900 text-sm">{item.title}</p>
+                  <p className="text-xs text-gray-500">{item.category} · {item.unit} · Weightage: {item.weightage}%</p>
                 </div>
-              ) : detail ? (
-                <>
-                  <div className="overflow-x-auto">
-                    <table className="min-w-full divide-y divide-gray-200 bg-white rounded-lg shadow-sm">
-                      <thead className="bg-gray-100">
-                        <tr>
-                          <th className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase">
-                            KPI Title
-                          </th>
-                          <th className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase">
-                            Target
-                          </th>
-                          <th className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase">
-                            Weight
-                          </th>
-                          <th className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase">
-                            {canSubmit ? 'Your Value' : 'Employee Value'}
-                          </th>
-                          <th className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase">
-                            {canSubmit ? 'Your Comment' : 'Employee Comment'}
-                          </th>
-                          {/* Show review columns if reviewed */}
-                          {detail.assignment.status !== KPI_STATUS.ASSIGNED && (
-                            <>
-                              <th className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase">
-                                Mgr Score
-                              </th>
-                              <th className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase">
-                                Final Score
-                              </th>
-                            </>
-                          )}
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-gray-100">
-                        {detail.items.map((item) => (
-                          <tr key={item._id} className="hover:bg-gray-50">
-                            <td className="px-3 py-2 text-sm text-gray-900">
-                              <div className="font-medium">{item.title}</div>
-                              {item.description && (
-                                <div className="text-xs text-gray-400 mt-0.5 max-w-xs truncate">
-                                  {item.description}
-                                </div>
-                              )}
-                            </td>
-                            <td className="px-3 py-2 text-sm text-gray-700 whitespace-nowrap">
-                              {item.targetValue} {item.unit}
-                            </td>
-                            <td className="px-3 py-2 text-sm text-gray-700 whitespace-nowrap">
-                              {item.weightage}%
-                            </td>
-                            <td className="px-3 py-2 text-sm whitespace-nowrap">
-                              {canSubmit ? (
-                                <input
-                                  type="number"
-                                  value={inlineForm[item._id]?.employeeValue ?? ''}
-                                  onChange={(e) =>
-                                    onInlineChange(item._id, 'employeeValue', e.target.value)
-                                  }
-                                  className="input-field w-28"
-                                  placeholder="Value"
-                                  onClick={(e) => e.stopPropagation()}
-                                />
-                              ) : (
-                                <span className="text-gray-700">
-                                  {item.employeeValue ?? '—'}
-                                </span>
-                              )}
-                            </td>
-                            <td className="px-3 py-2 text-sm">
-                              {canSubmit ? (
-                                <input
-                                  type="text"
-                                  value={inlineForm[item._id]?.employeeComment ?? ''}
-                                  onChange={(e) =>
-                                    onInlineChange(item._id, 'employeeComment', e.target.value)
-                                  }
-                                  className="input-field w-44"
-                                  placeholder="Comment"
-                                  onClick={(e) => e.stopPropagation()}
-                                />
-                              ) : (
-                                <span className="text-gray-700">
-                                  {item.employeeComment || '—'}
-                                </span>
-                              )}
-                            </td>
-                            {detail.assignment.status !== KPI_STATUS.ASSIGNED && (
-                              <>
-                                <td className="px-3 py-2 text-sm text-gray-700 whitespace-nowrap">
-                                  {formatScore(item.managerScore)}
-                                </td>
-                                <td className="px-3 py-2 text-sm text-green-600 font-medium whitespace-nowrap">
-                                  {formatScore(item.finalScore)}
-                                </td>
-                              </>
-                            )}
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                <span className="text-xs text-gray-500">Target: <b>{item.targetValue ?? '—'}</b></span>
+              </div>
 
-                  {/* Submit button for assigned status */}
-                  {canSubmit && (
-                    <div className="mt-4 flex items-center gap-3">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onInlineSubmit();
-                        }}
-                        disabled={submitting}
-                        className="btn-primary text-sm"
-                      >
-                        {submitting ? 'Submitting...' : 'Submit Self-Assessment'}
-                      </button>
-                      <span className="text-xs text-gray-400">
-                        Fill all values and click submit
-                      </span>
-                    </div>
+              {/* Achievement mode: show commitment context */}
+              {isAchieve && (
+                <CommitVsAchieveRow
+                  commitmentStatus={item.employeeCommitmentStatus}
+                  commitmentComment={item.employeeCommitmentComment}
+                  achievementStatus={fd.status || null}
+                  achievementComment={fd.comment || null}
+                />
+              )}
+
+              {/* Read-only mode: 4-badge timeline */}
+              {isReadOnly && (
+                <div className="flex flex-wrap gap-2 mt-1">
+                  {item.employeeCommitmentStatus && (
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-primary-100 text-primary-700 font-medium">
+                      Committed: {item.employeeCommitmentStatus}
+                    </span>
                   )}
+                  {item.employeeStatus && (
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 font-medium">
+                      Achieved: {item.employeeStatus}
+                    </span>
+                  )}
+                  {item.managerStatus && (
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 font-medium">
+                      Manager: {item.managerStatus}
+                    </span>
+                  )}
+                  {item.finalApproverStatus && (
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-cyan-100 text-cyan-700 font-medium">
+                      Final: {item.finalApproverStatus}
+                    </span>
+                  )}
+                  {/* Legacy fallback */}
+                  {!item.employeeStatus && item.employeeValue != null && (
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">
+                      Legacy value: {item.employeeValue}
+                    </span>
+                  )}
+                  {!item.managerStatus && item.managerScore != null && (
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">
+                      Legacy mgr: {formatScore(item.managerScore)}
+                    </span>
+                  )}
+                </div>
+              )}
 
-                  {/* Link to full detail page */}
-                  <div className="mt-3 text-right">
-                    <button
-                      onClick={onNavigate}
-                      className="text-xs text-primary-600 hover:text-primary-700 hover:underline"
-                    >
-                      Open full detail view &rarr;
-                    </button>
-                  </div>
-                </>
-              ) : (
-                <p className="text-sm text-gray-500 py-4 text-center">
-                  Failed to load details. Click expand again to retry.
-                </p>
+              {/* Editable form */}
+              {canAct && (
+                <div className="space-y-2">
+                  <p className="text-xs font-medium text-gray-600">
+                    {isCommit ? 'I commit to achieving:' : 'I actually achieved:'}
+                  </p>
+                  <StatusSelector
+                    value={fd.status || ''}
+                    onChange={(v) => onFormChange(id, 'status', v)}
+                    size="sm"
+                  />
+                  <input
+                    type="text"
+                    value={fd.comment || ''}
+                    onChange={(e) => onFormChange(id, 'comment', e.target.value)}
+                    className="input-field text-sm"
+                    placeholder={isCommit ? 'Your plan to achieve this (optional)' : 'Notes / explanation (optional)'}
+                  />
+                </div>
               )}
             </div>
-          </td>
-        </tr>
+          );
+        })}
+      </div>
+
+      {/* Submit button */}
+      {canAct && (
+        <div className="flex items-center gap-3 pt-1">
+          <button
+            onClick={onSubmit}
+            disabled={submitting}
+            className="btn-primary text-sm"
+          >
+            {submitting
+              ? 'Submitting...'
+              : isCommit
+              ? 'Submit Commitment'
+              : 'Submit Achievement'}
+          </button>
+          <span className="text-xs text-gray-400">
+            {filled}/{items.length} items filled
+          </span>
+        </div>
       )}
-    </>
+
+      <div className="text-right">
+        <button onClick={onNavigate} className="text-xs text-primary-600 hover:underline">
+          Open full detail view →
+        </button>
+      </div>
+    </div>
   );
 }

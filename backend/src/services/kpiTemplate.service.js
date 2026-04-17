@@ -1,32 +1,37 @@
+const { Op } = require('sequelize');
 const KpiTemplate = require('../models/KpiTemplate');
+const User = require('../models/User');
 const { NotFoundError } = require('../utils/errors');
 const { createAuditLog } = require('../middleware/auditLogger');
 
 const getTemplates = async (query = {}) => {
-  const filter = { isActive: true };
-
+  const where = {};
   if (query.search) {
-    filter.name = { $regex: query.search, $options: 'i' };
+    where.name = { [Op.like]: `%${query.search}%` };
   }
   if (query.category) {
-    filter.category = query.category;
+    where.category = query.category;
   }
-  if (query.includeInactive === 'true') {
-    delete filter.isActive;
+  if (query.includeInactive !== 'true') {
+    where.isActive = true;
   }
 
-  return KpiTemplate.find(filter)
-    .populate('createdBy', 'name')
-    .sort({ category: 1, name: 1 });
+  return KpiTemplate.findAll({
+    where,
+    include: [{ model: User, as: 'createdBy', attributes: ['id', 'name'] }],
+    order: [
+      ['category', 'ASC'],
+      ['name', 'ASC'],
+    ],
+  });
 };
 
 const createTemplate = async (data, userId) => {
-  data.createdBy = userId;
-  const template = await KpiTemplate.create(data);
+  const template = await KpiTemplate.create({ ...data, createdById: userId });
 
   await createAuditLog({
     entityType: 'kpi_template',
-    entityId: template._id,
+    entityId: template.id,
     action: 'created',
     changedBy: userId,
     newValue: { name: data.name, category: data.category },
@@ -36,18 +41,20 @@ const createTemplate = async (data, userId) => {
 };
 
 const updateTemplate = async (id, data) => {
-  const template = await KpiTemplate.findById(id);
+  const template = await KpiTemplate.findByPk(id);
   if (!template) throw new NotFoundError('KPI Template');
 
   const oldValue = { name: template.name, category: template.category };
-  Object.assign(template, data);
+  const patch = { ...data };
+  delete patch.updatedBy;
+  Object.assign(template, patch);
   await template.save();
 
   await createAuditLog({
     entityType: 'kpi_template',
-    entityId: template._id,
+    entityId: template.id,
     action: 'updated',
-    changedBy: data.updatedBy || template.createdBy,
+    changedBy: data.updatedBy || template.createdById,
     oldValue,
     newValue: data,
   });
@@ -56,7 +63,7 @@ const updateTemplate = async (id, data) => {
 };
 
 const deleteTemplate = async (id) => {
-  const template = await KpiTemplate.findById(id);
+  const template = await KpiTemplate.findByPk(id);
   if (!template) throw new NotFoundError('KPI Template');
 
   template.isActive = false;
@@ -64,9 +71,9 @@ const deleteTemplate = async (id) => {
 
   await createAuditLog({
     entityType: 'kpi_template',
-    entityId: template._id,
+    entityId: template.id,
     action: 'deleted',
-    changedBy: template.createdBy,
+    changedBy: template.createdById,
     oldValue: { isActive: true },
     newValue: { isActive: false },
   });

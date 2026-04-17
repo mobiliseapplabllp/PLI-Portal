@@ -1,58 +1,122 @@
 const ExcelJS = require('exceljs');
+const { Op } = require('sequelize');
 const KpiAssignment = require('../models/KpiAssignment');
 const KpiItem = require('../models/KpiItem');
+const User = require('../models/User');
+const Department = require('../models/Department');
 const { NotFoundError, ValidationError, ForbiddenError } = require('../utils/errors');
 const { getQuarterFromMonth } = require('../utils/quarterHelper');
-const { calculateMonthlyScore } = require('../utils/scoreCalculator');
+const { calculateMonthlyScore, statusToNumeric } = require('../utils/scoreCalculator');
 const { createAuditLog } = require('../middleware/auditLogger');
-const { KPI_STATUS, STATUS_TRANSITIONS, REOPEN_ALLOWED_FROM, REOPEN_ALLOWED_TO, KPI_CATEGORIES, KPI_UNITS } = require('../config/constants');
-const User = require('../models/User');
+const {
+  KPI_STATUS,
+  STATUS_TRANSITIONS,
+  REOPEN_ALLOWED_FROM,
+  REOPEN_ALLOWED_TO,
+  KPI_CATEGORIES,
+  KPI_UNITS,
+  NOTIFICATION_TYPES,
+  AUDIT_ACTIONS,
+} = require('../config/constants');
 const notificationService = require('./notification.service');
+const { findPlanForEmployee, applyPlanToAssignment } = require('./kpiPlan.service');
+
+const employeeWithDept = {
+  model: User,
+  where: { isActive: 1 , kpiReviewApplicable: 1},
+  as: 'employee',
+  attributes: ['id', 'name', 'employeeCode', 'email', 'designation', 'departmentId', 'kpiReviewApplicable'],
+  include: [
+    { model: Department, as: 'department', attributes: ['id', 'name', 'code'] },
+    { model: User, as: 'manager', attributes: ['id', 'name', 'employeeCode', 'email'] },
+  ],
+};
+
+
+const managerShort = { model: User, as: 'manager', attributes: ['id', 'name', 'employeeCode'] };
+const managerWithEmail = { model: User, as: 'manager', attributes: ['id', 'name', 'employeeCode', 'email'] };
+
+const withCurrentManager = (assignment) => {
+  const plain = assignment?.get ? assignment.get({ plain: true }) : assignment;
+  if (!plain) return plain;
+  return {
+    ...plain,
+    currentManager: plain.employee?.manager || null,
+  };
+  
+};
 
 const getAssignments = async (query = {}, user) => {
-  const filter = {};
-  if (query.financialYear) filter.financialYear = query.financialYear;
-  if (query.month) filter.month = Number(query.month);
-  if (query.quarter) filter.quarter = query.quarter;
-  if (query.status) filter.status = query.status;
-  if (query.employee) filter.employee = query.employee;
-  if (query.manager) filter.manager = query.manager;
-
-  // Role-based filtering
-  if (user.role === 'employee') {
-    filter.employee = user._id;
-  } else if (user.role === 'manager') {
-    if (!query.employee) filter.manager = user._id;
+  const where = {};
+  if (query.financialYear) where.financialYear = query.financialYear;
+  if (query.month) where.month = Number(query.month);
+  if (query.quarter) where.quarter = query.quarter;
+  if (query.status) where.status = query.status;
+  if (query.employee) where.employeeId = query.employee;
+  if (query.manager) {
+    const teamMembers = await User.findAll({
+      where: { managerId: query.manager },
+      attributes: ['id'],
+    });
+    where.employeeId = { [Op.in]: teamMembers.map((m) => m.id) };
   }
-  // admin sees all
+
+  if (user.role === 'employee') {
+    where.employeeId = user._id;
+  } else if (user.role === 'manager') {
+    if (!query.employee) {
+      const teamMembers = await User.findAll({
+        where: { managerId: user._id },
+        attributes: ['id'],
+      });
+      where.employeeId = { [Op.in]: teamMembers.map((m) => m.id) };
+    }
+  }
 
   const page = Number(query.page) || 1;
   const limit = Number(query.limit) || 20;
 
-  const total = await KpiAssignment.countDocuments(filter);
-  const assignments = await KpiAssignment.find(filter)
-    .populate('employee', 'name employeeCode email department')
-    .populate('manager', 'name employeeCode')
-    .sort({ financialYear: -1, month: -1, createdAt: -1 })
-    .skip((page - 1) * limit)
-    .limit(limit);
+  const { count, rows } = await KpiAssignment.findAndCountAll({
+    where,
+    include: [
+      {
+        model: User,
+        as: 'employee',
+        attributes: ['id', 'name', 'employeeCode', 'email', 'departmentId'],
+        include: [
+          { model: Department, as: 'department', attributes: ['id', 'name', 'code'] },
+          { model: User, as: 'manager', attributes: ['id', 'name', 'employeeCode', 'email'] },
+        ],
+      },
+      managerShort,
+    ],
+    order: [
+      ['financialYear', 'DESC'],
+      ['month', 'DESC'],
+      ['createdAt', 'DESC'],
+    ],
+    offset: (page - 1) * limit,
+    limit,
+    distinct: true,
+  });
 
   return {
-    assignments,
-    pagination: { total, page, limit, pages: Math.ceil(total / limit) },
+    assignments: rows.map(withCurrentManager),
+    pagination: { total: count, page, limit, pages: Math.ceil(count / limit) },
   };
 };
 
 const getAssignmentById = async (id, user) => {
-  const assignment = await KpiAssignment.findById(id)
-    .populate('employee', 'name employeeCode email department')
-    .populate('manager', 'name employeeCode email');
+  const assignment = await KpiAssignment.findByPk(id, {
+    include: [employeeWithDept, managerWithEmail],
+  });
 
   if (!assignment) throw new NotFoundError('KPI Assignment');
 
-  // Access control
-  const isOwnAssignment = assignment.employee._id.toString() === user._id.toString();
-  const isTeamAssignment = assignment.manager._id.toString() === user._id.toString();
+  const empId = assignment.employeeId;
+  const mgrId = assignment.managerId;
+  const isOwnAssignment = String(empId) === String(user._id);
+  const isTeamAssignment = String(mgrId) === String(user._id);
 
   if (user.role === 'employee' && !isOwnAssignment) {
     throw new ForbiddenError('You can only view your own assignments');
@@ -61,57 +125,61 @@ const getAssignmentById = async (id, user) => {
     throw new ForbiddenError('You can only view your own or your team assignments');
   }
 
-  const items = await KpiItem.find({ kpiAssignment: id }).sort({ createdAt: 1 });
-  return { assignment, items };
+  const items = await KpiItem.findAll({
+    where: { kpiAssignmentId: id },
+    order: [['createdAt', 'ASC']],
+  });
+
+  return { assignment: withCurrentManager(assignment), items };
 };
 
 const createAssignment = async (data, user) => {
-  // Verify employee exists and is KPI-applicable
-  const employee = await User.findById(data.employee);
+  const employee = await User.findByPk(data.employee);
   if (!employee) throw new NotFoundError('Employee');
   if (!employee.kpiReviewApplicable) throw new ValidationError('KPI review is not applicable for this employee');
 
   const quarter = getQuarterFromMonth(data.month);
 
-  const assignmentData = {
+  const assignment = await KpiAssignment.create({
     financialYear: data.financialYear,
     month: data.month,
     quarter,
-    employee: data.employee,
-    manager: user._id,
-    createdBy: user._id,
+    employeeId: data.employee,
+    managerId: user._id,
+    createdById: user._id,
     status: KPI_STATUS.DRAFT,
-  };
+  });
 
-  const assignment = await KpiAssignment.create(assignmentData);
-
-  // Create KPI items if provided
-  if (data.items && data.items.length > 0) {
-    const items = data.items.map((item) => ({
-      ...item,
-      kpiAssignment: assignment._id,
-    }));
-    await KpiItem.insertMany(items);
-
-    // Recalculate total weightage
-    const totalWeightage = data.items.reduce((sum, i) => sum + (i.weightage || 0), 0);
+  // Auto-populate KPI items from published KpiPlan (team plan takes priority over dept plan)
+  const plan = await findPlanForEmployee(employee, data.financialYear, Number(data.month));
+  if (plan) {
+    await applyPlanToAssignment(plan, assignment.id);
+    const totalWeightage = plan.items.reduce((sum, i) => sum + parseFloat(i.monthlyWeightage || 0), 0);
+    assignment.totalWeightage = Math.round(totalWeightage);
+    await assignment.save();
+  } else if (data.items && data.items.length > 0) {
+    // Fallback: manual items (hr_admin/admin only path)
+    await KpiItem.bulkCreate(
+      data.items.map((item) => ({ ...item, kpiAssignmentId: assignment.id }))
+    );
+    const totalWeightage = data.items.reduce((sum, i) => sum + (Number(i.weightage) || 0), 0);
     assignment.totalWeightage = totalWeightage;
     await assignment.save();
   }
 
   await createAuditLog({
     entityType: 'kpi_assignment',
-    entityId: assignment._id,
-    action: 'created',
+    entityId: assignment.id,
+    action: AUDIT_ACTIONS.CREATED,
     changedBy: user._id,
-    newValue: { employee: data.employee, month: data.month, financialYear: data.financialYear },
+    newValue: { employee: data.employee, month: data.month, financialYear: data.financialYear, autoPlanApplied: !!plan },
   });
 
   return assignment;
 };
 
 const updateAssignment = async (id, data, user) => {
-  const assignment = await KpiAssignment.findById(id);
+  const assignment = await KpiAssignment.findByPk(id);
   if (!assignment) throw new NotFoundError('KPI Assignment');
 
   if (assignment.isLocked) throw new ValidationError('Assignment is locked');
@@ -122,35 +190,30 @@ const updateAssignment = async (id, data, user) => {
   return assignment;
 };
 
-/**
- * Transition assignment from DRAFT to ASSIGNED
- */
 const assignToEmployee = async (id, user) => {
-  const assignment = await KpiAssignment.findById(id);
+  const assignment = await KpiAssignment.findByPk(id);
   if (!assignment) throw new NotFoundError('KPI Assignment');
 
   validateTransition(assignment.status, KPI_STATUS.ASSIGNED);
 
-  // Must have at least 1 KPI item
-  const itemCount = await KpiItem.countDocuments({ kpiAssignment: id });
+  const itemCount = await KpiItem.count({ where: { kpiAssignmentId: id } });
   if (itemCount === 0) throw new ValidationError('Add at least one KPI item before assigning');
 
   assignment.status = KPI_STATUS.ASSIGNED;
   await assignment.save();
 
-  // Notify employee
   await notificationService.create({
-    recipient: assignment.employee,
+    recipient: assignment.employeeId,
     type: 'kpi_assigned',
     title: 'KPIs Assigned',
     message: `KPIs for ${assignment.financialYear} Month ${assignment.month} have been assigned to you.`,
     referenceType: 'kpi_assignment',
-    referenceId: assignment._id,
+    referenceId: assignment.id,
   });
 
   await createAuditLog({
     entityType: 'kpi_assignment',
-    entityId: assignment._id,
+    entityId: assignment.id,
     action: 'submitted',
     changedBy: user._id,
     newValue: { status: KPI_STATUS.ASSIGNED },
@@ -159,48 +222,104 @@ const assignToEmployee = async (id, user) => {
   return assignment;
 };
 
-/**
- * Employee submits their values
- */
-const employeeSubmit = async (id, itemsData, user) => {
-  const assignment = await KpiAssignment.findById(id);
+// ── NEW: commitKpi — Employee submits monthly commitment ─────────────────────
+const commitKpi = async (id, itemsData, user) => {
+  const assignment = await KpiAssignment.findByPk(id);
   if (!assignment) throw new NotFoundError('KPI Assignment');
 
-  if (assignment.employee.toString() !== user._id.toString()) {
-    throw new ForbiddenError('You can only submit for your own assignments');
+  if (user.role === 'employee' && String(assignment.employeeId) !== String(user._id)) {
+    throw new ForbiddenError('You can only commit for your own assignments');
   }
-  // Note: managers can also submit their own KPIs (they are employees too)
 
-  validateTransition(assignment.status, KPI_STATUS.EMPLOYEE_SUBMITTED);
+  // Allow commitment when ASSIGNED (first time) or COMMITMENT_SUBMITTED (resubmission)
+  if (![KPI_STATUS.ASSIGNED, KPI_STATUS.COMMITMENT_SUBMITTED].includes(assignment.status)) {
+    throw new ValidationError(
+      `Commitment can only be submitted when status is 'assigned' or 'commitment_submitted'. Current status: '${assignment.status}'`
+    );
+  }
 
   const now = new Date();
   for (const item of itemsData) {
-    await KpiItem.findByIdAndUpdate(item.id, {
-      employeeValue: item.employeeValue,
-      employeeComment: item.employeeComment || '',
-      employeeSubmittedAt: now,
-      itemStatus: KPI_STATUS.EMPLOYEE_SUBMITTED,
-    });
+    await KpiItem.update(
+      {
+        employeeCommitmentStatus: item.employeeCommitmentStatus,
+        employeeCommitmentComment: item.employeeCommitmentComment || null,
+        committedAt: now,
+      },
+      { where: { id: item.id, kpiAssignmentId: id } }
+    );
+  }
+
+  assignment.status = KPI_STATUS.COMMITMENT_SUBMITTED;
+  assignment.committedAt = now;
+  await assignment.save();
+
+  await notificationService.create({
+    recipient: assignment.managerId,
+    type: NOTIFICATION_TYPES.COMMITMENT_SUBMITTED,
+    title: 'Employee Submitted Commitment',
+    message: `Employee has committed for ${assignment.financialYear} Month ${assignment.month}.`,
+    referenceType: 'kpi_assignment',
+    referenceId: assignment.id,
+  });
+
+  await createAuditLog({
+    entityType: 'kpi_assignment',
+    entityId: assignment.id,
+    action: AUDIT_ACTIONS.COMMITTED,
+    changedBy: user._id,
+    newValue: { status: KPI_STATUS.COMMITMENT_SUBMITTED },
+  });
+
+  return assignment;
+};
+
+const employeeSubmit = async (id, itemsData, user) => {
+  const assignment = await KpiAssignment.findByPk(id);
+  if (!assignment) throw new NotFoundError('KPI Assignment');
+
+  if (user.role === 'employee' && String(assignment.employeeId) !== String(user._id)) {
+    throw new ForbiddenError('You can only submit for your own assignments');
+  }
+
+  // Achievement submission: must have committed first (COMMITMENT_SUBMITTED) or allow resubmit (EMPLOYEE_SUBMITTED)
+  if (![KPI_STATUS.COMMITMENT_SUBMITTED, KPI_STATUS.EMPLOYEE_SUBMITTED].includes(assignment.status)) {
+    throw new ValidationError(
+      `Achievement can only be submitted after commitment. Current status: '${assignment.status}'. ` +
+      `Please submit your monthly commitment first.`
+    );
+  }
+
+  const now = new Date();
+  for (const item of itemsData) {
+    await KpiItem.update(
+      {
+        employeeStatus: item.employeeStatus,
+        employeeComment: item.employeeComment || null,
+        employeeSubmittedAt: now,
+        itemStatus: KPI_STATUS.EMPLOYEE_SUBMITTED,
+      },
+      { where: { id: item.id, kpiAssignmentId: id } }
+    );
   }
 
   assignment.status = KPI_STATUS.EMPLOYEE_SUBMITTED;
   assignment.employeeSubmittedAt = now;
   await assignment.save();
 
-  // Notify manager
   await notificationService.create({
-    recipient: assignment.manager,
-    type: 'employee_submitted',
-    title: 'Employee Submitted KPIs',
-    message: `Employee has submitted KPIs for ${assignment.financialYear} Month ${assignment.month}.`,
+    recipient: assignment.managerId,
+    type: NOTIFICATION_TYPES.EMPLOYEE_SUBMITTED,
+    title: 'Employee Submitted Achievement',
+    message: `Employee has submitted achievement for ${assignment.financialYear} Month ${assignment.month}.`,
     referenceType: 'kpi_assignment',
-    referenceId: assignment._id,
+    referenceId: assignment.id,
   });
 
   await createAuditLog({
     entityType: 'kpi_assignment',
-    entityId: assignment._id,
-    action: 'submitted',
+    entityId: assignment.id,
+    action: AUDIT_ACTIONS.SUBMITTED,
     changedBy: user._id,
     newValue: { status: KPI_STATUS.EMPLOYEE_SUBMITTED },
   });
@@ -208,14 +327,14 @@ const employeeSubmit = async (id, itemsData, user) => {
   return assignment;
 };
 
-/**
- * Manager reviews employee submission
- */
 const managerReview = async (id, itemsData, user) => {
-  const assignment = await KpiAssignment.findById(id);
+  const assignment = await KpiAssignment.findByPk(id, {
+    include: [{ model: User, as: 'employee', attributes: ['id', 'managerId'] }],
+  });
   if (!assignment) throw new NotFoundError('KPI Assignment');
 
-  if (assignment.manager.toString() !== user._id.toString()) {
+  const currentManagerId = assignment.employee?.managerId;
+  if (String(currentManagerId || '') !== String(user._id)) {
     throw new ForbiddenError('You can only review your team assignments');
   }
 
@@ -223,36 +342,44 @@ const managerReview = async (id, itemsData, user) => {
 
   const now = new Date();
   for (const item of itemsData) {
-    await KpiItem.findByIdAndUpdate(item.id, {
-      managerValue: item.managerValue,
-      managerScore: item.managerScore,
-      managerComment: item.managerComment || '',
-      managerReviewedAt: now,
-      itemStatus: KPI_STATUS.MANAGER_REVIEWED,
-    });
+    const numeric = statusToNumeric(item.managerStatus);
+    await KpiItem.update(
+      {
+        managerStatus: item.managerStatus,
+        managerMonthlyNumeric: numeric,
+        managerComment: item.managerComment || '',
+        managerReviewedAt: now,
+        itemStatus: KPI_STATUS.MANAGER_REVIEWED,
+      },
+      { where: { id: item.id, kpiAssignmentId: id } }
+    );
   }
 
   assignment.status = KPI_STATUS.MANAGER_REVIEWED;
   assignment.managerReviewedAt = now;
   await assignment.save();
 
-  // Notify admin (all admins)
-  const admins = await User.find({ role: 'admin', isActive: true }).select('_id');
-  for (const admin of admins) {
+  // Notify final approvers in the employee's department
+  const employee = await User.findByPk(assignment.employeeId, { attributes: ['departmentId'] });
+  const finalApprovers = await User.findAll({
+    where: { role: 'final_approver', departmentId: employee?.departmentId, isActive: true },
+    attributes: ['id'],
+  });
+  for (const fa of finalApprovers) {
     await notificationService.create({
-      recipient: admin._id,
+      recipient: fa.id,
       type: 'manager_reviewed',
       title: 'Manager Review Complete',
-      message: `Manager review completed for ${assignment.financialYear} Month ${assignment.month}.`,
+      message: `Manager review completed for ${assignment.financialYear} Month ${assignment.month}. Ready for quarterly approval.`,
       referenceType: 'kpi_assignment',
-      referenceId: assignment._id,
+      referenceId: assignment.id,
     });
   }
 
   await createAuditLog({
     entityType: 'kpi_assignment',
-    entityId: assignment._id,
-    action: 'reviewed',
+    entityId: assignment.id,
+    action: AUDIT_ACTIONS.REVIEWED,
     changedBy: user._id,
     newValue: { status: KPI_STATUS.MANAGER_REVIEWED },
   });
@@ -260,74 +387,43 @@ const managerReview = async (id, itemsData, user) => {
   return assignment;
 };
 
-/**
- * Admin/final reviewer submits final values
- */
-const finalReview = async (id, itemsData, user) => {
-  const assignment = await KpiAssignment.findById(id);
-  if (!assignment) throw new NotFoundError('KPI Assignment');
-
-  validateTransition(assignment.status, KPI_STATUS.FINAL_REVIEWED);
-
-  const now = new Date();
-  for (const item of itemsData) {
-    await KpiItem.findByIdAndUpdate(item.id, {
-      finalValue: item.finalValue,
-      finalScore: item.finalScore,
-      finalComment: item.finalComment || '',
-      finalReviewedAt: now,
-      itemStatus: KPI_STATUS.FINAL_REVIEWED,
-    });
-  }
-
-  // Calculate monthly weighted score
-  const items = await KpiItem.find({ kpiAssignment: id });
-  const monthlyScore = calculateMonthlyScore(items);
-
-  assignment.status = KPI_STATUS.FINAL_REVIEWED;
-  assignment.finalReviewedAt = now;
-  assignment.monthlyWeightedScore = monthlyScore;
-  await assignment.save();
-
-  await createAuditLog({
-    entityType: 'kpi_assignment',
-    entityId: assignment._id,
-    action: 'final_reviewed',
-    changedBy: user._id,
-    newValue: { status: KPI_STATUS.FINAL_REVIEWED, monthlyWeightedScore: monthlyScore },
-  });
-
-  return assignment;
+// finalReview is REMOVED — replaced by finalApprover.service.submitQuarterlyApproval
+// Kept as a no-op stub so existing controller import does not crash
+const finalReview = async () => {
+  throw new ValidationError(
+    'Direct final review is no longer supported. Use the Final Approver quarterly approval workflow via /api/final-approver.'
+  );
 };
 
-/**
- * Lock assignment — makes it read-only
- */
 const lockAssignment = async (id, user) => {
-  const assignment = await KpiAssignment.findById(id);
+  const assignment = await KpiAssignment.findByPk(id);
   if (!assignment) throw new NotFoundError('KPI Assignment');
 
-  validateTransition(assignment.status, KPI_STATUS.LOCKED);
+  // Allow both final_approved (new) and final_reviewed (legacy) to be locked
+  if (![KPI_STATUS.FINAL_APPROVED, KPI_STATUS.FINAL_REVIEWED].includes(assignment.status)) {
+    throw new ValidationError(
+      `Assignment must be in 'final_approved' status before locking. Current status: '${assignment.status}'`
+    );
+  }
 
   assignment.status = KPI_STATUS.LOCKED;
   assignment.isLocked = true;
   assignment.lockedAt = new Date();
-  assignment.lockedBy = user._id;
+  assignment.lockedById = user._id;
   await assignment.save();
 
-  // Notify employee
   await notificationService.create({
-    recipient: assignment.employee,
+    recipient: assignment.employeeId,
     type: 'record_locked',
     title: 'KPI Record Locked',
     message: `Your KPI record for ${assignment.financialYear} Month ${assignment.month} has been finalized and locked.`,
     referenceType: 'kpi_assignment',
-    referenceId: assignment._id,
+    referenceId: assignment.id,
   });
 
   await createAuditLog({
     entityType: 'kpi_assignment',
-    entityId: assignment._id,
+    entityId: assignment.id,
     action: 'locked',
     changedBy: user._id,
   });
@@ -335,49 +431,42 @@ const lockAssignment = async (id, user) => {
   return assignment;
 };
 
-/**
- * Unlock assignment — admin override
- */
 const unlockAssignment = async (id, user) => {
-  const assignment = await KpiAssignment.findById(id);
+  const assignment = await KpiAssignment.findByPk(id);
   if (!assignment) throw new NotFoundError('KPI Assignment');
 
   if (assignment.status !== KPI_STATUS.LOCKED) {
     throw new ValidationError('Only locked assignments can be unlocked');
   }
 
-  assignment.status = KPI_STATUS.FINAL_REVIEWED;
+  assignment.status = KPI_STATUS.FINAL_APPROVED;
   assignment.isLocked = false;
   assignment.lockedAt = null;
-  assignment.lockedBy = null;
+  assignment.lockedById = null;
   await assignment.save();
 
   await createAuditLog({
     entityType: 'kpi_assignment',
-    entityId: assignment._id,
-    action: 'unlocked',
+    entityId: assignment.id,
+    action: AUDIT_ACTIONS.UNLOCKED,
     changedBy: user._id,
   });
 
   return assignment;
 };
 
-/**
- * Reopen assignment — admin can send it back to an earlier status for re-evaluation
- * targetStatus must be one of: assigned, employee_submitted, manager_reviewed, final_reviewed
- */
 const reopenAssignment = async (id, targetStatus, user) => {
-  const assignment = await KpiAssignment.findById(id);
+  const assignment = await KpiAssignment.findByPk(id);
   if (!assignment) throw new NotFoundError('KPI Assignment');
 
   if (!REOPEN_ALLOWED_FROM.includes(assignment.status)) {
     throw new ValidationError(
-      `Cannot reopen from '${assignment.status}'. Only locked, final_reviewed, or manager_reviewed assignments can be reopened.`
+      `Cannot reopen from '${assignment.status}'. Allowed from: ${REOPEN_ALLOWED_FROM.join(', ')}.`
     );
   }
   if (!REOPEN_ALLOWED_TO.includes(targetStatus)) {
     throw new ValidationError(
-      `Invalid reopen target status '${targetStatus}'. Allowed: assigned, employee_submitted, manager_reviewed, final_reviewed.`
+      `Invalid reopen target status '${targetStatus}'. Allowed: ${REOPEN_ALLOWED_TO.join(', ')}.`
     );
   }
 
@@ -385,57 +474,108 @@ const reopenAssignment = async (id, targetStatus, user) => {
   assignment.status = targetStatus;
   assignment.isLocked = false;
   assignment.lockedAt = null;
-  assignment.lockedBy = null;
+  assignment.lockedById = null;
 
-  // Clear downstream data based on target status
   if (targetStatus === KPI_STATUS.ASSIGNED) {
-    // Reset all submission data
-    await KpiItem.updateMany({ kpiAssignment: id }, {
-      $unset: { employeeValue: 1, employeeComment: 1, employeeSubmittedAt: 1,
-                managerValue: 1, managerScore: 1, managerComment: 1, managerReviewedAt: 1,
-                finalValue: 1, finalScore: 1, finalComment: 1, finalReviewedAt: 1 },
-      $set: { itemStatus: KPI_STATUS.ASSIGNED }
-    });
+    // Full reset — clear all submission data (legacy + new fields)
+    await KpiItem.update(
+      {
+        // Legacy fields
+        employeeValue: null, employeeAttachment: null, employeeSubmittedAt: null,
+        managerValue: null, managerScore: null, managerReviewedAt: null,
+        finalValue: null, finalScore: null, finalComment: null, finalReviewedAt: null,
+        // New fields
+        employeeCommitmentStatus: null, employeeCommitmentComment: null, committedAt: null,
+        employeeStatus: null, employeeComment: null,
+        managerStatus: null, managerComment: null, managerMonthlyNumeric: null,
+        finalApproverStatus: null, finalApproverValue: null, finalApproverAchievedWeightage: null,
+        finalApproverComment: null, finalApprovedAt: null, finalApprovedById: null,
+        itemStatus: KPI_STATUS.ASSIGNED,
+      },
+      { where: { kpiAssignmentId: id } }
+    );
+    assignment.committedAt = null;
     assignment.employeeSubmittedAt = null;
     assignment.managerReviewedAt = null;
     assignment.finalReviewedAt = null;
+    assignment.finalApprovedAt = null;
     assignment.monthlyWeightedScore = null;
-  } else if (targetStatus === KPI_STATUS.EMPLOYEE_SUBMITTED) {
-    // Keep employee data, clear manager + final
-    await KpiItem.updateMany({ kpiAssignment: id }, {
-      $unset: { managerValue: 1, managerScore: 1, managerComment: 1, managerReviewedAt: 1,
-                finalValue: 1, finalScore: 1, finalComment: 1, finalReviewedAt: 1 },
-      $set: { itemStatus: KPI_STATUS.EMPLOYEE_SUBMITTED }
-    });
+  } else if (targetStatus === KPI_STATUS.COMMITMENT_SUBMITTED) {
+    // Reset achievement and manager data, keep commitment intact
+    await KpiItem.update(
+      {
+        // Legacy fields
+        employeeValue: null, employeeAttachment: null, employeeSubmittedAt: null,
+        managerValue: null, managerScore: null, managerReviewedAt: null,
+        finalValue: null, finalScore: null, finalComment: null, finalReviewedAt: null,
+        // New fields (keep commitment, clear rest)
+        employeeStatus: null, employeeComment: null,
+        managerStatus: null, managerComment: null, managerMonthlyNumeric: null,
+        finalApproverStatus: null, finalApproverValue: null, finalApproverAchievedWeightage: null,
+        finalApproverComment: null, finalApprovedAt: null, finalApprovedById: null,
+        itemStatus: KPI_STATUS.COMMITMENT_SUBMITTED,
+      },
+      { where: { kpiAssignmentId: id } }
+    );
+    assignment.employeeSubmittedAt = null;
     assignment.managerReviewedAt = null;
     assignment.finalReviewedAt = null;
+    assignment.finalApprovedAt = null;
+    assignment.monthlyWeightedScore = null;
+  } else if (targetStatus === KPI_STATUS.EMPLOYEE_SUBMITTED) {
+    // Reset manager and final approver data
+    await KpiItem.update(
+      {
+        // Legacy fields
+        managerValue: null, managerScore: null, managerReviewedAt: null,
+        finalValue: null, finalScore: null, finalComment: null, finalReviewedAt: null,
+        // New fields
+        managerStatus: null, managerComment: null, managerMonthlyNumeric: null,
+        finalApproverStatus: null, finalApproverValue: null, finalApproverAchievedWeightage: null,
+        finalApproverComment: null, finalApprovedAt: null, finalApprovedById: null,
+        itemStatus: KPI_STATUS.EMPLOYEE_SUBMITTED,
+      },
+      { where: { kpiAssignmentId: id } }
+    );
+    assignment.managerReviewedAt = null;
+    assignment.finalReviewedAt = null;
+    assignment.finalApprovedAt = null;
     assignment.monthlyWeightedScore = null;
   } else if (targetStatus === KPI_STATUS.MANAGER_REVIEWED) {
-    // Keep employee + manager data, clear final
-    await KpiItem.updateMany({ kpiAssignment: id }, {
-      $unset: { finalValue: 1, finalScore: 1, finalComment: 1, finalReviewedAt: 1 },
-      $set: { itemStatus: KPI_STATUS.MANAGER_REVIEWED }
-    });
+    // Reset only final approver data
+    await KpiItem.update(
+      {
+        // Legacy fields
+        finalValue: null, finalScore: null, finalComment: null, finalReviewedAt: null,
+        // New fields
+        finalApproverStatus: null, finalApproverValue: null, finalApproverAchievedWeightage: null,
+        finalApproverComment: null, finalApprovedAt: null, finalApprovedById: null,
+        itemStatus: KPI_STATUS.MANAGER_REVIEWED,
+      },
+      { where: { kpiAssignmentId: id } }
+    );
     assignment.finalReviewedAt = null;
+    assignment.finalApprovedAt = null;
     assignment.monthlyWeightedScore = null;
+  } else if (targetStatus === KPI_STATUS.FINAL_APPROVED) {
+    // Unlock from locked — no data to clear
+    // QuarterlyApproval remains intact (admin is reverting the lock, not the approval)
   }
-  // If target is final_reviewed, just unlock — no data cleared
 
   await assignment.save();
 
-  // Notify employee about reopened assessment
   await notificationService.create({
-    recipient: assignment.employee,
+    recipient: assignment.employeeId,
     type: 'record_unlocked',
     title: 'Assessment Reopened',
     message: `Your KPI assessment for ${assignment.financialYear} Month ${assignment.month} has been reopened to "${targetStatus.replace(/_/g, ' ')}" stage.`,
     referenceType: 'kpi_assignment',
-    referenceId: assignment._id,
+    referenceId: assignment.id,
   });
 
   await createAuditLog({
     entityType: 'kpi_assignment',
-    entityId: assignment._id,
+    entityId: assignment.id,
     action: 'reopened',
     changedBy: user._id,
     oldValue: { status: oldStatus },
@@ -445,56 +585,58 @@ const reopenAssignment = async (id, targetStatus, user) => {
   return assignment;
 };
 
-// Validate status transition
 function validateTransition(currentStatus, targetStatus) {
+  // Allow idempotent resubmissions (employee can re-commit or re-submit achievement)
+  if (currentStatus === targetStatus &&
+    [KPI_STATUS.COMMITMENT_SUBMITTED, KPI_STATUS.EMPLOYEE_SUBMITTED].includes(currentStatus)) {
+    return;
+  }
   const allowed = STATUS_TRANSITIONS[currentStatus];
   if (!allowed || !allowed.includes(targetStatus)) {
-    throw new ValidationError(
-      `Cannot transition from '${currentStatus}' to '${targetStatus}'`
-    );
+    throw new ValidationError(`Cannot transition from '${currentStatus}' to '${targetStatus}'`);
   }
 }
 
-/**
- * Get consolidated team overview for a manager for a given month.
- * Returns ALL team members — those with KPI assignments show items,
- * those without show as { employee, assignment: null, items: [] }
- * so the frontend can offer "Add KPI" links.
- */
-const getTeamOverview = async (managerId, query = {}) => {
-  // 1. Get all team members for this manager
-  const teamMembers = await User.find({ manager: managerId, isActive: true })
-    .select('_id name employeeCode email designation department kpiReviewApplicable')
-    .sort({ name: 1 });
+function itemPlain(item) {
+  const obj = item.get ? item.get({ plain: true }) : item;
+  obj.calculatedResult = computeItemAverage(obj);
+  return obj;
+}
 
-  // 2. Find assignments for the selected period
-  const filter = { manager: managerId };
+const getTeamOverview = async (managerId, query = {}) => {
+  const teamMembers = await User.findAll({
+    where: { managerId, isActive: true },
+    attributes: ['id', 'name', 'employeeCode', 'email', 'designation', 'departmentId', 'kpiReviewApplicable'],
+    include: [{ model: Department, as: 'department', attributes: ['id', 'name', 'code'] }],
+    order: [['name', 'ASC']],
+  });
+
+  const teamIds = teamMembers.map((m) => m.id);
+  const filter = { employeeId: { [Op.in]: teamIds } };
   if (query.financialYear) filter.financialYear = query.financialYear;
   if (query.month) filter.month = Number(query.month);
 
-  const assignments = await KpiAssignment.find(filter)
-    .populate('employee', 'name employeeCode email designation department');
+  const assignments = await KpiAssignment.findAll({
+    where: filter,
+    include: [employeeWithDept],
+  });
 
-  // 3. Build a map of employeeId → assignment
   const assignmentMap = {};
   for (const a of assignments) {
-    assignmentMap[a.employee._id.toString()] = a;
+    assignmentMap[a.employeeId] = a;
   }
 
-  // 4. Build results: one entry per team member
   const results = [];
   for (const member of teamMembers) {
-    const assignment = assignmentMap[member._id.toString()] || null;
+    const assignment = assignmentMap[member.id] || null;
     if (assignment) {
-      const items = await KpiItem.find({ kpiAssignment: assignment._id }).sort({ createdAt: 1 });
-      const itemsWithAvg = items.map((item) => {
-        const obj = item.toObject();
-        obj.calculatedResult = computeItemAverage(obj);
-        return obj;
+      const items = await KpiItem.findAll({
+        where: { kpiAssignmentId: assignment.id },
+        order: [['createdAt', 'ASC']],
       });
-      results.push({ employee: member, assignment, items: itemsWithAvg });
+      const itemsWithAvg = items.map((item) => itemPlain(item));
+      results.push({ employee: member, assignment: withCurrentManager(assignment), items: itemsWithAvg });
     } else {
-      // No KPIs defined yet for this member+month
       results.push({ employee: member, assignment: null, items: [] });
     }
   }
@@ -502,48 +644,48 @@ const getTeamOverview = async (managerId, query = {}) => {
   return results;
 };
 
-/**
- * Get all assignments overview for admin for a given month (all employees)
- * Returns all assignments with KPI items across the organization
- */
 const getAdminOverview = async (query = {}) => {
-  const filter = {};
-  if (query.financialYear) filter.financialYear = query.financialYear;
-  if (query.month) filter.month = Number(query.month);
-  if (query.status) filter.status = query.status;
+  const where = {};
+  if (query.financialYear) where.financialYear = query.financialYear;
+  if (query.month) where.month = Number(query.month);
+  if (query.status) where.status = query.status;
   if (query.department) {
-    // Filter by department: need to find employees in that department first
-    const empIds = await User.find({ department: query.department }).select('_id');
-    filter.employee = { $in: empIds.map((e) => e._id) };
+    const emps = await User.findAll({
+      where: { departmentId: query.department },
+      attributes: ['id'],
+    });
+    where.employeeId = { [Op.in]: emps.map((e) => e.id) };
   }
 
-  const assignments = await KpiAssignment.find(filter)
-    .populate('employee', 'name employeeCode email designation department kpiReviewApplicable')
-    .populate('manager', 'name employeeCode')
-    .sort({ createdAt: -1 });
+  const assignments = await KpiAssignment.findAll({
+    where,
+    include: [employeeWithDept, managerShort],
+    order: [['createdAt', 'DESC']],
+  });
 
   const results = [];
   for (const assignment of assignments) {
-    const items = await KpiItem.find({ kpiAssignment: assignment._id }).sort({ createdAt: 1 });
-    const itemsWithAvg = items.map((item) => {
-      const obj = item.toObject();
-      obj.calculatedResult = computeItemAverage(obj);
-      return obj;
-    });
+    const assignmentPlain = withCurrentManager(assignment);
 
-    // Compute overall average score for the assignment
+    const items = await KpiItem.findAll({
+      where: { kpiAssignmentId: assignmentPlain.id },
+      order: [['createdAt', 'ASC']],
+    });
+    const itemsWithAvg = items.map((item) => itemPlain(item));
+
     const avgScores = itemsWithAvg
       .filter((i) => i.calculatedResult != null)
-      .map((i) => i.calculatedResult * (i.weightage / 100));
+      .map((i) => i.calculatedResult * (Number(i.weightage) / 100));
     const totalWeight = itemsWithAvg
       .filter((i) => i.calculatedResult != null)
-      .reduce((s, i) => s + i.weightage, 0);
-    const overallAvg = totalWeight > 0
-      ? Math.round((avgScores.reduce((s, v) => s + v, 0) / totalWeight) * 100 * 100) / 100
-      : null;
+      .reduce((s, i) => s + Number(i.weightage), 0);
+    const overallAvg =
+      totalWeight > 0
+        ? Math.round((avgScores.reduce((s, v) => s + v, 0) / totalWeight) * 100 * 100) / 100
+        : null;
 
     results.push({
-      assignment,
+      assignment: assignmentPlain,
       items: itemsWithAvg,
       overallAverageScore: overallAvg,
     });
@@ -552,11 +694,6 @@ const getAdminOverview = async (query = {}) => {
   return results;
 };
 
-/**
- * Compute average of employee, manager, and final values for a KPI item.
- * Only includes values that have been submitted (non-null).
- * Returns null if no values available.
- */
 function computeItemAverage(item) {
   const values = [];
   if (item.employeeValue != null) values.push(Number(item.employeeValue));
@@ -566,39 +703,35 @@ function computeItemAverage(item) {
   return Math.round((values.reduce((s, v) => s + v, 0) / values.length) * 100) / 100;
 }
 
-/**
- * Clone KPI items from a source assignment to a target employee+month.
- * Creates a new assignment (or uses existing draft) and copies KPI item definitions.
- * Does NOT copy employee/manager/final values — only the KPI structure.
- *
- * Options:
- *   sourceAssignmentId — the assignment to clone from
- *   targetEmployeeId — the employee to clone to
- *   targetMonth — target month number
- *   targetFinancialYear — target FY string
- */
 const cloneKpis = async (data, user) => {
   const { sourceAssignmentId, targetEmployeeId, targetMonth, targetFinancialYear } = data;
 
-  // 1. Load source assignment + items
-  const sourceAssignment = await KpiAssignment.findById(sourceAssignmentId);
+  const sourceAssignment = await KpiAssignment.findByPk(sourceAssignmentId);
   if (!sourceAssignment) throw new NotFoundError('Source KPI Assignment');
 
-  const sourceItems = await KpiItem.find({ kpiAssignment: sourceAssignmentId }).sort({ createdAt: 1 });
+  const sourceItems = await KpiItem.findAll({
+    where: { kpiAssignmentId: sourceAssignmentId },
+    order: [['createdAt', 'ASC']],
+  });
   if (sourceItems.length === 0) throw new ValidationError('Source assignment has no KPI items to clone');
 
   const quarter = getQuarterFromMonth(Number(targetMonth));
 
-  // 2. Verify target employee is KPI-applicable
-  const targetEmployee = await User.findById(targetEmployeeId);
+  const targetEmployee = await User.findByPk(targetEmployeeId);
   if (!targetEmployee) throw new NotFoundError('Target Employee');
   if (!targetEmployee.kpiReviewApplicable) throw new ValidationError('KPI review is not applicable for target employee');
+  if (user.role !== 'admin') {
+    if (!targetEmployee.managerId || String(targetEmployee.managerId) !== String(user._id)) {
+      throw new ForbiddenError('You can only clone KPIs for employees in your current team');
+    }
+  }
 
-  // 3. Check if target assignment already exists
   let targetAssignment = await KpiAssignment.findOne({
-    employee: targetEmployeeId,
-    financialYear: targetFinancialYear,
-    month: Number(targetMonth),
+    where: {
+      employeeId: targetEmployeeId,
+      financialYear: targetFinancialYear,
+      month: Number(targetMonth),
+    },
   });
 
   if (targetAssignment && targetAssignment.status !== KPI_STATUS.DRAFT) {
@@ -608,43 +741,43 @@ const cloneKpis = async (data, user) => {
   }
 
   if (!targetAssignment) {
-    // Create new draft assignment
     targetAssignment = await KpiAssignment.create({
       financialYear: targetFinancialYear,
       month: Number(targetMonth),
       quarter,
-      employee: targetEmployeeId,
-      manager: user._id,
-      createdBy: user._id,
+      employeeId: targetEmployeeId,
+      managerId: user.role === 'admin' ? targetEmployee.managerId || user._id : user._id,
+      createdById: user._id,
       status: KPI_STATUS.DRAFT,
     });
   }
 
-  // 3. Clone KPI items (definition only, no values)
-  const clonedItems = sourceItems.map((item) => ({
-    kpiAssignment: targetAssignment._id,
-    title: item.title,
-    description: item.description,
-    category: item.category,
-    unit: item.unit,
-    weightage: item.weightage,
-    targetValue: item.targetValue,
-    thresholdValue: item.thresholdValue,
-    stretchTarget: item.stretchTarget,
-    remarks: item.remarks,
-    itemStatus: 'draft',
-  }));
+  const clonedPayload = sourceItems.map((item) => {
+    const p = item.get({ plain: true });
+    return {
+      kpiAssignmentId: targetAssignment.id,
+      title: p.title,
+      description: p.description,
+      category: p.category,
+      unit: p.unit,
+      weightage: p.weightage,
+      targetValue: p.targetValue,
+      thresholdValue: p.thresholdValue,
+      stretchTarget: p.stretchTarget,
+      remarks: p.remarks,
+      itemStatus: 'draft',
+    };
+  });
 
-  await KpiItem.insertMany(clonedItems);
+  await KpiItem.bulkCreate(clonedPayload);
 
-  // Update total weightage
-  const totalWeightage = clonedItems.reduce((sum, i) => sum + (i.weightage || 0), 0);
+  const totalWeightage = clonedPayload.reduce((sum, i) => sum + (Number(i.weightage) || 0), 0);
   targetAssignment.totalWeightage = totalWeightage;
   await targetAssignment.save();
 
   await createAuditLog({
     entityType: 'kpi_assignment',
-    entityId: targetAssignment._id,
+    entityId: targetAssignment.id,
     action: 'created',
     changedBy: user._id,
     newValue: {
@@ -652,30 +785,26 @@ const cloneKpis = async (data, user) => {
       employee: targetEmployeeId,
       month: targetMonth,
       financialYear: targetFinancialYear,
-      itemsCloned: clonedItems.length,
+      itemsCloned: clonedPayload.length,
     },
   });
 
   return targetAssignment;
 };
 
-/**
- * Bulk clone: clone one source assignment's KPI structure to multiple employees for the same month.
- */
 const bulkCloneKpis = async (data, user) => {
   const { sourceAssignmentId, targetEmployeeIds, targetMonth, targetFinancialYear } = data;
 
   const results = { success: [], failed: [] };
 
-  // Pre-filter employees not applicable for KPI review
-  const applicableEmployees = await User.find({
-    _id: { $in: targetEmployeeIds },
-    kpiReviewApplicable: true,
-  }).select('_id');
-  const applicableIds = new Set(applicableEmployees.map((e) => e._id.toString()));
+  const applicableEmployees = await User.findAll({
+    where: { id: { [Op.in]: targetEmployeeIds }, kpiReviewApplicable: true },
+    attributes: ['id'],
+  });
+  const applicableIds = new Set(applicableEmployees.map((e) => String(e.id)));
 
   for (const empId of targetEmployeeIds) {
-    if (!applicableIds.has(empId.toString())) {
+    if (!applicableIds.has(String(empId))) {
       results.failed.push({ employeeId: empId, error: 'KPI review is not applicable for this employee' });
       continue;
     }
@@ -684,7 +813,7 @@ const bulkCloneKpis = async (data, user) => {
         { sourceAssignmentId, targetEmployeeId: empId, targetMonth, targetFinancialYear },
         user
       );
-      results.success.push({ employeeId: empId, assignmentId: assignment._id });
+      results.success.push({ employeeId: empId, assignmentId: assignment.id });
     } catch (err) {
       results.failed.push({ employeeId: empId, error: err.message });
     }
@@ -693,24 +822,6 @@ const bulkCloneKpis = async (data, user) => {
   return results;
 };
 
-/**
- * Bulk import KPI items from an Excel file.
- * Expected columns: Employee Code, KPI Title, Description, Category, Unit,
- *                   Weightage, Target Value, Threshold Value, Stretch Target, Remarks
- *
- * For each row:
- *   - Find the employee by employeeCode
- *   - Verify the employee is in the manager's team
- *   - Find or create a KPI assignment for that employee+month+FY
- *   - Create KPI item under that assignment
- *   - Update totalWeightage
- *
- * @param {Buffer} buffer - Excel file buffer
- * @param {string} financialYear
- * @param {number} month
- * @param {Object} user - The authenticated manager/admin user
- * @returns {{ success: Array, errors: Array }}
- */
 const bulkImportFromExcel = async (buffer, financialYear, month, user) => {
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(buffer);
@@ -723,7 +834,6 @@ const bulkImportFromExcel = async (buffer, financialYear, month, user) => {
   const success = [];
   const errors = [];
 
-  // Read header row to map column positions
   const headerRow = worksheet.getRow(1);
   const headers = {};
   headerRow.eachCell((cell, colNumber) => {
@@ -731,24 +841,23 @@ const bulkImportFromExcel = async (buffer, financialYear, month, user) => {
     headers[val] = colNumber;
   });
 
-  // Validate required headers
   const requiredHeaders = ['employee code', 'kpi title', 'weightage', 'target value'];
   for (const h of requiredHeaders) {
     if (!headers[h]) {
-      throw new ValidationError(`Missing required column: "${h}". Expected columns: Employee Code, KPI Title, Description, Category, Unit, Weightage, Target Value, Threshold Value, Stretch Target, Remarks`);
+      throw new ValidationError(
+        `Missing required column: "${h}". Expected columns: Employee Code, KPI Title, Description, Category, Unit, Weightage, Target Value, Threshold Value, Stretch Target, Remarks`
+      );
     }
   }
 
   const quarter = getQuarterFromMonth(Number(month));
 
-  // Cache for employee lookups and assignments
   const employeeCache = {};
   const assignmentCache = {};
 
   for (let rowNumber = 2; rowNumber <= worksheet.rowCount; rowNumber++) {
     const row = worksheet.getRow(rowNumber);
 
-    // Skip empty rows
     const employeeCode = String(row.getCell(headers['employee code']).value || '').trim().toUpperCase();
     const kpiTitle = String(row.getCell(headers['kpi title']).value || '').trim();
 
@@ -760,10 +869,9 @@ const bulkImportFromExcel = async (buffer, financialYear, month, user) => {
     }
 
     try {
-      // 1. Find employee
       let employee = employeeCache[employeeCode];
       if (!employee) {
-        employee = await User.findOne({ employeeCode, isActive: true });
+        employee = await User.findOne({ where: { employeeCode, isActive: true } });
         if (!employee) {
           errors.push({ row: rowNumber, employeeCode, message: `Employee not found: ${employeeCode}` });
           continue;
@@ -771,22 +879,21 @@ const bulkImportFromExcel = async (buffer, financialYear, month, user) => {
         employeeCache[employeeCode] = employee;
       }
 
-      // Check KPI review applicability
       if (!employee.kpiReviewApplicable) {
         errors.push({ row: rowNumber, employeeCode, message: 'KPI review not applicable for this employee' });
         continue;
       }
 
-      // 2. Verify employee is in manager's team (skip for admin)
       if (user.role !== 'admin') {
-        if (!employee.manager || employee.manager.toString() !== user._id.toString()) {
+        if (!employee.managerId || String(employee.managerId) !== String(user._id)) {
           errors.push({ row: rowNumber, employeeCode, message: `Employee ${employeeCode} is not in your team` });
           continue;
         }
       }
 
-      // 3. Parse row data
-      const description = headers['description'] ? String(row.getCell(headers['description']).value || '').trim() : '';
+      const description = headers['description']
+        ? String(row.getCell(headers['description']).value || '').trim()
+        : '';
       const category = headers['category'] ? String(row.getCell(headers['category']).value || '').trim() : 'Other';
       const unit = headers['unit'] ? String(row.getCell(headers['unit']).value || '').trim() : 'Number';
       const weightage = Number(row.getCell(headers['weightage']).value);
@@ -795,7 +902,6 @@ const bulkImportFromExcel = async (buffer, financialYear, month, user) => {
       const stretchTarget = headers['stretch target'] ? row.getCell(headers['stretch target']).value : null;
       const remarks = headers['remarks'] ? String(row.getCell(headers['remarks']).value || '').trim() : '';
 
-      // Validate
       if (isNaN(weightage) || weightage < 1 || weightage > 100) {
         errors.push({ row: rowNumber, employeeCode, message: 'Weightage must be between 1 and 100' });
         continue;
@@ -805,26 +911,35 @@ const bulkImportFromExcel = async (buffer, financialYear, month, user) => {
         continue;
       }
       if (category && !KPI_CATEGORIES.includes(category)) {
-        errors.push({ row: rowNumber, employeeCode, message: `Invalid category "${category}". Must be one of: ${KPI_CATEGORIES.join(', ')}` });
+        errors.push({
+          row: rowNumber,
+          employeeCode,
+          message: `Invalid category "${category}". Must be one of: ${KPI_CATEGORIES.join(', ')}`,
+        });
         continue;
       }
       if (unit && !KPI_UNITS.includes(unit)) {
-        errors.push({ row: rowNumber, employeeCode, message: `Invalid unit "${unit}". Must be one of: ${KPI_UNITS.join(', ')}` });
+        errors.push({
+          row: rowNumber,
+          employeeCode,
+          message: `Invalid unit "${unit}". Must be one of: ${KPI_UNITS.join(', ')}`,
+        });
         continue;
       }
 
-      // 4. Find or create assignment
-      const cacheKey = `${employee._id}_${financialYear}_${month}`;
+      const cacheKey = `${employee.id}_${financialYear}_${month}`;
       let assignment = assignmentCache[cacheKey];
       if (!assignment) {
         assignment = await KpiAssignment.findOne({
-          employee: employee._id,
-          financialYear,
-          month: Number(month),
+          where: { employeeId: employee.id, financialYear, month: Number(month) },
         });
 
         if (assignment && !['draft', 'assigned'].includes(assignment.status)) {
-          errors.push({ row: rowNumber, employeeCode, message: `Assignment for ${employeeCode} already exists with status "${assignment.status}" — cannot add items` });
+          errors.push({
+            row: rowNumber,
+            employeeCode,
+            message: `Assignment for ${employeeCode} already exists with status "${assignment.status}" — cannot add items`,
+          });
           continue;
         }
 
@@ -833,33 +948,32 @@ const bulkImportFromExcel = async (buffer, financialYear, month, user) => {
             financialYear,
             month: Number(month),
             quarter,
-            employee: employee._id,
-            manager: user.role === 'admin' ? (employee.manager || user._id) : user._id,
-            createdBy: user._id,
+            employeeId: employee.id,
+            managerId: user.role === 'admin' ? employee.managerId || user._id : user._id,
+            createdById: user._id,
             status: KPI_STATUS.DRAFT,
           });
         }
         assignmentCache[cacheKey] = assignment;
       }
 
-      // 5. Create KPI item
       const kpiItem = await KpiItem.create({
-        kpiAssignment: assignment._id,
+        kpiAssignmentId: assignment.id,
         title: kpiTitle,
         description,
         category: category || 'Other',
         unit: unit || 'Number',
         weightage,
         targetValue,
-        thresholdValue: thresholdValue != null && !isNaN(Number(thresholdValue)) ? Number(thresholdValue) : undefined,
-        stretchTarget: stretchTarget != null && !isNaN(Number(stretchTarget)) ? Number(stretchTarget) : undefined,
+        thresholdValue:
+          thresholdValue != null && !isNaN(Number(thresholdValue)) ? Number(thresholdValue) : null,
+        stretchTarget: stretchTarget != null && !isNaN(Number(stretchTarget)) ? Number(stretchTarget) : null,
         remarks,
         itemStatus: assignment.status === 'assigned' ? 'assigned' : 'draft',
       });
 
-      // 6. Update totalWeightage on assignment
-      const allItems = await KpiItem.find({ kpiAssignment: assignment._id });
-      assignment.totalWeightage = allItems.reduce((sum, i) => sum + (i.weightage || 0), 0);
+      const allItems = await KpiItem.findAll({ where: { kpiAssignmentId: assignment.id } });
+      assignment.totalWeightage = allItems.reduce((sum, i) => sum + Number(i.weightage || 0), 0);
       await assignment.save();
       assignmentCache[cacheKey] = assignment;
 
@@ -868,8 +982,8 @@ const bulkImportFromExcel = async (buffer, financialYear, month, user) => {
         employeeCode,
         employeeName: employee.name,
         kpiTitle,
-        assignmentId: assignment._id,
-        itemId: kpiItem._id,
+        assignmentId: assignment.id,
+        itemId: kpiItem.id,
       });
     } catch (err) {
       errors.push({ row: rowNumber, employeeCode, message: err.message });
@@ -879,10 +993,6 @@ const bulkImportFromExcel = async (buffer, financialYear, month, user) => {
   return { success, errors };
 };
 
-/**
- * Generate an Excel template for bulk KPI import.
- * Returns an ExcelJS Workbook ready to be written to a response stream.
- */
 const generateImportTemplate = async () => {
   const workbook = new ExcelJS.Workbook();
   workbook.creator = 'PLI Portal';
@@ -890,7 +1000,6 @@ const generateImportTemplate = async () => {
 
   const worksheet = workbook.addWorksheet('KPI Import');
 
-  // Define columns
   worksheet.columns = [
     { header: 'Employee Code', key: 'employeeCode', width: 18 },
     { header: 'KPI Title', key: 'kpiTitle', width: 30 },
@@ -904,7 +1013,6 @@ const generateImportTemplate = async () => {
     { header: 'Remarks', key: 'remarks', width: 30 },
   ];
 
-  // Style header row
   const headerRow = worksheet.getRow(1);
   headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
   headerRow.fill = {
@@ -914,7 +1022,6 @@ const generateImportTemplate = async () => {
   };
   headerRow.alignment = { vertical: 'middle', horizontal: 'center' };
 
-  // Add sample data rows
   worksheet.addRow({
     employeeCode: 'EMP001',
     kpiTitle: 'Revenue Target Achievement',
@@ -952,7 +1059,6 @@ const generateImportTemplate = async () => {
     remarks: '',
   });
 
-  // Add data validation for Category
   worksheet.dataValidations.add('D2:D1000', {
     type: 'list',
     allowBlank: true,
@@ -962,7 +1068,6 @@ const generateImportTemplate = async () => {
     error: `Must be one of: ${KPI_CATEGORIES.join(', ')}`,
   });
 
-  // Add data validation for Unit
   worksheet.dataValidations.add('E2:E1000', {
     type: 'list',
     allowBlank: true,
@@ -972,7 +1077,6 @@ const generateImportTemplate = async () => {
     error: `Must be one of: ${KPI_UNITS.join(', ')}`,
   });
 
-  // Add instructions sheet
   const instrSheet = workbook.addWorksheet('Instructions');
   instrSheet.columns = [{ header: '', key: 'text', width: 80 }];
   const instructions = [
@@ -1010,6 +1114,7 @@ module.exports = {
   createAssignment,
   updateAssignment,
   assignToEmployee,
+  commitKpi,
   employeeSubmit,
   managerReview,
   finalReview,

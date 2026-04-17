@@ -1,6 +1,8 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const Department = require('../models/Department');
 const { UnauthorizedError } = require('../utils/errors');
+const { renameIdsForClient } = require('../utils/renameIds');
 
 /**
  * JWT authentication middleware
@@ -16,7 +18,10 @@ const authenticate = async (req, res, next) => {
     const token = authHeader.split(' ')[1];
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-    const user = await User.findById(decoded.id).select('-passwordHash').populate('department', 'name code');
+    const user = await User.findByPk(decoded.id, {
+      attributes: { exclude: ['passwordHash'] },
+      include: [{ model: Department, as: 'department', attributes: ['id', 'name', 'code'] }],
+    });
     if (!user) {
       throw new UnauthorizedError('User not found');
     }
@@ -25,7 +30,7 @@ const authenticate = async (req, res, next) => {
       throw new UnauthorizedError('Account is deactivated');
     }
 
-    req.user = user;
+    req.user = renameIdsForClient(user.get({ plain: true }));
     next();
   } catch (error) {
     if (error.name === 'JsonWebTokenError' || error.name === 'TokenExpiredError') {

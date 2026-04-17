@@ -1,42 +1,29 @@
-const mongoose = require('mongoose');
+const { DataTypes } = require('sequelize');
+const sequelize = require('../config/database');
 const { NOTIFICATION_TYPES } = require('../config/constants');
 
-const notificationSchema = new mongoose.Schema(
+const typeValues = Object.values(NOTIFICATION_TYPES);
+
+const Notification = sequelize.define(
+  'Notification',
   {
-    recipient: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
-      required: true,
+    id: {
+      type: DataTypes.UUID,
+      defaultValue: DataTypes.UUIDV4,
+      primaryKey: true,
     },
-    type: {
-      type: String,
-      enum: Object.values(NOTIFICATION_TYPES),
-      required: true,
-    },
-    title: {
-      type: String,
-      required: true,
-    },
-    message: {
-      type: String,
-    },
+    recipientId: { type: DataTypes.UUID, allowNull: false },
+    type: { type: DataTypes.ENUM(...typeValues), allowNull: false },
+    title: { type: DataTypes.STRING(512), allowNull: false },
+    message: { type: DataTypes.TEXT, allowNull: true },
     referenceType: {
-      type: String,
-      enum: ['kpi_assignment', 'appraisal_cycle', 'user'],
+      type: DataTypes.ENUM('kpi_assignment', 'appraisal_cycle', 'user'),
+      allowNull: true,
     },
-    referenceId: {
-      type: mongoose.Schema.Types.ObjectId,
-    },
-    isRead: {
-      type: Boolean,
-      default: false,
-    },
+    referenceId: { type: DataTypes.UUID, allowNull: true },
+    isRead: { type: DataTypes.BOOLEAN, defaultValue: false },
   },
-  {
-    timestamps: true,
-  }
+  { tableName: 'notifications' }
 );
 
-notificationSchema.index({ recipient: 1, isRead: 1, createdAt: -1 });
-
-module.exports = mongoose.model('Notification', notificationSchema);
+module.exports = Notification;

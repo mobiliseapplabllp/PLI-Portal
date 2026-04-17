@@ -5,24 +5,27 @@ const { KPI_STATUS } = require('../config/constants');
 const { createAuditLog } = require('../middleware/auditLogger');
 
 const createItem = async (data, user) => {
-  const assignment = await KpiAssignment.findById(data.kpiAssignment);
+  const assignmentId = data.kpiAssignment || data.kpiAssignmentId;
+  const assignment = await KpiAssignment.findByPk(assignmentId);
   if (!assignment) throw new NotFoundError('KPI Assignment');
 
-  // Can only add items in draft or assigned status
   if (![KPI_STATUS.DRAFT, KPI_STATUS.ASSIGNED].includes(assignment.status)) {
     throw new ValidationError('Cannot add items after submission');
   }
 
-  const item = await KpiItem.create(data);
+  const { kpiAssignment, ...rest } = data;
+  const item = await KpiItem.create({
+    ...rest,
+    kpiAssignmentId: assignmentId,
+  });
 
-  // Update total weightage
-  const items = await KpiItem.find({ kpiAssignment: assignment._id });
-  assignment.totalWeightage = items.reduce((sum, i) => sum + i.weightage, 0);
+  const items = await KpiItem.findAll({ where: { kpiAssignmentId: assignment.id } });
+  assignment.totalWeightage = items.reduce((sum, i) => sum + Number(i.weightage), 0);
   await assignment.save();
 
   await createAuditLog({
     entityType: 'kpi_item',
-    entityId: item._id,
+    entityId: item.id,
     action: 'created',
     changedBy: user._id,
     newValue: { title: item.title, weightage: item.weightage },
@@ -32,10 +35,10 @@ const createItem = async (data, user) => {
 };
 
 const updateItem = async (id, data, user) => {
-  const item = await KpiItem.findById(id);
+  const item = await KpiItem.findByPk(id);
   if (!item) throw new NotFoundError('KPI Item');
 
-  const assignment = await KpiAssignment.findById(item.kpiAssignment);
+  const assignment = await KpiAssignment.findByPk(item.kpiAssignmentId);
   if (assignment && assignment.isLocked) {
     throw new ValidationError('Cannot edit items in a locked assignment');
   }
@@ -44,16 +47,15 @@ const updateItem = async (id, data, user) => {
   Object.assign(item, data);
   await item.save();
 
-  // Recalculate total weightage
   if (data.weightage !== undefined && assignment) {
-    const items = await KpiItem.find({ kpiAssignment: assignment._id });
-    assignment.totalWeightage = items.reduce((sum, i) => sum + i.weightage, 0);
+    const items = await KpiItem.findAll({ where: { kpiAssignmentId: assignment.id } });
+    assignment.totalWeightage = items.reduce((sum, i) => sum + Number(i.weightage), 0);
     await assignment.save();
   }
 
   await createAuditLog({
     entityType: 'kpi_item',
-    entityId: item._id,
+    entityId: item.id,
     action: 'updated',
     changedBy: user._id,
     oldValue,
@@ -64,26 +66,25 @@ const updateItem = async (id, data, user) => {
 };
 
 const deleteItem = async (id, user) => {
-  const item = await KpiItem.findById(id);
+  const item = await KpiItem.findByPk(id);
   if (!item) throw new NotFoundError('KPI Item');
 
-  const assignment = await KpiAssignment.findById(item.kpiAssignment);
+  const assignment = await KpiAssignment.findByPk(item.kpiAssignmentId);
   if (assignment && assignment.status !== KPI_STATUS.DRAFT) {
     throw new ValidationError('Can only delete items in draft status');
   }
 
-  await item.deleteOne();
+  await item.destroy();
 
-  // Recalculate total weightage
   if (assignment) {
-    const items = await KpiItem.find({ kpiAssignment: assignment._id });
-    assignment.totalWeightage = items.reduce((sum, i) => sum + i.weightage, 0);
+    const items = await KpiItem.findAll({ where: { kpiAssignmentId: assignment.id } });
+    assignment.totalWeightage = items.reduce((sum, i) => sum + Number(i.weightage), 0);
     await assignment.save();
   }
 
   await createAuditLog({
     entityType: 'kpi_item',
-    entityId: item._id,
+    entityId: id,
     action: 'deleted',
     changedBy: user._id,
   });

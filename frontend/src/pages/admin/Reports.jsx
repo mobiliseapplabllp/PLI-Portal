@@ -76,7 +76,7 @@ export default function Reports() {
     { key: 'code', label: 'Code', render: (r) => r.employee?.employeeCode },
     { key: 'month', label: 'Month', render: (r) => getMonthName(r.month) },
     { key: 'status', label: 'Status', render: (r) => <StatusBadge status={r.status} /> },
-    { key: 'manager', label: 'Manager', render: (r) => r.manager?.name },
+    { key: 'manager', label: 'Manager', render: (r) => r.currentManager?.name || r.manager?.name || '—' },
   ];
 
   const columns = reportType === 'quarterly' ? quarterlyColumns : reportType === 'pending' ? pendingColumns : monthlyColumns;

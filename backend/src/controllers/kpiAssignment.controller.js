@@ -47,6 +47,15 @@ const assignToEmployee = async (req, res, next) => {
   }
 };
 
+const commitKpi = async (req, res, next) => {
+  try {
+    const assignment = await kpiAssignmentService.commitKpi(req.params.id, req.body.items, req.user);
+    sendSuccess(res, assignment, 'Commitment submitted successfully');
+  } catch (error) {
+    next(error);
+  }
+};
+
 const employeeSubmit = async (req, res, next) => {
   try {
     const assignment = await kpiAssignmentService.employeeSubmit(req.params.id, req.body.items, req.user);
@@ -188,6 +197,7 @@ module.exports = {
   createAssignment,
   updateAssignment,
   assignToEmployee,
+  commitKpi,
   employeeSubmit,
   managerReview,
   finalReview,

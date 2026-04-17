@@ -22,7 +22,7 @@
       "Bash(npm run:*)",
       "Bash(export 'PATH=$PATH:/c/Program Files/nodejs')",
       "Bash(npx kill-port:*)",
-      "Bash(cmd.exe /c \"netstat -ano | findstr :5000\")",
+      "Bash(cmd.exe /c \"netstat -ano | findstr :5100\")",
       "Bash(node -e \":*)"
     ]
   }

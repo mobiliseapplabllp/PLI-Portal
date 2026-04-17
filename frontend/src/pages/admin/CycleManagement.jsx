@@ -25,7 +25,14 @@ export default function CycleManagement() {
 
   const openCreate = () => {
     setEditing(null);
-    reset({ financialYear: getCurrentFinancialYear(), month: '', employeeSubmissionDeadline: '', managerReviewDeadline: '', finalReviewDeadline: '' });
+    reset({
+      financialYear: getCurrentFinancialYear(),
+      month: '',
+      commitmentDeadline: '',
+      employeeSubmissionDeadline: '',
+      managerReviewDeadline: '',
+      finalReviewDeadline: '',
+    });
     setShowModal(true);
   };
 
@@ -33,6 +40,7 @@ export default function CycleManagement() {
     setEditing(cycle);
     reset({
       status: cycle.status,
+      commitmentDeadline: cycle.commitmentDeadline?.slice(0, 10) || '',
       employeeSubmissionDeadline: cycle.employeeSubmissionDeadline?.slice(0, 10) || '',
       managerReviewDeadline: cycle.managerReviewDeadline?.slice(0, 10) || '',
       finalReviewDeadline: cycle.finalReviewDeadline?.slice(0, 10) || '',
@@ -106,7 +114,11 @@ export default function CycleManagement() {
             </div>
           )}
           <div>
-            <label className="label-text">Employee Submission Deadline</label>
+            <label className="label-text">Monthly Commitment Deadline <span className="text-xs text-gray-400">(employee commits to targets)</span></label>
+            <input type="date" {...register('commitmentDeadline')} className="input-field" />
+          </div>
+          <div>
+            <label className="label-text">Monthly Achievement Deadline <span className="text-xs text-gray-400">(employee submits actual achievement)</span></label>
             <input type="date" {...register('employeeSubmissionDeadline')} className="input-field" />
           </div>
           <div>

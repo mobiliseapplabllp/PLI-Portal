@@ -5,9 +5,10 @@ export const getAssignmentByIdApi = (id) => api.get(`/kpi-assignments/${id}`);
 export const createAssignmentApi = (data) => api.post('/kpi-assignments', data);
 export const updateAssignmentApi = (id, data) => api.put(`/kpi-assignments/${id}`, data);
 export const assignToEmployeeApi = (id) => api.post(`/kpi-assignments/${id}/assign`);
+export const commitKpiApi = (id, data) => api.post(`/kpi-assignments/${id}/commit`, data);
 export const employeeSubmitApi = (id, data) => api.post(`/kpi-assignments/${id}/employee-submit`, data);
 export const managerReviewApi = (id, data) => api.post(`/kpi-assignments/${id}/manager-review`, data);
-export const finalReviewApi = (id, data) => api.post(`/kpi-assignments/${id}/final-review`, data);
+// finalReviewApi removed — replaced by finalApprover quarterly approval flow
 export const lockAssignmentApi = (id) => api.post(`/kpi-assignments/${id}/lock`);
 export const unlockAssignmentApi = (id) => api.post(`/kpi-assignments/${id}/unlock`);
 export const getTeamOverviewApi = (params) => api.get('/kpi-assignments/team-overview', { params });

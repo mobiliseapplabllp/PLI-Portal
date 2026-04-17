@@ -8,10 +8,10 @@ const createUserValidator = [
   body('password').isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
   body('role').isIn(Object.values(ROLES)).withMessage('Invalid role'),
   body('phone').optional().trim(),
-  body('department').optional().isMongoId().withMessage('Invalid department ID'),
+  body('department').optional().isUUID().withMessage('Invalid department ID'),
   body('designation').optional().trim(),
   body('joiningDate').optional().isISO8601().withMessage('Invalid date format'),
-  body('manager').optional().isMongoId().withMessage('Invalid manager ID'),
+  body('manager').optional().isUUID().withMessage('Invalid manager ID'),
   body('kpiReviewApplicable').optional().isBoolean().withMessage('Must be boolean'),
 ];
 
@@ -20,7 +20,7 @@ const updateUserValidator = [
   body('email').optional().isEmail().withMessage('Valid email is required').normalizeEmail(),
   body('role').optional().isIn(Object.values(ROLES)).withMessage('Invalid role'),
   body('phone').optional().trim(),
-  body('department').optional().isMongoId().withMessage('Invalid department ID'),
+  body('department').optional().isUUID().withMessage('Invalid department ID'),
   body('designation').optional().trim(),
   body('joiningDate').optional().isISO8601().withMessage('Invalid date format'),
   body('manager').optional(),

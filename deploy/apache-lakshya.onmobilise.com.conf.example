@@ -1,0 +1,39 @@
+# Example Apache 2.4 site for https://lakshya.onmobilise.com/
+# Copy to sites-available, adjust paths & SSL cert paths, then a2ensite + reload.
+#
+# Prerequisites:
+#   - Node backend listening on 127.0.0.1:5100 (PORT=5100)
+#   - frontend build: npm run build → deploy frontend/dist to DocumentRoot below
+
+<VirtualHost *:80>
+    ServerName lakshya.onmobilise.com
+    Redirect permanent / https://lakshya.onmobilise.com/
+</VirtualHost>
+
+<VirtualHost *:443>
+    ServerName lakshya.onmobilise.com
+
+    # Example: repo at /home/lakshya/PLI-Portal-master → build output is frontend/dist
+    DocumentRoot /home/lakshya/PLI-Portal-master/frontend/dist
+
+    <Directory /home/lakshya/PLI-Portal-master/frontend/dist>
+        Options -Indexes +FollowSymLinks
+        AllowOverride None
+        Require all granted
+        FallbackResource /index.html
+    </Directory>
+
+    ProxyPreserveHost On
+    ProxyPass        /api http://127.0.0.1:5100/api
+    ProxyPassReverse /api http://127.0.0.1:5100/api
+
+    ProxyPass        /uploads http://127.0.0.1:5100/uploads
+    ProxyPassReverse /uploads http://127.0.0.1:5100/uploads
+
+    SSLEngine on
+    SSLCertificateFile      /path/to/fullchain.pem
+    SSLCertificateKeyFile   /path/to/privkey.pem
+    # If using Let's Encrypt on Debian/Ubuntu, often:
+    # SSLCertificateFile /etc/letsencrypt/live/lakshya.onmobilise.com/fullchain.pem
+    # SSLCertificateKeyFile /etc/letsencrypt/live/lakshya.onmobilise.com/privkey.pem
+</VirtualHost>

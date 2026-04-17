@@ -9,7 +9,7 @@ const createAuditLog = async ({ entityType, entityId, action, changedBy, oldValu
       entityType,
       entityId,
       action,
-      changedBy,
+      changedById: changedBy,
       oldValue,
       newValue,
       ipAddress,

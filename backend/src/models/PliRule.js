@@ -1,54 +1,24 @@
-const mongoose = require('mongoose');
+const { DataTypes } = require('sequelize');
+const sequelize = require('../config/database');
 
-const slabSchema = new mongoose.Schema(
+const PliRule = sequelize.define(
+  'PliRule',
   {
-    minScore: { type: Number, required: true },
-    maxScore: { type: Number, required: true },
-    payoutPercentage: { type: Number, required: true },
-    label: { type: String, trim: true },
-  },
-  { _id: false }
-);
-
-const pliRuleSchema = new mongoose.Schema(
-  {
-    financialYear: {
-      type: String,
-      required: true,
+    id: {
+      type: DataTypes.UUID,
+      defaultValue: DataTypes.UUIDV4,
+      primaryKey: true,
     },
-    quarter: {
-      type: String,
-      required: true,
-      enum: ['Q1', 'Q2', 'Q3', 'Q4'],
-    },
-    slabs: {
-      type: [slabSchema],
-      required: true,
-      validate: {
-        validator: function (slabs) {
-          return slabs.length > 0;
-        },
-        message: 'At least one slab is required',
-      },
-    },
-    remarks: {
-      type: String,
-      trim: true,
-    },
-    isActive: {
-      type: Boolean,
-      default: true,
-    },
-    createdBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
-    },
+    financialYear: { type: DataTypes.STRING(16), allowNull: false },
+    quarter: { type: DataTypes.ENUM('Q1', 'Q2', 'Q3', 'Q4'), allowNull: false },
+    remarks: { type: DataTypes.TEXT, allowNull: true },
+    isActive: { type: DataTypes.BOOLEAN, defaultValue: true },
+    createdById: { type: DataTypes.UUID, allowNull: true },
   },
   {
-    timestamps: true,
+    tableName: 'pli_rules',
+    indexes: [{ unique: true, fields: ['financialYear', 'quarter'] }],
   }
 );
 
-pliRuleSchema.index({ financialYear: 1, quarter: 1 }, { unique: true });
-
-module.exports = mongoose.model('PliRule', pliRuleSchema);
+module.exports = PliRule;

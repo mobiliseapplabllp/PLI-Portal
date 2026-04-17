@@ -1,49 +1,33 @@
-const mongoose = require('mongoose');
+const { DataTypes } = require('sequelize');
+const sequelize = require('../config/database');
 const { CYCLE_STATUS } = require('../config/constants');
 
-const appraisalCycleSchema = new mongoose.Schema(
+const AppraisalCycle = sequelize.define(
+  'AppraisalCycle',
   {
-    financialYear: {
-      type: String,
-      required: true,
-      trim: true, // e.g., "2025-26"
+    id: {
+      type: DataTypes.UUID,
+      defaultValue: DataTypes.UUIDV4,
+      primaryKey: true,
     },
-    month: {
-      type: Number,
-      required: true,
-      min: 1,
-      max: 12,
-    },
-    quarter: {
-      type: String,
-      required: true,
-      enum: ['Q1', 'Q2', 'Q3', 'Q4'],
-    },
-    employeeSubmissionDeadline: {
-      type: Date,
-    },
-    managerReviewDeadline: {
-      type: Date,
-    },
-    finalReviewDeadline: {
-      type: Date,
-    },
+    financialYear: { type: DataTypes.STRING(16), allowNull: false },
+    month: { type: DataTypes.INTEGER, allowNull: false },
+    quarter: { type: DataTypes.ENUM('Q1', 'Q2', 'Q3', 'Q4'), allowNull: false },
+    // Deadline order: commitment → employeeSubmission → managerReview → finalReview
+    commitmentDeadline: { type: DataTypes.DATE, allowNull: true },
+    employeeSubmissionDeadline: { type: DataTypes.DATE, allowNull: true },
+    managerReviewDeadline: { type: DataTypes.DATE, allowNull: true },
+    finalReviewDeadline: { type: DataTypes.DATE, allowNull: true },
     status: {
-      type: String,
-      enum: Object.values(CYCLE_STATUS),
-      default: CYCLE_STATUS.DRAFT,
+      type: DataTypes.ENUM(...Object.values(CYCLE_STATUS)),
+      defaultValue: CYCLE_STATUS.DRAFT,
     },
-    createdBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
-    },
+    createdById: { type: DataTypes.UUID, allowNull: true },
   },
   {
-    timestamps: true,
+    tableName: 'appraisal_cycles',
+    indexes: [{ unique: true, fields: ['financialYear', 'month'] }],
   }
 );
 
-// One cycle per FY + month
-appraisalCycleSchema.index({ financialYear: 1, month: 1 }, { unique: true });
-
-module.exports = mongoose.model('AppraisalCycle', appraisalCycleSchema);
+module.exports = AppraisalCycle;

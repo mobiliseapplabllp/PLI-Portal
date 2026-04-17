@@ -6,6 +6,8 @@ router.use('/departments', require('./department.routes'));
 router.use('/appraisal-cycles', require('./cycle.routes'));
 router.use('/kpi-assignments', require('./kpiAssignment.routes'));
 router.use('/kpi-items', require('./kpiItem.routes'));
+router.use('/kpi-plans', require('./kpiPlan.routes'));
+router.use('/final-approver', require('./finalApprover.routes'));
 router.use('/dashboard', require('./dashboard.routes'));
 router.use('/reports', require('./report.routes'));
 router.use('/kpi-templates', require('./kpiTemplate.routes'));

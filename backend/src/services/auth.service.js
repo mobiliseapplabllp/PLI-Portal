@@ -1,5 +1,7 @@
 const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
 const User = require('../models/User');
+const Department = require('../models/Department');
 const { UnauthorizedError } = require('../utils/errors');
 const { createAuditLog } = require('../middleware/auditLogger');
 
@@ -16,12 +18,14 @@ const generateRefreshToken = (userId) => {
 };
 
 const login = async (identifier, password, ipAddress) => {
-  // Allow login by email OR employee code (case-insensitive)
-  const query = identifier.includes('@')
+  const where = identifier.includes('@')
     ? { email: identifier.toLowerCase() }
     : { employeeCode: identifier.toUpperCase() };
 
-  const user = await User.findOne(query).populate('department', 'name code');
+  const user = await User.findOne({
+    where,
+    include: [{ model: Department, as: 'department', attributes: ['id', 'name', 'code'] }],
+  });
 
   if (!user) {
     throw new UnauthorizedError('Invalid credentials. Use your email or employee ID.');
@@ -31,49 +35,51 @@ const login = async (identifier, password, ipAddress) => {
     throw new UnauthorizedError('Account is deactivated. Contact admin.');
   }
 
-  const isMatch = await user.comparePassword(password);
+  const isMatch = await bcrypt.compare(password, user.passwordHash);
   if (!isMatch) {
     throw new UnauthorizedError('Invalid email or password');
   }
 
-  // Update last login
   user.lastLogin = new Date();
   await user.save();
 
-  const token = generateToken(user._id);
-  const refreshToken = generateRefreshToken(user._id);
+  const token = generateToken(user.id);
+  const refreshToken = generateRefreshToken(user.id);
 
   await createAuditLog({
     entityType: 'user',
-    entityId: user._id,
+    entityId: user.id,
     action: 'login',
-    changedBy: user._id,
+    changedBy: user.id,
     ipAddress,
   });
+
+  const plain = user.get({ plain: true });
+  delete plain.passwordHash;
 
   return {
     token,
     refreshToken,
-    user: user.toJSON(),
+    user: plain,
   };
 };
 
 const changePassword = async (userId, currentPassword, newPassword) => {
-  const user = await User.findById(userId);
+  const user = await User.findByPk(userId);
   if (!user) throw new UnauthorizedError('User not found');
 
-  const isMatch = await user.comparePassword(currentPassword);
+  const isMatch = await bcrypt.compare(currentPassword, user.passwordHash);
   if (!isMatch) throw new UnauthorizedError('Current password is incorrect');
 
-  user.passwordHash = newPassword; // pre-save hook will hash it
+  user.passwordHash = newPassword;
   user.mustChangePassword = false;
   await user.save();
 
   await createAuditLog({
     entityType: 'user',
-    entityId: user._id,
+    entityId: user.id,
     action: 'password_changed',
-    changedBy: user._id,
+    changedBy: user.id,
   });
 
   return true;

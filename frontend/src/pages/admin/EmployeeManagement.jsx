@@ -20,6 +20,7 @@ export default function EmployeeManagement() {
   const [editingUser, setEditingUser] = useState(null);
   const { register, handleSubmit, reset, watch, setValue, formState: { errors } } = useForm();
   const watchIsActive = watch('isActive');
+  const watchRole = watch('role');
 
   // All employees list for the manager dropdown (fetched once, unpaginated)
   const [allUsers, setAllUsers] = useState([]);
@@ -174,6 +175,8 @@ export default function EmployeeManagement() {
             <select {...register('role')} className="input-field">
               <option value="employee">Employee</option>
               <option value="manager">Manager</option>
+              <option value="hr_admin">HR Admin</option>
+              <option value="final_approver">Final Approver</option>
               <option value="admin">Admin</option>
             </select>
           </div>
@@ -186,11 +189,25 @@ export default function EmployeeManagement() {
             <input {...register('designation')} className="input-field" />
           </div>
           <div>
-            <label className="label-text">Department</label>
-            <select {...register('department')} className="input-field">
+            <label className="label-text">
+              Department
+              {watchRole === 'final_approver' && <span className="text-red-500 ml-1">*</span>}
+            </label>
+            <select
+              {...register('department', {
+                validate: (val) => watchRole !== 'final_approver' || !!val || 'Department is required for Final Approver role',
+              })}
+              className={`input-field ${watchRole === 'final_approver' ? 'border-amber-400 ring-1 ring-amber-300' : ''}`}
+            >
               <option value="">Select</option>
               {departments.map((d) => <option key={d._id} value={d._id}>{d.name}</option>)}
             </select>
+            {errors.department && <p className="text-red-500 text-xs mt-1">{errors.department.message}</p>}
+            {watchRole === 'final_approver' && !errors.department && (
+              <p className="text-xs text-amber-600 mt-1">
+                Final Approver's scope is limited to this department — they can only approve KPIs for employees in this department.
+              </p>
+            )}
           </div>
           <div className="md:col-span-2">
             <label className="label-text">Manager</label>

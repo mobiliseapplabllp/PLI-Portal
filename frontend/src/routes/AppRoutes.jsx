@@ -21,6 +21,14 @@ import AssignKpis from '../pages/manager/AssignKpis';
 import ReviewTeamKpi from '../pages/manager/ReviewTeamKpi';
 import TeamKpiReviewTable from '../pages/manager/TeamKpiReviewTable';
 
+// HR Admin pages
+import HrAdminDashboard from '../pages/hr-admin/HrAdminDashboard';
+import KpiPlanManagement from '../pages/hr-admin/KpiPlanManagement';
+
+// Final Approver pages
+import FinalApproverDashboard from '../pages/final-approver/FinalApproverDashboard';
+import FinalApprovalWorkbench from '../pages/final-approver/FinalApprovalWorkbench';
+
 // Admin pages
 import AdminDashboard from '../pages/admin/AdminDashboard';
 import EmployeeManagement from '../pages/admin/EmployeeManagement';
@@ -39,13 +47,15 @@ import NotFoundPage from '../pages/common/NotFoundPage';
 
 function HomeRedirect() {
   const { user } = useSelector((state) => state.auth);
-  if (!user) return <Navigate to="/login" />;
+  if (!user) return <Navigate to="/login" replace />;
   const map = {
-    employee: '/employee/dashboard',
-    manager: '/manager/dashboard',
-    admin: '/admin/dashboard',
+    employee:       '/employee/dashboard',
+    manager:        '/manager/dashboard',
+    hr_admin:       '/hr-admin/dashboard',
+    final_approver: '/final-approver/dashboard',
+    admin:          '/admin/dashboard',
   };
-  return <Navigate to={map[user.role] || '/login'} />;
+  return <Navigate to={map[user.role] || '/login'} replace />;
 }
 
 export default function AppRoutes() {
@@ -79,6 +89,17 @@ export default function AppRoutes() {
         <Route path="/manager/review/:assignmentId" element={<RoleRoute roles={['manager', 'admin']}><ReviewTeamKpi /></RoleRoute>} />
         <Route path="/manager/team-review" element={<RoleRoute roles={['manager', 'admin']}><TeamKpiReviewTable /></RoleRoute>} />
 
+        {/* HR Admin routes */}
+        <Route path="/hr-admin/dashboard" element={<RoleRoute roles={['hr_admin', 'admin']}><HrAdminDashboard /></RoleRoute>} />
+        <Route path="/hr-admin/kpi-plans" element={<RoleRoute roles={['hr_admin', 'admin']}><KpiPlanManagement /></RoleRoute>} />
+        {/* HR Admin can also access KPI templates */}
+        <Route path="/admin/kpi-templates" element={<RoleRoute roles={['hr_admin', 'admin']}><KpiTemplates /></RoleRoute>} />
+
+        {/* Final Approver routes */}
+        <Route path="/final-approver/dashboard" element={<RoleRoute roles={['final_approver', 'admin']}><FinalApproverDashboard /></RoleRoute>} />
+        <Route path="/final-approver/workbench" element={<RoleRoute roles={['final_approver', 'admin']}><FinalApprovalWorkbench /></RoleRoute>} />
+        <Route path="/final-approver/workbench/:employeeId/:fy/:quarter" element={<RoleRoute roles={['final_approver', 'admin']}><FinalApprovalWorkbench /></RoleRoute>} />
+
         {/* Admin routes */}
         <Route path="/admin/dashboard" element={<RoleRoute roles={['admin']}><AdminDashboard /></RoleRoute>} />
         <Route path="/admin/employees" element={<RoleRoute roles={['admin']}><EmployeeManagement /></RoleRoute>} />
@@ -87,10 +108,10 @@ export default function AppRoutes() {
         <Route path="/admin/final-review" element={<RoleRoute roles={['admin']}><FinalReviewWorkbench /></RoleRoute>} />
         <Route path="/admin/final-review/:assignmentId" element={<RoleRoute roles={['admin']}><FinalReviewWorkbench /></RoleRoute>} />
         <Route path="/admin/review-table" element={<RoleRoute roles={['admin']}><AdminReviewTable /></RoleRoute>} />
-        <Route path="/admin/kpi-templates" element={<RoleRoute roles={['admin']}><KpiTemplates /></RoleRoute>} />
         <Route path="/admin/pli-rules" element={<RoleRoute roles={['admin']}><PliRuleConfig /></RoleRoute>} />
-        <Route path="/admin/reports" element={<RoleRoute roles={['admin', 'manager']}><Reports /></RoleRoute>} />
+        <Route path="/admin/reports" element={<RoleRoute roles={['hr_admin', 'final_approver', 'admin', 'manager']}><Reports /></RoleRoute>} />
         <Route path="/admin/audit-logs" element={<RoleRoute roles={['admin']}><AuditLogs /></RoleRoute>} />
+        <Route path="/admin/review-table" element={<RoleRoute roles={['admin', 'final_approver']}><AdminReviewTable /></RoleRoute>} />
       </Route>
 
       <Route path="*" element={<NotFoundPage />} />

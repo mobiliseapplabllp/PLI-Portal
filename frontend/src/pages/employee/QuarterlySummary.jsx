@@ -95,11 +95,16 @@ export default function QuarterlySummary() {
           {/* Summary Card */}
           <div className={`rounded-xl border-2 ${ratingColors.border} ${ratingColors.bg} p-6`}>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              {/* Quarterly Score */}
+              {/* Quarterly Score — hybrid: final approved vs estimated */}
               <div className="text-center md:text-left">
                 <p className="text-sm font-medium text-gray-500 mb-1">Quarterly Score</p>
                 <p className="text-5xl font-bold text-gray-900">
                   {data.quarterlyScore != null ? formatScore(data.quarterlyScore) : '—'}
+                </p>
+                <p className={`text-xs mt-1 ${data.quarterlyScoreSource === 'final_approved' ? 'text-emerald-600' : 'text-amber-500'}`}>
+                  {data.quarterlyScoreSource === 'final_approved'
+                    ? '✓ Quarterly Score (Final Approved)'
+                    : '~ Quarterly Score (Estimated)'}
                 </p>
               </div>
 

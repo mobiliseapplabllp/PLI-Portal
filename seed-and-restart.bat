@@ -18,7 +18,7 @@ if %errorlevel% neq 0 (
 )
 
 echo.
-echo [3/4] Starting Backend (port 5000)...
+echo [3/4] Starting Backend (port 5100)...
 start "PLI-Backend" cmd /k "title PLI Backend && npm run dev"
 
 echo [4/4] Starting Frontend (port 5173)...
@@ -28,7 +28,7 @@ start "PLI-Frontend" cmd /k "title PLI Frontend && npm run dev"
 echo.
 echo ==========================================
 echo   Seed complete, both servers starting!
-echo   Backend:  http://localhost:5000
+echo   Backend:  http://localhost:5100
 echo   Frontend: http://localhost:5173
 echo ==========================================
 pause

@@ -3,10 +3,10 @@ const { NotFoundError } = require('../utils/errors');
 const { createAuditLog } = require('../middleware/auditLogger');
 
 const getDepartments = async (query = {}) => {
-  const filter = {};
-  if (query.isActive !== undefined) filter.isActive = query.isActive === 'true';
+  const where = {};
+  if (query.isActive !== undefined) where.isActive = query.isActive === 'true';
 
-  return Department.find(filter).sort({ name: 1 });
+  return Department.findAll({ where, order: [['name', 'ASC']] });
 };
 
 const createDepartment = async (data, createdBy) => {
@@ -14,7 +14,7 @@ const createDepartment = async (data, createdBy) => {
 
   await createAuditLog({
     entityType: 'department',
-    entityId: dept._id,
+    entityId: dept.id,
     action: 'created',
     changedBy: createdBy,
     newValue: data,
@@ -24,7 +24,7 @@ const createDepartment = async (data, createdBy) => {
 };
 
 const updateDepartment = async (id, data, updatedBy) => {
-  const dept = await Department.findById(id);
+  const dept = await Department.findByPk(id);
   if (!dept) throw new NotFoundError('Department');
 
   const oldValue = { code: dept.code, name: dept.name, isActive: dept.isActive };
@@ -33,7 +33,7 @@ const updateDepartment = async (id, data, updatedBy) => {
 
   await createAuditLog({
     entityType: 'department',
-    entityId: dept._id,
+    entityId: dept.id,
     action: 'updated',
     changedBy: updatedBy,
     oldValue,

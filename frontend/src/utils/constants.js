@@ -1,35 +1,51 @@
 export const ROLES = {
   EMPLOYEE: 'employee',
   MANAGER: 'manager',
+  HR_ADMIN: 'hr_admin',
+  FINAL_APPROVER: 'final_approver',
   ADMIN: 'admin',
 };
 
 export const KPI_STATUS = {
   DRAFT: 'draft',
   ASSIGNED: 'assigned',
+  COMMITMENT_SUBMITTED: 'commitment_submitted',  // NEW
   EMPLOYEE_SUBMITTED: 'employee_submitted',
   MANAGER_REVIEWED: 'manager_reviewed',
-  FINAL_REVIEWED: 'final_reviewed',
+  FINAL_APPROVED: 'final_approved',              // renamed from FINAL_REVIEWED
+  FINAL_REVIEWED: 'final_reviewed',              // kept for legacy data display
   LOCKED: 'locked',
 };
 
 export const KPI_STATUS_LABELS = {
   draft: 'Draft',
   assigned: 'Assigned',
+  commitment_submitted: 'Commitment Submitted',   // NEW
   employee_submitted: 'Employee Submitted',
   manager_reviewed: 'Manager Reviewed',
-  final_reviewed: 'Final Reviewed',
+  final_approved: 'Final Approved',               // NEW
+  final_reviewed: 'Final Reviewed',               // legacy label
   locked: 'Locked',
 };
 
 export const KPI_STATUS_COLORS = {
   draft: 'bg-gray-100 text-gray-700',
   assigned: 'bg-blue-100 text-blue-700',
+  commitment_submitted: 'bg-sky-100 text-sky-700',  // NEW — light blue, distinct from assigned
   employee_submitted: 'bg-yellow-100 text-yellow-700',
   manager_reviewed: 'bg-purple-100 text-purple-700',
-  final_reviewed: 'bg-green-100 text-green-700',
+  final_approved: 'bg-emerald-100 text-emerald-700',  // NEW — same visual weight as old final_reviewed
+  final_reviewed: 'bg-green-100 text-green-700',      // legacy
   locked: 'bg-red-100 text-red-700',
 };
+
+// KPI submission status values (Meets / Exceeds / Below)
+export const KPI_SUBMISSION_STATUS = {
+  MEETS: 'Meets',
+  EXCEEDS: 'Exceeds',
+  BELOW: 'Below',
+};
+export const KPI_SUBMISSION_VALUES = ['Meets', 'Exceeds', 'Below'];
 
 export const CYCLE_STATUS_COLORS = {
   draft: 'bg-gray-100 text-gray-700',
@@ -84,10 +100,6 @@ export const KPI_UNITS = ['Number', 'Percentage', 'Currency', 'Rating', 'Boolean
  * Quarter visibility rules:
  * - Current quarter is always visible
  * - Next quarter becomes visible on the 1st of the last month of the current quarter
- *   Q1 (Apr-Jun) → Q2 visible from June 1st
- *   Q2 (Jul-Sep) → Q3 visible from Sep 1st
- *   Q3 (Oct-Dec) → Q4 visible from Dec 1st
- *   Q4 (Jan-Mar) → next FY Q1 visible from Mar 1st
  *
  * Returns array of { month, quarter, financialYear } objects for visible months.
  */
@@ -111,7 +123,6 @@ export function getVisibleQuarters(now = new Date()) {
   const currentQuarter = QUARTER_MAP[currentMonth];
 
   // Determine if next quarter is visible
-  // Next quarter becomes visible on the 1st of the last month of current quarter
   const currentQMonths = QUARTER_MONTHS[currentQuarter];
   const lastMonthOfCurrentQ = currentQMonths[currentQMonths.length - 1];
   const nextQuarterVisible = currentMonth >= lastMonthOfCurrentQ;
@@ -127,11 +138,8 @@ export function getVisibleQuarters(now = new Date()) {
   const visible = [];
   for (const q of quarters) {
     const months = QUARTER_MONTHS[q];
-    // Determine FY for this quarter
-    // Q4 months (1,2,3) belong to the second half of FY
     let fy = currentFY;
     if (q === 'Q1' && currentQuarter === 'Q4') {
-      // Next FY's Q1
       fy = nextFY;
     }
     for (const m of months) {
@@ -150,3 +158,14 @@ export function getVisibleMonthOptions(now = new Date()) {
   const visibleMonthNumbers = visibleMonths.map((v) => v.month);
   return MONTHS.filter((m) => visibleMonthNumbers.includes(m.value));
 }
+
+/**
+ * Role display config — used by Sidebar for accent colours and labels
+ */
+export const ROLE_CONFIG = {
+  employee:       { label: 'Employee Portal',       accentClass: 'from-primary-600 to-primary-700' },
+  manager:        { label: 'Manager Portal',         accentClass: 'from-indigo-600 to-indigo-700' },
+  hr_admin:       { label: 'HR Admin Portal',        accentClass: 'from-violet-600 to-violet-700' },
+  final_approver: { label: 'Final Approver Portal',  accentClass: 'from-cyan-700 to-cyan-800' },
+  admin:          { label: 'Admin Portal',            accentClass: 'from-gray-700 to-gray-800' },
+};

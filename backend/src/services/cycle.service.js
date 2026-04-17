@@ -1,29 +1,35 @@
 const AppraisalCycle = require('../models/AppraisalCycle');
+const User = require('../models/User');
 const { NotFoundError } = require('../utils/errors');
 const { getQuarterFromMonth } = require('../utils/quarterHelper');
 const { createAuditLog } = require('../middleware/auditLogger');
 
 const getCycles = async (query = {}) => {
-  const filter = {};
-  if (query.financialYear) filter.financialYear = query.financialYear;
-  if (query.quarter) filter.quarter = query.quarter;
-  if (query.status) filter.status = query.status;
+  const where = {};
+  if (query.financialYear) where.financialYear = query.financialYear;
+  if (query.quarter) where.quarter = query.quarter;
+  if (query.status) where.status = query.status;
 
-  return AppraisalCycle.find(filter)
-    .populate('createdBy', 'name')
-    .sort({ financialYear: -1, month: -1 });
+  return AppraisalCycle.findAll({
+    where,
+    include: [{ model: User, as: 'createdBy', attributes: ['id', 'name'] }],
+    order: [
+      ['financialYear', 'DESC'],
+      ['month', 'DESC'],
+    ],
+  });
 };
 
 const createCycle = async (data, createdBy) => {
-  // Auto-derive quarter from month
-  data.quarter = getQuarterFromMonth(data.month);
-  data.createdBy = createdBy;
+  const payload = { ...data };
+  payload.quarter = getQuarterFromMonth(data.month);
+  payload.createdById = createdBy;
 
-  const cycle = await AppraisalCycle.create(data);
+  const cycle = await AppraisalCycle.create(payload);
 
   await createAuditLog({
     entityType: 'appraisal_cycle',
-    entityId: cycle._id,
+    entityId: cycle.id,
     action: 'created',
     changedBy: createdBy,
     newValue: { financialYear: cycle.financialYear, month: cycle.month, quarter: cycle.quarter },
@@ -33,7 +39,7 @@ const createCycle = async (data, createdBy) => {
 };
 
 const updateCycle = async (id, data, updatedBy) => {
-  const cycle = await AppraisalCycle.findById(id);
+  const cycle = await AppraisalCycle.findByPk(id);
   if (!cycle) throw new NotFoundError('Appraisal Cycle');
 
   const oldValue = { status: cycle.status };
@@ -42,7 +48,7 @@ const updateCycle = async (id, data, updatedBy) => {
 
   await createAuditLog({
     entityType: 'appraisal_cycle',
-    entityId: cycle._id,
+    entityId: cycle.id,
     action: 'updated',
     changedBy: updatedBy,
     oldValue,

@@ -40,4 +40,44 @@
   .page-title {
     @apply text-2xl font-bold text-gray-900;
   }
+
+  /* ── Deadline urgency strips ────────────────────────────── */
+  .deadline-ok {
+    @apply text-green-600 bg-green-50;
+  }
+  .deadline-soon {
+    @apply text-amber-600 bg-amber-50;
+  }
+  .deadline-overdue {
+    @apply text-red-600 bg-red-50;
+  }
+
+  /* ── Quarterly approval row highlights ──────────────────── */
+  .row-auto-calc {
+    @apply bg-emerald-50 border-l-4 border-emerald-400;
+  }
+  .row-manual-calc {
+    @apply bg-amber-50 border-l-4 border-amber-400;
+  }
+
+  /* ── Status badge base styles ───────────────────────────── */
+  .status-badge {
+    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium;
+  }
+  .status-badge-meets {
+    @apply status-badge bg-amber-100 text-amber-800;
+  }
+  .status-badge-exceeds {
+    @apply status-badge bg-emerald-100 text-emerald-800;
+  }
+  .status-badge-below {
+    @apply status-badge bg-red-100 text-red-800;
+  }
+}
+
+@layer utilities {
+  /* Animated pulse ring for active steps */
+  .ring-pulse {
+    @apply ring-2 ring-offset-1 ring-primary-400 animate-pulse;
+  }
 }

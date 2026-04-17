@@ -2,6 +2,8 @@
 const ROLES = {
   EMPLOYEE: 'employee',
   MANAGER: 'manager',
+  HR_ADMIN: 'hr_admin',
+  FINAL_APPROVER: 'final_approver',
   ADMIN: 'admin',
 };
 
@@ -9,34 +11,42 @@ const ROLES = {
 const KPI_STATUS = {
   DRAFT: 'draft',
   ASSIGNED: 'assigned',
+  COMMITMENT_SUBMITTED: 'commitment_submitted',
   EMPLOYEE_SUBMITTED: 'employee_submitted',
   MANAGER_REVIEWED: 'manager_reviewed',
-  FINAL_REVIEWED: 'final_reviewed',
+  FINAL_REVIEWED: 'final_reviewed',   // kept for backward-compat with legacy DB records
+  FINAL_APPROVED: 'final_approved',   // renamed from FINAL_REVIEWED for new records
   LOCKED: 'locked',
 };
 
 // Valid status transitions
 const STATUS_TRANSITIONS = {
   [KPI_STATUS.DRAFT]: [KPI_STATUS.ASSIGNED],
-  [KPI_STATUS.ASSIGNED]: [KPI_STATUS.EMPLOYEE_SUBMITTED],
+  [KPI_STATUS.ASSIGNED]: [KPI_STATUS.COMMITMENT_SUBMITTED],
+  [KPI_STATUS.COMMITMENT_SUBMITTED]: [KPI_STATUS.EMPLOYEE_SUBMITTED],
   [KPI_STATUS.EMPLOYEE_SUBMITTED]: [KPI_STATUS.MANAGER_REVIEWED],
-  [KPI_STATUS.MANAGER_REVIEWED]: [KPI_STATUS.FINAL_REVIEWED],
+  [KPI_STATUS.MANAGER_REVIEWED]: [KPI_STATUS.FINAL_APPROVED],
+  [KPI_STATUS.FINAL_APPROVED]: [KPI_STATUS.LOCKED],
+  [KPI_STATUS.LOCKED]: [KPI_STATUS.FINAL_APPROVED], // unlock
+  // legacy: allow unlocking old final_reviewed records too
   [KPI_STATUS.FINAL_REVIEWED]: [KPI_STATUS.LOCKED],
-  [KPI_STATUS.LOCKED]: [KPI_STATUS.FINAL_REVIEWED], // unlock
 };
 
-// Reopen: allows admin to send a locked/final_reviewed/manager_reviewed assignment
-// back to any earlier status for re-evaluation
+// Reopen: admin can send an assignment back to any earlier status for re-evaluation
 const REOPEN_ALLOWED_FROM = [
   KPI_STATUS.LOCKED,
-  KPI_STATUS.FINAL_REVIEWED,
+  KPI_STATUS.FINAL_APPROVED,
+  KPI_STATUS.FINAL_REVIEWED, // legacy
   KPI_STATUS.MANAGER_REVIEWED,
+  KPI_STATUS.EMPLOYEE_SUBMITTED,
+  KPI_STATUS.COMMITMENT_SUBMITTED,
 ];
 const REOPEN_ALLOWED_TO = [
   KPI_STATUS.ASSIGNED,
+  KPI_STATUS.COMMITMENT_SUBMITTED,
   KPI_STATUS.EMPLOYEE_SUBMITTED,
   KPI_STATUS.MANAGER_REVIEWED,
-  KPI_STATUS.FINAL_REVIEWED,
+  KPI_STATUS.FINAL_APPROVED,
 ];
 
 // Appraisal cycle statuses
@@ -53,12 +63,22 @@ const KPI_CATEGORIES = ['Financial', 'Operational', 'Quality', 'Compliance', 'De
 // KPI units
 const KPI_UNITS = ['Number', 'Percentage', 'Currency', 'Rating', 'Boolean', 'Days', 'Hours', 'Other'];
 
+// Submission statuses used by employee and manager per KPI item
+const KPI_SUBMISSION_STATUS = {
+  MEETS: 'Meets',
+  EXCEEDS: 'Exceeds',
+  BELOW: 'Below',
+};
+const KPI_SUBMISSION_VALUES = Object.values(KPI_SUBMISSION_STATUS);
+
 // Notification types
 const NOTIFICATION_TYPES = {
   KPI_ASSIGNED: 'kpi_assigned',
+  COMMITMENT_SUBMITTED: 'commitment_submitted',
   EMPLOYEE_SUBMITTED: 'employee_submitted',
   MANAGER_REVIEWED: 'manager_reviewed',
-  FINAL_REVIEWED: 'final_reviewed',
+  FINAL_REVIEWED: 'final_reviewed',   // kept for old notification records
+  FINAL_APPROVED: 'final_approved',
   RECORD_LOCKED: 'record_locked',
   RECORD_UNLOCKED: 'record_unlocked',
   CYCLE_DEADLINE: 'cycle_deadline',
@@ -70,10 +90,13 @@ const AUDIT_ACTIONS = {
   UPDATED: 'updated',
   DELETED: 'deleted',
   SUBMITTED: 'submitted',
+  COMMITTED: 'committed',
   REVIEWED: 'reviewed',
-  FINAL_REVIEWED: 'final_reviewed',
+  FINAL_REVIEWED: 'final_reviewed',   // kept for old audit records
+  FINAL_APPROVED: 'final_approved',
   LOCKED: 'locked',
   UNLOCKED: 'unlocked',
+  REOPENED: 'reopened',
   LOGIN: 'login',
   PASSWORD_CHANGED: 'password_changed',
 };
@@ -103,6 +126,8 @@ module.exports = {
   CYCLE_STATUS,
   KPI_CATEGORIES,
   KPI_UNITS,
+  KPI_SUBMISSION_STATUS,
+  KPI_SUBMISSION_VALUES,
   NOTIFICATION_TYPES,
   AUDIT_ACTIONS,
   QUARTER_MAP,
