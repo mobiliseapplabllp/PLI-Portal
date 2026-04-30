@@ -1,18 +1,29 @@
 export const ROLES = {
   EMPLOYEE: 'employee',
   MANAGER: 'manager',
+  SENIOR_MANAGER: 'senior_manager',
   HR_ADMIN: 'hr_admin',
   FINAL_APPROVER: 'final_approver',
   ADMIN: 'admin',
 };
 
+export const ROLE_OPTIONS = [
+  { value: 'employee',        label: 'Employee' },
+  { value: 'manager',         label: 'Manager' },
+  { value: 'senior_manager',  label: 'Senior Manager' },
+  { value: 'hr_admin',        label: 'HR Admin' },
+  { value: 'final_approver',  label: 'Final Approver' },
+  { value: 'admin',           label: 'Admin' },
+];
+
 export const KPI_STATUS = {
   DRAFT: 'draft',
   ASSIGNED: 'assigned',
-  COMMITMENT_SUBMITTED: 'commitment_submitted',  // NEW
+  COMMITMENT_SUBMITTED: 'commitment_submitted',
+  COMMITMENT_APPROVED: 'commitment_approved',
   EMPLOYEE_SUBMITTED: 'employee_submitted',
   MANAGER_REVIEWED: 'manager_reviewed',
-  FINAL_APPROVED: 'final_approved',              // renamed from FINAL_REVIEWED
+  FINAL_APPROVED: 'final_approved',
   FINAL_REVIEWED: 'final_reviewed',              // kept for legacy data display
   LOCKED: 'locked',
 };
@@ -20,10 +31,11 @@ export const KPI_STATUS = {
 export const KPI_STATUS_LABELS = {
   draft: 'Draft',
   assigned: 'Assigned',
-  commitment_submitted: 'Commitment Submitted',   // NEW
+  commitment_submitted: 'Pending Manager Approval',
+  commitment_approved: 'Commitment Approved',
   employee_submitted: 'Employee Submitted',
   manager_reviewed: 'Manager Reviewed',
-  final_approved: 'Final Approved',               // NEW
+  final_approved: 'Final Approved',
   final_reviewed: 'Final Reviewed',               // legacy label
   locked: 'Locked',
 };
@@ -31,10 +43,11 @@ export const KPI_STATUS_LABELS = {
 export const KPI_STATUS_COLORS = {
   draft: 'bg-gray-100 text-gray-700',
   assigned: 'bg-blue-100 text-blue-700',
-  commitment_submitted: 'bg-sky-100 text-sky-700',  // NEW — light blue, distinct from assigned
+  commitment_submitted: 'bg-sky-100 text-sky-700',
+  commitment_approved: 'bg-teal-100 text-teal-700',
   employee_submitted: 'bg-yellow-100 text-yellow-700',
   manager_reviewed: 'bg-purple-100 text-purple-700',
-  final_approved: 'bg-emerald-100 text-emerald-700',  // NEW — same visual weight as old final_reviewed
+  final_approved: 'bg-emerald-100 text-emerald-700',
   final_reviewed: 'bg-green-100 text-green-700',      // legacy
   locked: 'bg-red-100 text-red-700',
 };
@@ -95,6 +108,57 @@ export function getCurrentFinancialYear(now = new Date()) {
 
 export const KPI_CATEGORIES = ['Financial', 'Operational', 'Quality', 'Compliance', 'Development', 'Other'];
 export const KPI_UNITS = ['Number', 'Percentage', 'Currency', 'Rating', 'Boolean', 'Days', 'Hours', 'Other'];
+
+// KPI Plan heads (tabs)
+export const KPI_HEADS = ['Performance', 'CustomerCentric', 'CoreValues', 'Trainings'];
+export const KPI_HEAD_LABELS = {
+  Performance: 'Productivity',
+  CustomerCentric: 'Client Focus',
+  CoreValues: 'Company Core Values',
+  Trainings: 'Personal Growth',
+};
+export const KPI_HEAD_COLORS = {
+  Performance: 'violet',
+  CustomerCentric: 'blue',
+  CoreValues: 'emerald',
+  Trainings: 'amber',
+};
+export const DEFAULT_HEAD_WEIGHTAGES = { Performance: 40, CustomerCentric: 30, CoreValues: 20, Trainings: 10 };
+
+// KPI Plan statuses (workflow)
+export const KPI_PLAN_STATUS = {
+  DRAFT: 'draft',
+  SAVED: 'saved',
+  READY_FOR_REVIEW: 'ready_for_review',
+};
+export const KPI_PLAN_STATUS_LABELS = {
+  draft: 'Draft',
+  saved: 'Saved',
+  ready_for_review: 'Ready for Review',
+};
+export const KPI_PLAN_STATUS_COLORS = {
+  draft: 'bg-gray-100 text-gray-600',
+  saved: 'bg-blue-100 text-blue-700',
+  ready_for_review: 'bg-amber-100 text-amber-700',
+};
+
+// Assigned-to options
+export const KPI_ASSIGNED_TO = [
+  { value: 'leader', label: 'Leader' },
+  { value: 'team_member', label: 'Team Member' },
+];
+
+// KPI Plan role options (who this plan applies to)
+export const KPI_PLAN_ROLES = [
+  { value: 'team_member', label: 'Team Member' },
+  { value: 'leader',      label: 'Leader' },
+  { value: 'manager',     label: 'Manager' },
+];
+export const KPI_PLAN_ROLE_LABELS = {
+  team_member: 'Team Member',
+  leader:      'Leader',
+  manager:     'Manager',
+};
 
 /**
  * Quarter visibility rules:
@@ -163,9 +227,10 @@ export function getVisibleMonthOptions(now = new Date()) {
  * Role display config — used by Sidebar for accent colours and labels
  */
 export const ROLE_CONFIG = {
-  employee:       { label: 'Employee Portal',       accentClass: 'from-primary-600 to-primary-700' },
-  manager:        { label: 'Manager Portal',         accentClass: 'from-indigo-600 to-indigo-700' },
-  hr_admin:       { label: 'HR Admin Portal',        accentClass: 'from-violet-600 to-violet-700' },
-  final_approver: { label: 'Final Approver Portal',  accentClass: 'from-cyan-700 to-cyan-800' },
-  admin:          { label: 'Admin Portal',            accentClass: 'from-gray-700 to-gray-800' },
+  employee:        { label: 'Employee Portal',        accentClass: 'from-primary-600 to-primary-700' },
+  manager:         { label: 'Manager Portal',          accentClass: 'from-indigo-600 to-indigo-700' },
+  senior_manager:  { label: 'Senior Manager Portal',  accentClass: 'from-indigo-700 to-indigo-800' },
+  hr_admin:        { label: 'HR Admin Portal',         accentClass: 'from-violet-600 to-violet-700' },
+  final_approver:  { label: 'Final Approver Portal',  accentClass: 'from-cyan-700 to-cyan-800' },
+  admin:           { label: 'Admin Portal',            accentClass: 'from-gray-700 to-gray-800' },
 };

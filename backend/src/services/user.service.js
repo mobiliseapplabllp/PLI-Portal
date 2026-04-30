@@ -1,4 +1,5 @@
 const { Op } = require('sequelize');
+const sequelize = require('../config/database');
 const User = require('../models/User');
 const Department = require('../models/Department');
 const KpiAssignment = require('../models/KpiAssignment');
@@ -200,4 +201,13 @@ const getTeamByManager = async (managerId) => {
   });
 };
 
-module.exports = { getUsers, getUserById, createUser, updateUser, getTeamByManager };
+const getDistinctDesignations = async () => {
+  const [rows] = await sequelize.query(
+    `SELECT DISTINCT role FROM users
+     WHERE role IS NOT NULL AND role != '' AND isActive = 1
+     ORDER BY role ASC`
+  );
+  return rows.map((r) => r.role).filter(Boolean);
+};
+
+module.exports = { getUsers, getUserById, createUser, updateUser, getTeamByManager, getDistinctDesignations };

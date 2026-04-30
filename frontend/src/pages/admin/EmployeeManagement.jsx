@@ -175,6 +175,7 @@ export default function EmployeeManagement() {
             <select {...register('role')} className="input-field">
               <option value="employee">Employee</option>
               <option value="manager">Manager</option>
+              <option value="senior_manager">Senior Manager</option>
               <option value="hr_admin">HR Admin</option>
               <option value="final_approver">Final Approver</option>
               <option value="admin">Admin</option>

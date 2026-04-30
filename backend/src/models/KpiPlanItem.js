@@ -1,6 +1,6 @@
 const { DataTypes } = require('sequelize');
 const sequelize = require('../config/database');
-const { KPI_CATEGORIES, KPI_UNITS } = require('../config/constants');
+const { KPI_CATEGORIES, KPI_UNITS, KPI_HEADS, KPI_ASSIGNED_TO } = require('../config/constants');
 
 const KpiPlanItem = sequelize.define(
   'KpiPlanItem',
@@ -14,6 +14,18 @@ const KpiPlanItem = sequelize.define(
       type: DataTypes.UUID,
       allowNull: false,
     },
+    // KPI head / tab this item belongs to
+    kpiHead: {
+      type: DataTypes.ENUM(...KPI_HEADS),
+      allowNull: false,
+      defaultValue: 'Performance',
+    },
+    // Whether this KPI is assigned to a leader or team member
+    assignedTo: {
+      type: DataTypes.ENUM(...KPI_ASSIGNED_TO),
+      allowNull: false,
+      defaultValue: 'team_member',
+    },
     title: { type: DataTypes.STRING(512), allowNull: false },
     description: { type: DataTypes.TEXT, allowNull: true },
     category: {
@@ -24,15 +36,8 @@ const KpiPlanItem = sequelize.define(
       type: DataTypes.ENUM(...KPI_UNITS),
       defaultValue: 'Number',
     },
-    // Monthly weightage: this item's contribution to the monthly score (0–100)
-    // Sum across all items in a plan must equal 100 before publishing.
+    // Item weightage within the plan (0–100)
     monthlyWeightage: {
-      type: DataTypes.DECIMAL(10, 2),
-      allowNull: false,
-    },
-    // Quarterly weightage cap: max quarterly credit this item can earn.
-    // Informational — no 100% constraint on sum.
-    quarterlyWeightage: {
       type: DataTypes.DECIMAL(10, 2),
       allowNull: false,
       defaultValue: 0,

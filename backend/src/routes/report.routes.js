@@ -12,9 +12,9 @@ router.get('/quarterly', ctrl.quarterlyReport);
 router.get('/monthly', ctrl.monthlyReport);
 
 // Manager + Admin only
-router.get('/pending', authorize('manager', 'admin'), ctrl.pendingReport);
-router.get('/export/excel', authorize('manager', 'admin'), ctrl.exportExcel);
-router.get('/export/pdf', authorize('manager', 'admin'), ctrl.exportPdf);
+router.get('/pending', authorize('manager', 'senior_manager', 'admin'), ctrl.pendingReport);
+router.get('/export/excel', authorize('manager', 'senior_manager', 'admin'), ctrl.exportExcel);
+router.get('/export/pdf', authorize('manager', 'senior_manager', 'admin'), ctrl.exportPdf);
 
 // Admin only
 router.get('/department', authorize('admin'), ctrl.departmentReport);

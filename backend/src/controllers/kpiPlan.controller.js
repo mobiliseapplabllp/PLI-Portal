@@ -28,10 +28,25 @@ const updatePlan = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
+const updatePlanStatus = async (req, res, next) => {
+  try {
+    const plan = await kpiPlanService.updatePlanStatus(req.params.id, req.body.status, req.user);
+    res.json({ success: true, data: plan });
+  } catch (err) { next(err); }
+};
+
 const publishPlan = async (req, res, next) => {
   try {
-    const plan = await kpiPlanService.publishPlan(req.params.id, req.user);
-    res.json({ success: true, data: plan, message: 'Plan published successfully.' });
+    const { plan, assignmentsCreated, assignmentsSynced } = await kpiPlanService.publishPlan(req.params.id, req.user);
+    const parts = [];
+    if (assignmentsCreated > 0) parts.push(`${assignmentsCreated} new assignment${assignmentsCreated !== 1 ? 's' : ''} created`);
+    if (assignmentsSynced > 0) parts.push(`${assignmentsSynced} existing assignment${assignmentsSynced !== 1 ? 's' : ''} updated`);
+    const detail = parts.length ? ` (${parts.join(', ')})` : '';
+    res.json({
+      success: true,
+      data: plan,
+      message: `Plan published${detail}.`,
+    });
   } catch (err) { next(err); }
 };
 
@@ -56,4 +71,7 @@ const deletePlanItem = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
-module.exports = { getPlans, getPlanById, createPlan, updatePlan, publishPlan, addPlanItem, updatePlanItem, deletePlanItem };
+module.exports = {
+  getPlans, getPlanById, createPlan, updatePlan, updatePlanStatus,
+  publishPlan, addPlanItem, updatePlanItem, deletePlanItem,
+};

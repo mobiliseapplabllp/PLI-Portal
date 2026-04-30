@@ -2,6 +2,7 @@
 const ROLES = {
   EMPLOYEE: 'employee',
   MANAGER: 'manager',
+  SENIOR_MANAGER: 'senior_manager',
   HR_ADMIN: 'hr_admin',
   FINAL_APPROVER: 'final_approver',
   ADMIN: 'admin',
@@ -12,6 +13,7 @@ const KPI_STATUS = {
   DRAFT: 'draft',
   ASSIGNED: 'assigned',
   COMMITMENT_SUBMITTED: 'commitment_submitted',
+  COMMITMENT_APPROVED: 'commitment_approved',   // manager approved the commitment
   EMPLOYEE_SUBMITTED: 'employee_submitted',
   MANAGER_REVIEWED: 'manager_reviewed',
   FINAL_REVIEWED: 'final_reviewed',   // kept for backward-compat with legacy DB records
@@ -23,7 +25,9 @@ const KPI_STATUS = {
 const STATUS_TRANSITIONS = {
   [KPI_STATUS.DRAFT]: [KPI_STATUS.ASSIGNED],
   [KPI_STATUS.ASSIGNED]: [KPI_STATUS.COMMITMENT_SUBMITTED],
-  [KPI_STATUS.COMMITMENT_SUBMITTED]: [KPI_STATUS.EMPLOYEE_SUBMITTED],
+  // manager approve → commitment_approved; manager reject → back to assigned (handled in service)
+  [KPI_STATUS.COMMITMENT_SUBMITTED]: [KPI_STATUS.COMMITMENT_APPROVED, KPI_STATUS.ASSIGNED],
+  [KPI_STATUS.COMMITMENT_APPROVED]: [KPI_STATUS.EMPLOYEE_SUBMITTED],
   [KPI_STATUS.EMPLOYEE_SUBMITTED]: [KPI_STATUS.MANAGER_REVIEWED],
   [KPI_STATUS.MANAGER_REVIEWED]: [KPI_STATUS.FINAL_APPROVED],
   [KPI_STATUS.FINAL_APPROVED]: [KPI_STATUS.LOCKED],
@@ -39,6 +43,7 @@ const REOPEN_ALLOWED_FROM = [
   KPI_STATUS.FINAL_REVIEWED, // legacy
   KPI_STATUS.MANAGER_REVIEWED,
   KPI_STATUS.EMPLOYEE_SUBMITTED,
+  KPI_STATUS.COMMITMENT_APPROVED,
   KPI_STATUS.COMMITMENT_SUBMITTED,
 ];
 const REOPEN_ALLOWED_TO = [
@@ -56,6 +61,26 @@ const CYCLE_STATUS = {
   CLOSED: 'closed',
   LOCKED: 'locked',
 };
+
+// KPI Plan heads (tabs)
+const KPI_HEADS = ['Performance', 'CustomerCentric', 'CoreValues', 'Trainings'];
+const KPI_HEAD_LABELS = {
+  Performance: 'Productivity',
+  CustomerCentric: 'Client Focus',
+  CoreValues: 'Company Core Values',
+  Trainings: 'Personal Growth',
+};
+const DEFAULT_HEAD_WEIGHTAGES = { Performance: 40, CustomerCentric: 30, CoreValues: 20, Trainings: 10 };
+
+// KPI Plan statuses (workflow before publishing)
+const KPI_PLAN_STATUS = {
+  DRAFT: 'draft',
+  SAVED: 'saved',
+  READY_FOR_REVIEW: 'ready_for_review',
+};
+
+// Assigned-to options for KPI items
+const KPI_ASSIGNED_TO = ['leader', 'team_member'];
 
 // KPI categories
 const KPI_CATEGORIES = ['Financial', 'Operational', 'Quality', 'Compliance', 'Development', 'Other'];
@@ -119,6 +144,11 @@ const QUARTER_MONTHS = {
 
 module.exports = {
   ROLES,
+  KPI_HEADS,
+  KPI_HEAD_LABELS,
+  DEFAULT_HEAD_WEIGHTAGES,
+  KPI_PLAN_STATUS,
+  KPI_ASSIGNED_TO,
   KPI_STATUS,
   STATUS_TRANSITIONS,
   REOPEN_ALLOWED_FROM,

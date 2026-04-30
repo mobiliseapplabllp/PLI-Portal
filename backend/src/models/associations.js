@@ -37,7 +37,6 @@ KpiItem.belongsTo(User, { foreignKey: 'finalApprovedById', as: 'finalApprovedBy'
 
 // ── KpiPlan ───────────────────────────────────────────────────────────────────
 KpiPlan.belongsTo(User, { foreignKey: 'createdById', as: 'createdBy' });
-KpiPlan.belongsTo(User, { foreignKey: 'managerId', as: 'manager' });
 KpiPlan.belongsTo(Department, { foreignKey: 'departmentId', as: 'department' });
 KpiPlan.hasMany(KpiPlanItem, { foreignKey: 'kpiPlanId', as: 'items', onDelete: 'CASCADE' });
 KpiPlanItem.belongsTo(KpiPlan, { foreignKey: 'kpiPlanId', as: 'plan' });

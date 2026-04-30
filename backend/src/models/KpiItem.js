@@ -44,12 +44,21 @@ const KpiItem = sequelize.define(
     itemStatus: { type: DataTypes.STRING(64), defaultValue: 'draft' },
 
     // ── NEW: Commitment fields ────────────────────────────────────────────────
+    // Free-text value employee commits for this KPI item (e.g. "95%", "₹2L", "10 tickets")
+    commitValue: { type: DataTypes.TEXT, allowNull: true },
     employeeCommitmentStatus: {
       type: DataTypes.ENUM(...KPI_SUBMISSION_VALUES),
       allowNull: true,
     },
     employeeCommitmentComment: { type: DataTypes.TEXT, allowNull: true },
     committedAt: { type: DataTypes.DATE, allowNull: true },
+
+    // ── Manager commitment review (per-item approve/reject) ───────────────────
+    managerCommitmentApproval: {
+      type: DataTypes.ENUM('approved', 'rejected'),
+      allowNull: true,
+    },
+    managerCommitmentComment: { type: DataTypes.TEXT, allowNull: true },
 
     // ── NEW: Achievement fields ───────────────────────────────────────────────
     employeeStatus: {

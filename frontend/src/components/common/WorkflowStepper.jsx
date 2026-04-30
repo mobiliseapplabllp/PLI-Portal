@@ -5,13 +5,14 @@
  */
 
 const STEPS = [
-  { key: 'draft',                label: 'Draft',      shortLabel: 'D' },
-  { key: 'assigned',             label: 'Assigned',   shortLabel: 'A' },
-  { key: 'commitment_submitted', label: 'Committed',  shortLabel: 'C' },
-  { key: 'employee_submitted',   label: 'Submitted',  shortLabel: 'S' },
-  { key: 'manager_reviewed',     label: 'Reviewed',   shortLabel: 'R' },
-  { key: 'final_approved',       label: 'Approved',   shortLabel: 'FA' },
-  { key: 'locked',               label: 'Locked',     shortLabel: '🔒' },
+  { key: 'draft',                label: 'Draft',       shortLabel: 'D' },
+  { key: 'assigned',             label: 'Assigned',    shortLabel: 'A' },
+  { key: 'commitment_submitted', label: 'Committed',   shortLabel: 'C' },
+  { key: 'commitment_approved',  label: 'Approved',    shortLabel: 'CA' },
+  { key: 'employee_submitted',   label: 'Self Assessment', shortLabel: 'SA' },
+  { key: 'manager_reviewed',     label: 'Manager Review',  shortLabel: 'MR' },
+  { key: 'final_approved',       label: 'Final Review', shortLabel: 'FR' },
+  { key: 'locked',               label: 'Locked',      shortLabel: '🔒' },
 ];
 
 // Legacy support: treat 'final_reviewed' same as 'final_approved'
@@ -74,7 +75,7 @@ export default function WorkflowStepper({ status, compact = false }) {
                 {done ? '✓' : idx + 1}
               </div>
               <span
-                className={`mt-1 text-[10px] text-center leading-tight max-w-[52px] truncate
+                className={`mt-1 text-[10px] text-center leading-tight max-w-[68px] break-words
                   ${done ? 'text-primary-600 font-medium' : active ? 'text-primary-700 font-semibold' : 'text-gray-400'}`}
               >
                 {step.label}

@@ -20,10 +20,12 @@ import TeamList from '../pages/manager/TeamList';
 import AssignKpis from '../pages/manager/AssignKpis';
 import ReviewTeamKpi from '../pages/manager/ReviewTeamKpi';
 import TeamKpiReviewTable from '../pages/manager/TeamKpiReviewTable';
+import ManagerTeamKpi from '../pages/manager/ManagerTeamKpi';
 
 // HR Admin pages
 import HrAdminDashboard from '../pages/hr-admin/HrAdminDashboard';
 import KpiPlanManagement from '../pages/hr-admin/KpiPlanManagement';
+import CreateKpiPlan from '../pages/hr-admin/CreateKpiPlan';
 
 // Final Approver pages
 import FinalApproverDashboard from '../pages/final-approver/FinalApproverDashboard';
@@ -49,11 +51,12 @@ function HomeRedirect() {
   const { user } = useSelector((state) => state.auth);
   if (!user) return <Navigate to="/login" replace />;
   const map = {
-    employee:       '/employee/dashboard',
-    manager:        '/manager/dashboard',
-    hr_admin:       '/hr-admin/dashboard',
-    final_approver: '/final-approver/dashboard',
-    admin:          '/admin/dashboard',
+    employee:        '/employee/dashboard',
+    manager:         '/manager/dashboard',
+    senior_manager:  '/manager/dashboard',
+    hr_admin:        '/hr-admin/dashboard',
+    final_approver:  '/final-approver/dashboard',
+    admin:           '/admin/dashboard',
   };
   return <Navigate to={map[user.role] || '/login'} replace />;
 }
@@ -77,21 +80,23 @@ export default function AppRoutes() {
         <Route path="/profile" element={<ProfilePage />} />
 
         {/* Employee routes */}
-        <Route path="/employee/dashboard" element={<RoleRoute roles={['employee', 'manager', 'admin']}><EmployeeDashboard /></RoleRoute>} />
-        <Route path="/employee/kpis" element={<RoleRoute roles={['employee', 'manager', 'admin']}><MyKpiList /></RoleRoute>} />
-        <Route path="/employee/kpis/:assignmentId" element={<RoleRoute roles={['employee', 'manager', 'admin']}><KpiSelfAssessment /></RoleRoute>} />
-        <Route path="/employee/quarterly" element={<RoleRoute roles={['employee', 'manager', 'admin']}><QuarterlySummary /></RoleRoute>} />
+        <Route path="/employee/dashboard" element={<RoleRoute roles={['employee', 'manager', 'senior_manager', 'admin']}><EmployeeDashboard /></RoleRoute>} />
+        <Route path="/employee/kpis" element={<RoleRoute roles={['employee', 'manager', 'senior_manager', 'admin']}><MyKpiList /></RoleRoute>} />
+        <Route path="/employee/kpis/:assignmentId" element={<RoleRoute roles={['employee', 'manager', 'senior_manager', 'admin']}><KpiSelfAssessment /></RoleRoute>} />
+        <Route path="/employee/quarterly" element={<RoleRoute roles={['employee', 'manager', 'senior_manager', 'admin']}><QuarterlySummary /></RoleRoute>} />
 
         {/* Manager routes */}
-        <Route path="/manager/dashboard" element={<RoleRoute roles={['manager', 'admin']}><ManagerDashboard /></RoleRoute>} />
-        <Route path="/manager/team" element={<RoleRoute roles={['manager', 'admin']}><TeamList /></RoleRoute>} />
-        <Route path="/manager/assign-kpis" element={<RoleRoute roles={['manager', 'admin']}><AssignKpis /></RoleRoute>} />
-        <Route path="/manager/review/:assignmentId" element={<RoleRoute roles={['manager', 'admin']}><ReviewTeamKpi /></RoleRoute>} />
-        <Route path="/manager/team-review" element={<RoleRoute roles={['manager', 'admin']}><TeamKpiReviewTable /></RoleRoute>} />
+        <Route path="/manager/dashboard" element={<RoleRoute roles={['manager', 'senior_manager', 'admin']}><ManagerDashboard /></RoleRoute>} />
+        <Route path="/manager/team" element={<RoleRoute roles={['manager', 'senior_manager', 'admin']}><TeamList /></RoleRoute>} />
+        <Route path="/manager/assign-kpis" element={<RoleRoute roles={['manager', 'senior_manager', 'admin']}><AssignKpis /></RoleRoute>} />
+        <Route path="/manager/review/:assignmentId" element={<RoleRoute roles={['manager', 'senior_manager', 'admin']}><ReviewTeamKpi /></RoleRoute>} />
+        <Route path="/manager/team-review" element={<RoleRoute roles={['manager', 'senior_manager', 'admin']}><TeamKpiReviewTable /></RoleRoute>} />
+        <Route path="/manager/team-kpi" element={<RoleRoute roles={['manager', 'senior_manager', 'admin']}><ManagerTeamKpi /></RoleRoute>} />
 
         {/* HR Admin routes */}
         <Route path="/hr-admin/dashboard" element={<RoleRoute roles={['hr_admin', 'admin']}><HrAdminDashboard /></RoleRoute>} />
         <Route path="/hr-admin/kpi-plans" element={<RoleRoute roles={['hr_admin', 'admin']}><KpiPlanManagement /></RoleRoute>} />
+        <Route path="/hr-admin/kpi-plans/create" element={<RoleRoute roles={['hr_admin', 'admin']}><CreateKpiPlan /></RoleRoute>} />
         {/* HR Admin can also access KPI templates */}
         <Route path="/admin/kpi-templates" element={<RoleRoute roles={['hr_admin', 'admin']}><KpiTemplates /></RoleRoute>} />
 
@@ -109,7 +114,7 @@ export default function AppRoutes() {
         <Route path="/admin/final-review/:assignmentId" element={<RoleRoute roles={['admin']}><FinalReviewWorkbench /></RoleRoute>} />
         <Route path="/admin/review-table" element={<RoleRoute roles={['admin']}><AdminReviewTable /></RoleRoute>} />
         <Route path="/admin/pli-rules" element={<RoleRoute roles={['admin']}><PliRuleConfig /></RoleRoute>} />
-        <Route path="/admin/reports" element={<RoleRoute roles={['hr_admin', 'final_approver', 'admin', 'manager']}><Reports /></RoleRoute>} />
+        <Route path="/admin/reports" element={<RoleRoute roles={['hr_admin', 'final_approver', 'admin', 'manager', 'senior_manager']}><Reports /></RoleRoute>} />
         <Route path="/admin/audit-logs" element={<RoleRoute roles={['admin']}><AuditLogs /></RoleRoute>} />
         <Route path="/admin/review-table" element={<RoleRoute roles={['admin', 'final_approver']}><AdminReviewTable /></RoleRoute>} />
       </Route>

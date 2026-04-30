@@ -24,7 +24,7 @@ const User = sequelize.define(
       // Hardcoded ENUM string to match the DB column after migration script runs.
       // Do NOT use DataTypes.ENUM(...Object.values(ROLES)) because Sequelize alter
       // would drop+recreate the ENUM and lose legacy 'final_reviewed' value.
-      type: DataTypes.ENUM('employee', 'manager', 'hr_admin', 'final_approver', 'admin'),
+      type: DataTypes.ENUM('employee', 'manager', 'senior_manager', 'hr_admin', 'final_approver', 'admin'),
       defaultValue: ROLES.EMPLOYEE,
     },
     isActive: { type: DataTypes.BOOLEAN, defaultValue: true },

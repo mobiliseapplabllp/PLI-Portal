@@ -51,4 +51,13 @@ const getTeam = async (req, res, next) => {
   }
 };
 
-module.exports = { getUsers, getUserById, createUser, updateUser, getTeam };
+const getDesignations = async (req, res, next) => {
+  try {
+    const designations = await userService.getDistinctDesignations();
+    sendSuccess(res, designations);
+  } catch (error) {
+    next(error);
+  }
+};
+
+module.exports = { getUsers, getUserById, createUser, updateUser, getTeam, getDesignations };

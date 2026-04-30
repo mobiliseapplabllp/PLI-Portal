@@ -2,6 +2,7 @@ const ExcelJS = require('exceljs');
 const { Op } = require('sequelize');
 const KpiAssignment = require('../models/KpiAssignment');
 const KpiItem = require('../models/KpiItem');
+const KpiPlanItem = require('../models/KpiPlanItem');
 const User = require('../models/User');
 const Department = require('../models/Department');
 const { NotFoundError, ValidationError, ForbiddenError } = require('../utils/errors');
@@ -43,7 +44,41 @@ const withCurrentManager = (assignment) => {
     ...plain,
     currentManager: plain.employee?.manager || null,
   };
-  
+};
+
+// Strip employee-entered draft fields from items when the viewer is not the employee.
+// Commitment draft (status=ASSIGNED): hide commitValue + employeeCommitmentComment.
+// Self-review draft (status=COMMITMENT_APPROVED): hide employeeStatus + employeeComment.
+const maskDraftFields = (items, assignmentStatus, viewerIsEmployee) => {
+  return items.map((item) => {
+    const masked = { ...item };
+    if (!viewerIsEmployee) {
+      // Manager / admin / HR: hide employee draft fields until the employee submits
+      if (assignmentStatus === KPI_STATUS.ASSIGNED) {
+        masked.commitValue = null;
+        masked.employeeCommitmentComment = null;
+      } else if (assignmentStatus === KPI_STATUS.COMMITMENT_APPROVED) {
+        masked.employeeStatus = null;
+        masked.employeeComment = null;
+      }
+    } else {
+      // Employee viewing own assignment: hide manager draft fields until manager submits
+      if (assignmentStatus === KPI_STATUS.EMPLOYEE_SUBMITTED) {
+        masked.managerStatus = null;
+        masked.managerComment = null;
+      }
+    }
+    return masked;
+  });
+};
+
+// Returns true if userId is authorised to act as manager on this assignment.
+// Checks both the stored managerId (may be stale/HR-admin from auto-publish)
+// AND the employee's current managerId from the User table.
+const isManagerOfEmployee = async (assignment, userId) => {
+  if (String(assignment.managerId || '') === String(userId)) return true;
+  const employee = await User.findByPk(assignment.employeeId, { attributes: ['managerId'] });
+  return !!(employee && String(employee.managerId || '') === String(userId));
 };
 
 const getAssignments = async (query = {}, user) => {
@@ -108,29 +143,60 @@ const getAssignments = async (query = {}, user) => {
 
 const getAssignmentById = async (id, user) => {
   const assignment = await KpiAssignment.findByPk(id, {
+    // Never send BLOB bytes in regular detail calls — served via dedicated endpoints
+    attributes: { exclude: ['employeeAttachmentBlob', 'managerAttachmentBlob'] },
     include: [employeeWithDept, managerWithEmail],
   });
 
   if (!assignment) throw new NotFoundError('KPI Assignment');
 
   const empId = assignment.employeeId;
-  const mgrId = assignment.managerId;
   const isOwnAssignment = String(empId) === String(user._id);
-  const isTeamAssignment = String(mgrId) === String(user._id);
 
   if (user.role === 'employee' && !isOwnAssignment) {
     throw new ForbiddenError('You can only view your own assignments');
   }
-  if (user.role === 'manager' && !isOwnAssignment && !isTeamAssignment) {
-    throw new ForbiddenError('You can only view your own or your team assignments');
+  if (user.role === 'manager') {
+    const canView = isOwnAssignment || await isManagerOfEmployee(assignment, user._id);
+    if (!canView) throw new ForbiddenError('You can only view your own or your team assignments');
   }
 
-  const items = await KpiItem.findAll({
+  const assignmentPlain = withCurrentManager(assignment);
+
+  // Add helper flags so frontend knows if attachments exist
+  assignmentPlain.hasEmployeeAttachment = !!assignment.employeeAttachmentName;
+  assignmentPlain.hasManagerAttachment = !!assignment.managerAttachmentName;
+
+  // Employee cannot see manager's private review data
+  if (user.role === 'employee') {
+    delete assignmentPlain.managerAttachmentName;
+    delete assignmentPlain.managerAttachmentMime;
+    delete assignmentPlain.hasManagerAttachment;
+  }
+
+  const rawItems = await KpiItem.findAll({
     where: { kpiAssignmentId: id },
+    include: [{ model: KpiPlanItem, as: 'planItem', attributes: ['kpiHead'], required: false }],
     order: [['createdAt', 'ASC']],
   });
 
-  return { assignment: withCurrentManager(assignment), items };
+  const isOwnAssignmentViewer = String(assignment.employeeId) === String(user._id);
+
+  // Strip manager's private comment from each item when viewer is employee
+  const items = rawItems.map((item) => {
+    const plain = item.get({ plain: true });
+    if (user.role === 'employee') {
+      delete plain.managerComment;
+    }
+    // Flatten kpiHead from the linked plan item
+    plain.kpiHead = plain.planItem?.kpiHead || 'Performance';
+    delete plain.planItem;
+    return plain;
+  });
+
+  const maskedItems = maskDraftFields(items, assignment.status, isOwnAssignmentViewer);
+
+  return { assignment: assignmentPlain, items: maskedItems };
 };
 
 const createAssignment = async (data, user) => {
@@ -222,7 +288,7 @@ const assignToEmployee = async (id, user) => {
   return assignment;
 };
 
-// ── NEW: commitKpi — Employee submits monthly commitment ─────────────────────
+// ── commitKpi — Employee submits monthly commitment (no status, comment only) ─
 const commitKpi = async (id, itemsData, user) => {
   const assignment = await KpiAssignment.findByPk(id);
   if (!assignment) throw new NotFoundError('KPI Assignment');
@@ -231,10 +297,10 @@ const commitKpi = async (id, itemsData, user) => {
     throw new ForbiddenError('You can only commit for your own assignments');
   }
 
-  // Allow commitment when ASSIGNED (first time) or COMMITMENT_SUBMITTED (resubmission)
-  if (![KPI_STATUS.ASSIGNED, KPI_STATUS.COMMITMENT_SUBMITTED].includes(assignment.status)) {
+  // Allow commitment when ASSIGNED (first time) or rejected back to ASSIGNED
+  if (assignment.status !== KPI_STATUS.ASSIGNED) {
     throw new ValidationError(
-      `Commitment can only be submitted when status is 'assigned' or 'commitment_submitted'. Current status: '${assignment.status}'`
+      `Commitment can only be submitted when status is 'assigned'. Current status: '${assignment.status}'`
     );
   }
 
@@ -242,7 +308,7 @@ const commitKpi = async (id, itemsData, user) => {
   for (const item of itemsData) {
     await KpiItem.update(
       {
-        employeeCommitmentStatus: item.employeeCommitmentStatus,
+        commitValue: item.commitValue != null ? String(item.commitValue) : null,
         employeeCommitmentComment: item.employeeCommitmentComment || null,
         committedAt: now,
       },
@@ -252,13 +318,14 @@ const commitKpi = async (id, itemsData, user) => {
 
   assignment.status = KPI_STATUS.COMMITMENT_SUBMITTED;
   assignment.committedAt = now;
+  assignment.commitmentRejectionComment = null; // clear any prior rejection
   await assignment.save();
 
   await notificationService.create({
     recipient: assignment.managerId,
     type: NOTIFICATION_TYPES.COMMITMENT_SUBMITTED,
     title: 'Employee Submitted Commitment',
-    message: `Employee has committed for ${assignment.financialYear} Month ${assignment.month}.`,
+    message: `Employee has submitted their commitment for ${assignment.financialYear} Month ${assignment.month}. Please review and approve or reject.`,
     referenceType: 'kpi_assignment',
     referenceId: assignment.id,
   });
@@ -274,7 +341,220 @@ const commitKpi = async (id, itemsData, user) => {
   return assignment;
 };
 
-const employeeSubmit = async (id, itemsData, user) => {
+// ── approveCommitment — Manager approves employee's commitment ────────────────
+const approveCommitment = async (id, user) => {
+  const assignment = await KpiAssignment.findByPk(id);
+  if (!assignment) throw new NotFoundError('KPI Assignment');
+
+  if (!['admin', 'senior_manager'].includes(user.role) &&
+      !(await isManagerOfEmployee(assignment, user._id))) {
+    throw new ForbiddenError('You can only approve commitments for your team members');
+  }
+
+  if (assignment.status !== KPI_STATUS.COMMITMENT_SUBMITTED) {
+    throw new ValidationError(
+      `Commitment can only be approved when status is 'commitment_submitted'. Current: '${assignment.status}'`
+    );
+  }
+
+  await assignment.update({ status: KPI_STATUS.COMMITMENT_APPROVED });
+
+  await notificationService.create({
+    recipient: assignment.employeeId,
+    type: NOTIFICATION_TYPES.COMMITMENT_SUBMITTED, // reuse closest type
+    title: 'Commitment Approved',
+    message: `Your commitment for ${assignment.financialYear} Month ${assignment.month} has been approved. You may now proceed with your self-assessment.`,
+    referenceType: 'kpi_assignment',
+    referenceId: assignment.id,
+  });
+
+  await createAuditLog({
+    entityType: 'kpi_assignment',
+    entityId: assignment.id,
+    action: 'commitment_approved',
+    changedBy: user._id,
+    newValue: { status: KPI_STATUS.COMMITMENT_APPROVED },
+  });
+
+  return assignment;
+};
+
+// ── rejectCommitment — Manager rejects employee's commitment ──────────────────
+const rejectCommitment = async (id, rejectionComment, user) => {
+  const assignment = await KpiAssignment.findByPk(id);
+  if (!assignment) throw new NotFoundError('KPI Assignment');
+
+  if (!['admin', 'senior_manager'].includes(user.role) &&
+      !(await isManagerOfEmployee(assignment, user._id))) {
+    throw new ForbiddenError('You can only reject commitments for your team members');
+  }
+
+  if (assignment.status !== KPI_STATUS.COMMITMENT_SUBMITTED) {
+    throw new ValidationError(
+      `Commitment can only be rejected when status is 'commitment_submitted'. Current: '${assignment.status}'`
+    );
+  }
+
+  await assignment.update({
+    status: KPI_STATUS.ASSIGNED,
+    commitmentRejectionComment: rejectionComment || null,
+    committedAt: null,
+  });
+
+  await notificationService.create({
+    recipient: assignment.employeeId,
+    type: NOTIFICATION_TYPES.COMMITMENT_SUBMITTED,
+    title: 'Commitment Rejected — Please Resubmit',
+    message: `Your commitment for ${assignment.financialYear} Month ${assignment.month} was rejected. ${rejectionComment ? `Reason: ${rejectionComment}` : 'Please revise and resubmit.'}`,
+    referenceType: 'kpi_assignment',
+    referenceId: assignment.id,
+  });
+
+  await createAuditLog({
+    entityType: 'kpi_assignment',
+    entityId: assignment.id,
+    action: 'commitment_rejected',
+    changedBy: user._id,
+    newValue: { status: KPI_STATUS.ASSIGNED },
+  });
+
+  return assignment;
+};
+
+// ── reviewCommitmentItems — Manager approves/rejects each KPI item individually
+const reviewCommitmentItems = async (id, itemsData, user) => {
+  const assignment = await KpiAssignment.findByPk(id);
+  if (!assignment) throw new NotFoundError('KPI Assignment');
+
+  if (!['admin', 'senior_manager'].includes(user.role) &&
+      !(await isManagerOfEmployee(assignment, user._id))) {
+    throw new ForbiddenError('You can only review commitments for your team members');
+  }
+
+  if (assignment.status !== KPI_STATUS.COMMITMENT_SUBMITTED) {
+    throw new ValidationError(
+      `Commitment can only be reviewed when status is 'commitment_submitted'. Current: '${assignment.status}'`
+    );
+  }
+
+  // Save per-item decisions
+  for (const itemData of itemsData) {
+    const item = await KpiItem.findOne({
+      where: { id: itemData.id, kpiAssignmentId: id },
+    });
+    if (!item) continue;
+    await item.update({
+      managerCommitmentApproval: itemData.approval,
+      managerCommitmentComment: itemData.comment || null,
+    });
+  }
+
+  // Re-fetch all items to determine overall outcome
+  const allItems = await KpiItem.findAll({ where: { kpiAssignmentId: id } });
+  const anyRejected = allItems.some((i) => i.managerCommitmentApproval === 'rejected');
+  const allDecided = allItems.every((i) => i.managerCommitmentApproval !== null);
+
+  let newStatus;
+  if (anyRejected) {
+    // Build rejection summary from rejected items
+    const rejectedTitles = allItems
+      .filter((i) => i.managerCommitmentApproval === 'rejected')
+      .map((i) => i.title)
+      .join(', ');
+    const overallComment = itemsData
+      .filter((d) => d.approval === 'rejected' && d.comment)
+      .map((d) => d.comment)
+      .join('; ') || null;
+
+    await assignment.update({
+      status: KPI_STATUS.ASSIGNED,
+      commitmentRejectionComment: overallComment || `Items rejected: ${rejectedTitles}`,
+      committedAt: null,
+    });
+    newStatus = KPI_STATUS.ASSIGNED;
+
+    await notificationService.create({
+      recipient: assignment.employeeId,
+      type: NOTIFICATION_TYPES.COMMITMENT_SUBMITTED,
+      title: 'Commitment Partially Rejected — Please Resubmit',
+      message: `Your commitment for ${assignment.financialYear} Month ${assignment.month} has items that were rejected by your manager. Please revise and resubmit.`,
+      referenceType: 'kpi_assignment',
+      referenceId: assignment.id,
+    });
+  } else if (allDecided) {
+    // All items approved
+    await assignment.update({ status: KPI_STATUS.COMMITMENT_APPROVED });
+    newStatus = KPI_STATUS.COMMITMENT_APPROVED;
+
+    await notificationService.create({
+      recipient: assignment.employeeId,
+      type: NOTIFICATION_TYPES.COMMITMENT_SUBMITTED,
+      title: 'Commitment Approved',
+      message: `All KPIs in your commitment for ${assignment.financialYear} Month ${assignment.month} have been approved. You may now proceed with your self-assessment.`,
+      referenceType: 'kpi_assignment',
+      referenceId: assignment.id,
+    });
+  } else {
+    // Partial review — some items still pending, keep current status
+    newStatus = KPI_STATUS.COMMITMENT_SUBMITTED;
+  }
+
+  await createAuditLog({
+    entityType: 'kpi_assignment',
+    entityId: assignment.id,
+    action: anyRejected ? 'commitment_rejected' : allDecided ? 'commitment_approved' : 'commitment_partial_review',
+    changedBy: user._id,
+    newValue: { status: newStatus, itemDecisions: itemsData.map((d) => ({ id: d.id, approval: d.approval })) },
+  });
+
+  return assignment;
+};
+
+// ── saveDraft — saves commitment or self-review fields without changing status ─
+const saveDraft = async (id, itemsData, user) => {
+  const assignment = await KpiAssignment.findByPk(id);
+  if (!assignment) throw new NotFoundError('KPI Assignment');
+
+  if (user.role === 'employee' && String(assignment.employeeId) !== String(user._id)) {
+    throw new ForbiddenError('You can only save drafts for your own assignments');
+  }
+
+  const isCommitPhase = assignment.status === KPI_STATUS.ASSIGNED;
+  const isSelfReviewPhase = assignment.status === KPI_STATUS.COMMITMENT_APPROVED;
+  const isManagerReviewPhase = assignment.status === KPI_STATUS.EMPLOYEE_SUBMITTED;
+
+  if (!isCommitPhase && !isSelfReviewPhase && !isManagerReviewPhase) {
+    throw new ValidationError(`Draft save is only allowed in 'assigned', 'commitment_approved', or 'employee_submitted' status. Current: '${assignment.status}'`);
+  }
+
+  // Manager review phase — check manager authorization
+  if (isManagerReviewPhase) {
+    if (!['admin', 'senior_manager'].includes(user.role) &&
+        !(await isManagerOfEmployee(assignment, user._id))) {
+      throw new ForbiddenError('You can only save drafts for your team assignments');
+    }
+  } else if (user.role === 'employee') {
+    if (String(assignment.employeeId) !== String(user._id)) {
+      throw new ForbiddenError('You can only save drafts for your own assignments');
+    }
+  }
+
+  for (const item of itemsData) {
+    let fields;
+    if (isCommitPhase) {
+      fields = { commitValue: item.commitValue != null ? String(item.commitValue) : null, employeeCommitmentComment: item.employeeCommitmentComment || null };
+    } else if (isSelfReviewPhase) {
+      fields = { employeeStatus: item.employeeStatus || null, employeeComment: item.employeeComment || null };
+    } else {
+      fields = { managerStatus: item.managerStatus || null, managerComment: item.managerComment || null };
+    }
+    await KpiItem.update(fields, { where: { id: item.id, kpiAssignmentId: id } });
+  }
+
+  return assignment;
+};
+
+const employeeSubmit = async (id, itemsData, file, user) => {
   const assignment = await KpiAssignment.findByPk(id);
   if (!assignment) throw new NotFoundError('KPI Assignment');
 
@@ -282,11 +562,10 @@ const employeeSubmit = async (id, itemsData, user) => {
     throw new ForbiddenError('You can only submit for your own assignments');
   }
 
-  // Achievement submission: must have committed first (COMMITMENT_SUBMITTED) or allow resubmit (EMPLOYEE_SUBMITTED)
-  if (![KPI_STATUS.COMMITMENT_SUBMITTED, KPI_STATUS.EMPLOYEE_SUBMITTED].includes(assignment.status)) {
+  // Achievement (self-assessment) only allowed after manager approves the commitment (not re-submit after EMPLOYEE_SUBMITTED)
+  if (![KPI_STATUS.COMMITMENT_APPROVED].includes(assignment.status)) {
     throw new ValidationError(
-      `Achievement can only be submitted after commitment. Current status: '${assignment.status}'. ` +
-      `Please submit your monthly commitment first.`
+      `Self-assessment can only be submitted after your commitment is approved by your manager. Current status: '${assignment.status}'.`
     );
   }
 
@@ -305,6 +584,11 @@ const employeeSubmit = async (id, itemsData, user) => {
 
   assignment.status = KPI_STATUS.EMPLOYEE_SUBMITTED;
   assignment.employeeSubmittedAt = now;
+  if (file) {
+    assignment.employeeAttachmentBlob = file.buffer;
+    assignment.employeeAttachmentName = file.originalname;
+    assignment.employeeAttachmentMime = file.mimetype;
+  }
   await assignment.save();
 
   await notificationService.create({
@@ -327,14 +611,12 @@ const employeeSubmit = async (id, itemsData, user) => {
   return assignment;
 };
 
-const managerReview = async (id, itemsData, user) => {
-  const assignment = await KpiAssignment.findByPk(id, {
-    include: [{ model: User, as: 'employee', attributes: ['id', 'managerId'] }],
-  });
+const managerReview = async (id, itemsData, file, user) => {
+  const assignment = await KpiAssignment.findByPk(id);
   if (!assignment) throw new NotFoundError('KPI Assignment');
 
-  const currentManagerId = assignment.employee?.managerId;
-  if (String(currentManagerId || '') !== String(user._id)) {
+  if (!['admin', 'senior_manager'].includes(user.role) &&
+      !(await isManagerOfEmployee(assignment, user._id))) {
     throw new ForbiddenError('You can only review your team assignments');
   }
 
@@ -357,6 +639,11 @@ const managerReview = async (id, itemsData, user) => {
 
   assignment.status = KPI_STATUS.MANAGER_REVIEWED;
   assignment.managerReviewedAt = now;
+  if (file) {
+    assignment.managerAttachmentBlob = file.buffer;
+    assignment.managerAttachmentName = file.originalname;
+    assignment.managerAttachmentMime = file.mimetype;
+  }
   await assignment.save();
 
   // Notify final approvers in the employee's department
@@ -485,6 +772,7 @@ const reopenAssignment = async (id, targetStatus, user) => {
         managerValue: null, managerScore: null, managerReviewedAt: null,
         finalValue: null, finalScore: null, finalComment: null, finalReviewedAt: null,
         // New fields
+        commitValue: null,
         employeeCommitmentStatus: null, employeeCommitmentComment: null, committedAt: null,
         employeeStatus: null, employeeComment: null,
         managerStatus: null, managerComment: null, managerMonthlyNumeric: null,
@@ -500,6 +788,12 @@ const reopenAssignment = async (id, targetStatus, user) => {
     assignment.finalReviewedAt = null;
     assignment.finalApprovedAt = null;
     assignment.monthlyWeightedScore = null;
+    assignment.employeeAttachmentBlob = null;
+    assignment.employeeAttachmentName = null;
+    assignment.employeeAttachmentMime = null;
+    assignment.managerAttachmentBlob = null;
+    assignment.managerAttachmentName = null;
+    assignment.managerAttachmentMime = null;
   } else if (targetStatus === KPI_STATUS.COMMITMENT_SUBMITTED) {
     // Reset achievement and manager data, keep commitment intact
     await KpiItem.update(
@@ -522,6 +816,12 @@ const reopenAssignment = async (id, targetStatus, user) => {
     assignment.finalReviewedAt = null;
     assignment.finalApprovedAt = null;
     assignment.monthlyWeightedScore = null;
+    assignment.employeeAttachmentBlob = null;
+    assignment.employeeAttachmentName = null;
+    assignment.employeeAttachmentMime = null;
+    assignment.managerAttachmentBlob = null;
+    assignment.managerAttachmentName = null;
+    assignment.managerAttachmentMime = null;
   } else if (targetStatus === KPI_STATUS.EMPLOYEE_SUBMITTED) {
     // Reset manager and final approver data
     await KpiItem.update(
@@ -541,6 +841,9 @@ const reopenAssignment = async (id, targetStatus, user) => {
     assignment.finalReviewedAt = null;
     assignment.finalApprovedAt = null;
     assignment.monthlyWeightedScore = null;
+    assignment.managerAttachmentBlob = null;
+    assignment.managerAttachmentName = null;
+    assignment.managerAttachmentMime = null;
   } else if (targetStatus === KPI_STATUS.MANAGER_REVIEWED) {
     // Reset only final approver data
     await KpiItem.update(
@@ -604,6 +907,28 @@ function itemPlain(item) {
 }
 
 const getTeamOverview = async (managerId, query = {}) => {
+  // Admin/manager viewing a specific employee directly by employeeId
+  if (query.employeeId) {
+    const employee = await User.findByPk(query.employeeId, {
+      attributes: ['id', 'name', 'employeeCode', 'email', 'designation', 'departmentId', 'kpiReviewApplicable'],
+      include: [{ model: Department, as: 'department', attributes: ['id', 'name', 'code'] }],
+    });
+    if (!employee) return [];
+    const filter = { employeeId: query.employeeId };
+    if (query.financialYear) filter.financialYear = query.financialYear;
+    if (query.month) filter.month = Number(query.month);
+    const assignment = await KpiAssignment.findOne({ where: filter });
+    if (assignment) {
+      const items = await KpiItem.findAll({
+        where: { kpiAssignmentId: assignment.id },
+        order: [['createdAt', 'ASC']],
+      });
+      const maskedItems = maskDraftFields(items.map((item) => itemPlain(item)), assignment.status, false);
+      return [{ employee: employee.get({ plain: true }), assignment: withCurrentManager(assignment), items: maskedItems }];
+    }
+    return [{ employee: employee.get({ plain: true }), assignment: null, items: [] }];
+  }
+
   const teamMembers = await User.findAll({
     where: { managerId, isActive: true },
     attributes: ['id', 'name', 'employeeCode', 'email', 'designation', 'departmentId', 'kpiReviewApplicable'],
@@ -634,7 +959,7 @@ const getTeamOverview = async (managerId, query = {}) => {
         where: { kpiAssignmentId: assignment.id },
         order: [['createdAt', 'ASC']],
       });
-      const itemsWithAvg = items.map((item) => itemPlain(item));
+      const itemsWithAvg = maskDraftFields(items.map((item) => itemPlain(item)), assignment.status, false);
       results.push({ employee: member, assignment: withCurrentManager(assignment), items: itemsWithAvg });
     } else {
       results.push({ employee: member, assignment: null, items: [] });
@@ -671,7 +996,7 @@ const getAdminOverview = async (query = {}) => {
       where: { kpiAssignmentId: assignmentPlain.id },
       order: [['createdAt', 'ASC']],
     });
-    const itemsWithAvg = items.map((item) => itemPlain(item));
+    const itemsWithAvg = maskDraftFields(items.map((item) => itemPlain(item)), assignment.status, false);
 
     const avgScores = itemsWithAvg
       .filter((i) => i.calculatedResult != null)
@@ -1115,6 +1440,10 @@ module.exports = {
   updateAssignment,
   assignToEmployee,
   commitKpi,
+  approveCommitment,
+  rejectCommitment,
+  reviewCommitmentItems,
+  saveDraft,
   employeeSubmit,
   managerReview,
   finalReview,

@@ -40,6 +40,28 @@ export default function CommitVsAchieveRow({
   const hasDeviation =
     commitmentStatus && achievementStatus && commitmentStatus !== achievementStatus;
 
+  // If there's no commitment status (new flow — comment only), show a simple layout
+  if (!commitmentStatus) {
+    return (
+      <div className={`space-y-2 ${className}`}>
+        {commitmentComment && (
+          <div className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2">
+            <div className="text-xs text-gray-500 mb-1">Commitment Plan</div>
+            <p className="text-xs text-gray-600 italic">"{commitmentComment}"</p>
+          </div>
+        )}
+        {achievementStatus && (
+          <StatusPanel
+            label="Achievement"
+            date={achievementDate}
+            status={achievementStatus}
+            comment={achievementComment}
+          />
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className={`space-y-2 ${className}`}>
       <div className="flex gap-3 items-stretch">

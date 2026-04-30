@@ -5,8 +5,8 @@ const { authorize } = require('../middleware/rbac');
 
 router.use(authenticate);
 
-router.get('/employee', authorize('employee', 'manager', 'admin'), employeeDashboard);
-router.get('/manager', authorize('manager', 'admin'), managerDashboard);
+router.get('/employee', authorize('employee', 'manager', 'senior_manager', 'admin'), employeeDashboard);
+router.get('/manager', authorize('manager', 'senior_manager', 'admin'), managerDashboard);
 router.get('/admin', authorize('admin'), adminDashboard);
 
 module.exports = router;

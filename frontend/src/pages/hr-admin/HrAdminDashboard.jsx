@@ -70,8 +70,8 @@ export default function HrAdminDashboard() {
       <div className="bg-gradient-to-r from-violet-600 to-violet-700 rounded-xl p-6 text-white">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold">KPI Plan Administration</h1>
-            <p className="text-violet-200 mt-1">Manage KPI plans for all teams and departments</p>
+            <h1 className="text-2xl font-bold">KPI Administration</h1>
+            <p className="text-violet-200 mt-1">Manage KPIs for all teams and departments</p>
           </div>
           <div className="flex items-center gap-3">
             <select
@@ -132,7 +132,7 @@ export default function HrAdminDashboard() {
             onClick={() => navigate('/hr-admin/kpi-plans')}
             className="btn-primary text-xs px-3 py-1.5"
           >
-            + Create KPI Plan
+            + Create KPI
           </button>
         </div>
 

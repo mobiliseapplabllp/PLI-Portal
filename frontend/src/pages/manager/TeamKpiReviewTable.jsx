@@ -1,7 +1,9 @@
 import { useEffect, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useSelector } from 'react-redux';
-import { getTeamOverviewApi, managerReviewApi } from '../../api/kpiAssignments.api';
+import { getTeamOverviewApi, managerReviewApi, reviewCommitmentApi } from '../../api/kpiAssignments.api';
+import { getDepartmentsApi } from '../../api/departments.api';
+import { getUsersApi } from '../../api/users.api';
 import PageHeader from '../../components/common/PageHeader';
 import StatusBadge from '../../components/common/StatusBadge';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
@@ -12,7 +14,7 @@ import ConfirmDialog from '../../components/common/ConfirmDialog';
 import toast from 'react-hot-toast';
 import { getMonthName } from '../../utils/formatters';
 import {
-  QUARTER_MAP, KPI_STATUS, FINANCIAL_YEARS,
+  QUARTER_MAP, KPI_STATUS, FINANCIAL_YEARS, ROLE_OPTIONS,
   getVisibleMonthOptions,
 } from '../../utils/constants';
 import {
@@ -24,6 +26,8 @@ import {
   HiOutlineSearch,
   HiOutlineX,
   HiOutlineExclamation,
+  HiOutlineCheck,
+  // HiOutlineX,
 } from 'react-icons/hi';
 
 function getCurrentFYAndMonth() {
@@ -34,9 +38,12 @@ function getCurrentFYAndMonth() {
   return { financialYear: `${fyStart}-${String(fyStart + 1).slice(2)}`, month };
 }
 
+const ADMIN_ROLE_OPTIONS = ROLE_OPTIONS.filter((r) => !['admin', 'hr_admin', 'final_approver'].includes(r.value));
+
 export default function TeamKpiReviewTable() {
   const navigate = useNavigate();
   const { user } = useSelector((state) => state.auth);
+  const isAdmin = user?.role === 'admin';
 
   const defaults = useMemo(() => getCurrentFYAndMonth(), []);
   const visibleMonthOptions = useMemo(() => getVisibleMonthOptions(), []);
@@ -53,33 +60,76 @@ export default function TeamKpiReviewTable() {
   const [expandedEmployee, setExpandedEmployee] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [reviewConfirm, setReviewConfirm] = useState(null); // { assignmentId, items, employeeName }
+  // commitDecisions[assignmentId][itemId] = { approval: 'approved'|'rejected'|'', comment: '' }
+  const [commitDecisions, setCommitDecisions] = useState({});
+
+  // Admin-only: department / role / employee selectors
+  const [departments, setDepartments] = useState([]);
+  const [adminDept, setAdminDept] = useState('');
+  const [adminRole, setAdminRole] = useState('');
+  const [adminEmployee, setAdminEmployee] = useState('');
+  const [adminEmployees, setAdminEmployees] = useState([]);
 
   const selectedMonth = Number(filters.month);
   const selectedMonthName = getMonthName(selectedMonth);
   const selectedQuarter = QUARTER_MAP[selectedMonth] || '';
 
+  // Load departments for admin selector
+  useEffect(() => {
+    if (!isAdmin) return;
+    getDepartmentsApi().then((r) => setDepartments(r.data.data || [])).catch(() => {});
+  }, []);
+
+  // Load employees when admin dept/role filter changes
+  useEffect(() => {
+    if (!isAdmin) return;
+    setAdminEmployee('');
+    if (!adminDept && !adminRole) { setAdminEmployees([]); return; }
+    const params = { isActive: 'true', limit: 200 };
+    if (adminDept) params.department = adminDept;
+    if (adminRole) params.role = adminRole;
+    getUsersApi(params).then((r) => setAdminEmployees(r.data.data || [])).catch(() => setAdminEmployees([]));
+  }, [adminDept, adminRole]);
+
   const loadData = () => {
     if (!filters.financialYear || !filters.month) return;
+    if (isAdmin && !adminEmployee) {
+      setTeamData([]);
+      return;
+    }
     setLoading(true);
-    getTeamOverviewApi(filters)
+    const params = { ...filters };
+    if (isAdmin && adminEmployee) params.employeeId = adminEmployee;
+    getTeamOverviewApi(params)
       .then((res) => {
         setTeamData(res.data.data || []);
         const inputs = {};
+        const commitInit = {};
         (res.data.data || []).forEach((entry) => {
+          if (entry.assignment) {
+            commitInit[entry.assignment._id] = {};
+          }
           (entry.items || []).forEach((item) => {
             inputs[item._id] = {
               managerStatus: item.managerStatus ?? '',
               managerComment: item.managerComment ?? '',
             };
+            if (entry.assignment) {
+              commitInit[entry.assignment._id][item._id] = {
+                approval: item.managerCommitmentApproval || '',
+                comment: item.managerCommitmentComment || '',
+              };
+            }
           });
         });
         setManagerInputs(inputs);
+        setCommitDecisions(commitInit);
       })
       .catch(() => toast.error('Failed to load team data'))
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => { loadData(); }, [filters.financialYear, filters.month]);
+  useEffect(() => { loadData(); }, [filters.financialYear, filters.month, adminEmployee]);
 
   const handleInputChange = (itemId, field, value) => {
     setManagerInputs((prev) => ({
@@ -102,8 +152,49 @@ export default function TeamKpiReviewTable() {
 
     setSubmitting((prev) => ({ ...prev, [assignmentId]: true }));
     try {
-      await managerReviewApi(assignmentId, { items: payload });
+      await managerReviewApi(assignmentId, payload);
       toast.success('Manager review submitted');
+      loadData();
+    } catch (err) {
+      toast.error(err.response?.data?.error?.message || 'Submission failed');
+    } finally {
+      setSubmitting((prev) => ({ ...prev, [assignmentId]: false }));
+    }
+  };
+
+  const setCommitDecision = (assignmentId, itemId, field, value) => {
+    setCommitDecisions((prev) => ({
+      ...prev,
+      [assignmentId]: {
+        ...prev[assignmentId],
+        [itemId]: { ...prev[assignmentId]?.[itemId], [field]: value },
+      },
+    }));
+  };
+
+  const handleSubmitCommitmentReview = async (assignmentId, items) => {
+    const decisions = commitDecisions[assignmentId] || {};
+    const allDecided = items.every((item) => {
+      const d = decisions[item._id];
+      return d?.approval === 'approved' || d?.approval === 'rejected';
+    });
+    if (!allDecided) {
+      toast.error('Please approve or reject each KPI item first');
+      return;
+    }
+    const payload = items.map((item) => ({
+      id: item._id,
+      approval: decisions[item._id]?.approval,
+      comment: decisions[item._id]?.comment || '',
+    }));
+    setSubmitting((prev) => ({ ...prev, [assignmentId]: true }));
+    try {
+      await reviewCommitmentApi(assignmentId, payload);
+      const hasRejections = payload.some((p) => p.approval === 'rejected');
+      toast.success(hasRejections
+        ? 'Review submitted — rejected items sent back to employee'
+        : 'All KPIs approved — employee can submit self-assessment'
+      );
       loadData();
     } catch (err) {
       toast.error(err.response?.data?.error?.message || 'Submission failed');
@@ -119,19 +210,22 @@ export default function TeamKpiReviewTable() {
   const pendingCommitment = teamData.filter(
     (e) => e.assignment?.status === KPI_STATUS.ASSIGNED
   ).length;
+  const pendingCommitmentApproval = teamData.filter(
+    (e) => e.assignment?.status === KPI_STATUS.COMMITMENT_SUBMITTED
+  ).length;
   const pendingReview = teamData.filter(
     (e) => e.assignment?.status === KPI_STATUS.EMPLOYEE_SUBMITTED
   ).length;
 
   const filteredTeamData = useMemo(() => {
-    if (!searchQuery.trim()) return teamData;
+    if (isAdmin || !searchQuery.trim()) return teamData;
     const q = searchQuery.toLowerCase().trim();
     return teamData.filter((entry) => {
       const name = entry.employee.name?.toLowerCase() || '';
       const code = entry.employee.employeeCode?.toLowerCase() || '';
       return name.includes(q) || code.includes(q);
     });
-  }, [teamData, searchQuery]);
+  }, [teamData, searchQuery, isAdmin]);
 
   return (
     <div>
@@ -139,6 +233,40 @@ export default function TeamKpiReviewTable() {
         title="Team KPI Review"
         subtitle="Review your team's monthly KPI assessments"
       />
+
+      {/* Admin employee selector row */}
+      {isAdmin && (
+        <div className="bg-white border border-gray-200 rounded-lg px-5 py-3 mb-4 flex items-center gap-3 flex-wrap">
+          <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">View Employee KPIs:</span>
+          <select
+            value={adminDept}
+            onChange={(e) => setAdminDept(e.target.value)}
+            className="input-field w-44 text-sm"
+          >
+            <option value="">All Departments</option>
+            {departments.map((d) => <option key={d._id} value={d._id}>{d.name}</option>)}
+          </select>
+          <select
+            value={adminRole}
+            onChange={(e) => setAdminRole(e.target.value)}
+            className="input-field w-40 text-sm"
+          >
+            <option value="">All Roles</option>
+            {ADMIN_ROLE_OPTIONS.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
+          </select>
+          <select
+            value={adminEmployee}
+            onChange={(e) => setAdminEmployee(e.target.value)}
+            className="input-field w-56 text-sm"
+            disabled={adminEmployees.length === 0}
+          >
+            <option value="">{adminEmployees.length === 0 ? 'Select dept or role first…' : 'Select employee…'}</option>
+            {adminEmployees.map((e) => (
+              <option key={e._id} value={e._id}>{e.name} ({e.employeeCode})</option>
+            ))}
+          </select>
+        </div>
+      )}
 
       {/* Month Banner */}
       <div className="bg-primary-50 border border-primary-200 rounded-lg px-5 py-3 mb-4 flex items-center justify-between flex-wrap gap-3">
@@ -148,32 +276,40 @@ export default function TeamKpiReviewTable() {
             <span className="ml-2 text-sm font-normal text-primary-600">({selectedQuarter})</span>
           </h2>
           <p className="text-sm text-primary-600">
-            {totalMembers} team member{totalMembers !== 1 ? 's' : ''} &bull; {withKpis} with KPIs
-            {pendingCommitment > 0 && (
+            {isAdmin && adminEmployee
+              ? `Viewing: ${adminEmployees.find((e) => e._id === adminEmployee)?.name || 'Selected Employee'}`
+              : `${totalMembers} team member${totalMembers !== 1 ? 's' : ''} • ${withKpis} with KPIs`
+            }
+            {!isAdmin && pendingCommitment > 0 && (
               <span className="ml-2 text-sky-600 font-medium">&bull; {pendingCommitment} awaiting commitment</span>
             )}
-            {pendingReview > 0 && (
+            {!isAdmin && pendingCommitmentApproval > 0 && (
+              <span className="ml-2 text-teal-600 font-medium">&bull; {pendingCommitmentApproval} commitment{pendingCommitmentApproval !== 1 ? 's' : ''} to approve</span>
+            )}
+            {!isAdmin && pendingReview > 0 && (
               <span className="ml-2 text-purple-600 font-medium">&bull; {pendingReview} pending your review</span>
             )}
           </p>
         </div>
 
         <div className="flex items-center gap-3">
-          <div className="relative">
-            <HiOutlineSearch className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search by name or code..."
-              className="input-field pl-8 pr-8 w-52 text-sm"
-            />
-            {searchQuery && (
-              <button onClick={() => setSearchQuery('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
-                <HiOutlineX className="w-4 h-4" />
-              </button>
-            )}
-          </div>
+          {!isAdmin && (
+            <div className="relative">
+              <HiOutlineSearch className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search by name or code..."
+                className="input-field pl-8 pr-8 w-52 text-sm"
+              />
+              {searchQuery && (
+                <button onClick={() => setSearchQuery('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+                  <HiOutlineX className="w-4 h-4" />
+                </button>
+              )}
+            </div>
+          )}
           <select
             value={filters.financialYear}
             onChange={(e) => setFilters({ ...filters, financialYear: e.target.value })}
@@ -196,9 +332,15 @@ export default function TeamKpiReviewTable() {
 
       {loading && <TableSkeleton rows={5} columns={5} />}
 
-      {!loading && teamData.length === 0 && (
+      {!loading && isAdmin && !adminEmployee && (
+        <div className="card text-center py-16">
+          <p className="text-gray-400 text-base">Select a department, role, and employee above to view KPIs</p>
+        </div>
+      )}
+
+      {!loading && (!isAdmin || adminEmployee) && teamData.length === 0 && (
         <div className="card text-center py-12">
-          <p className="text-gray-400 text-lg">No team members found</p>
+          <p className="text-gray-400 text-lg">No KPI data found for the selected period</p>
         </div>
       )}
 
@@ -211,7 +353,8 @@ export default function TeamKpiReviewTable() {
         const canReview = assignment?.status === KPI_STATUS.EMPLOYEE_SUBMITTED;
         const isReviewed = [KPI_STATUS.MANAGER_REVIEWED, KPI_STATUS.FINAL_APPROVED, 'final_reviewed', KPI_STATUS.LOCKED].includes(assignment?.status);
         const awaitingCommitment = assignment?.status === KPI_STATUS.ASSIGNED;
-        const committedNotSubmitted = assignment?.status === KPI_STATUS.COMMITMENT_SUBMITTED;
+        const awaitingCommitmentApproval = assignment?.status === KPI_STATUS.COMMITMENT_SUBMITTED;
+        const commitmentApproved = assignment?.status === KPI_STATUS.COMMITMENT_APPROVED;
 
         // Deviation count (commitment vs achievement)
         const deviationCount = (items || []).filter(
@@ -283,9 +426,15 @@ export default function TeamKpiReviewTable() {
                     Awaiting Commitment
                   </span>
                 )}
-                {isKpiApplicable && committedNotSubmitted && (
-                  <span className="px-2 py-1 rounded-full bg-amber-50 text-amber-700 text-xs font-medium">
-                    Committed — Awaiting Achievement
+                {isKpiApplicable && awaitingCommitmentApproval && (
+                  <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-teal-50 text-teal-700 text-xs font-medium">
+                    <HiOutlinePencilAlt className="w-3.5 h-3.5" />
+                    Needs Commitment Approval
+                  </span>
+                )}
+                {isKpiApplicable && commitmentApproved && (
+                  <span className="px-2 py-1 rounded-full bg-teal-50 text-teal-700 text-xs font-medium">
+                    Commitment Approved — Awaiting Achievement
                   </span>
                 )}
               </div>
@@ -293,30 +442,108 @@ export default function TeamKpiReviewTable() {
 
             {/* Expanded KPI items */}
             {isExpanded && hasKpis && (
-              <div className="mt-4 space-y-3">
+              <div className="mt-4 space-y-3 border-t pt-4">
+
+                {/* Commitment review banner */}
+                {awaitingCommitmentApproval && (
+                  <div className="rounded-lg bg-teal-50 border border-teal-200 px-4 py-3">
+                    <p className="text-sm font-semibold text-teal-800">Review Employee Commitment</p>
+                    <p className="text-xs text-teal-600 mt-0.5">
+                      {employee.name} has submitted their commitment plan for {getMonthName(selectedMonth)} {filters.financialYear}.
+                      Review each item below and approve or reject the entire commitment.
+                    </p>
+                  </div>
+                )}
+
                 {items.map((item) => {
                   const id = item._id;
                   const inp = managerInputs[id] || {};
+                  const cd = commitDecisions[assignment._id]?.[id] || {};
+                  const isApproved = cd.approval === 'approved';
+                  const isRejected = cd.approval === 'rejected';
                   const hasDeviation = item.employeeCommitmentStatus && item.employeeStatus
                     && item.employeeCommitmentStatus !== item.employeeStatus;
 
                   return (
-                    <div key={id} className={`rounded-xl border p-4 space-y-3 ${hasDeviation ? 'border-amber-300 bg-amber-50/30' : 'border-gray-200 bg-gray-50'}`}>
+                    <div key={id} className={`rounded-xl border p-4 space-y-3 ${
+                      awaitingCommitmentApproval
+                        ? isApproved ? 'border-green-300 bg-green-50/30'
+                          : isRejected ? 'border-red-300 bg-red-50/30'
+                          : 'border-gray-200 bg-gray-50'
+                        : hasDeviation ? 'border-amber-300 bg-amber-50/30'
+                        : 'border-gray-200 bg-gray-50'
+                    }`}>
                       <div className="flex justify-between items-start">
-                        <div>
+                        <div className="flex items-center gap-2 flex-wrap">
                           <p className="font-semibold text-gray-900 text-sm">{item.title}</p>
-                          <p className="text-xs text-gray-500">{item.category} · {item.unit} · Weightage: {item.weightage}%</p>
+                          {awaitingCommitmentApproval && isApproved && (
+                            <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">
+                              <HiOutlineCheck className="w-3 h-3" /> Approved
+                            </span>
+                          )}
+                          {awaitingCommitmentApproval && isRejected && (
+                            <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded-full bg-red-100 text-red-700 font-medium">
+                              <HiOutlineX className="w-3 h-3" /> Rejected
+                            </span>
+                          )}
                         </div>
-                        <span className="text-xs text-gray-500">Target: <b>{item.targetValue ?? '—'}</b></span>
+                        <span className="text-xs text-gray-500 flex-shrink-0">Target: <b>{item.targetValue ?? '—'}</b></span>
                       </div>
+                      <p className="text-xs text-gray-500 -mt-2">{item.category} · {item.unit} · Weightage: {item.weightage}%</p>
 
-                      {/* Commitment vs Achievement */}
-                      <CommitVsAchieveRow
-                        commitmentStatus={item.employeeCommitmentStatus}
-                        commitmentComment={item.employeeCommitmentComment}
-                        achievementStatus={item.employeeStatus}
-                        achievementComment={item.employeeComment}
-                      />
+                      {/* Commitment plan + per-item approve/reject */}
+                      {awaitingCommitmentApproval && (
+                        <>
+                          <div className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2">
+                            <p className="text-xs font-semibold text-sky-700 mb-1">Commitment Plan</p>
+                            {item.employeeCommitmentComment ? (
+                              <p className="text-sm text-gray-700 italic">"{item.employeeCommitmentComment}"</p>
+                            ) : (
+                              <p className="text-xs text-gray-400 italic">No notes provided.</p>
+                            )}
+                          </div>
+                          <div className="space-y-2">
+                            <div className="flex items-center gap-2">
+                              <button
+                                onClick={() => setCommitDecision(assignment._id, id, 'approval', isApproved ? '' : 'approved')}
+                                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold border transition-all duration-150 ${
+                                  isApproved
+                                    ? 'bg-green-600 border-green-600 text-white'
+                                    : 'bg-green-50 border-green-400 text-green-700 hover:bg-green-100'
+                                }`}
+                              >
+                                <HiOutlineCheck className="w-3.5 h-3.5" /> Approve
+                              </button>
+                              <button
+                                onClick={() => setCommitDecision(assignment._id, id, 'approval', isRejected ? '' : 'rejected')}
+                                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold border transition-all duration-150 ${
+                                  isRejected
+                                    ? 'bg-red-600 border-red-600 text-white'
+                                    : 'bg-red-50 border-red-400 text-red-700 hover:bg-red-100'
+                                }`}
+                              >
+                                <HiOutlineX className="w-3.5 h-3.5" /> Reject
+                              </button>
+                            </div>
+                            <input
+                              type="text"
+                              value={cd.comment || ''}
+                              onChange={(e) => setCommitDecision(assignment._id, id, 'comment', e.target.value)}
+                              className="input-field text-sm"
+                              placeholder={isRejected ? 'Rejection reason (recommended)' : 'Comment (optional)'}
+                            />
+                          </div>
+                        </>
+                      )}
+
+                      {/* Commitment vs Achievement (non-commitment phases) */}
+                      {!awaitingCommitmentApproval && (item.employeeStatus || item.employeeCommitmentComment) && (
+                        <CommitVsAchieveRow
+                          commitmentComment={item.employeeCommitmentComment}
+                          achievementStatus={item.employeeStatus}
+                          achievementComment={item.employeeComment}
+                        />
+                      )}
 
                       {/* Legacy employee value */}
                       {item.employeeValue != null && !item.employeeStatus && (
@@ -326,45 +553,79 @@ export default function TeamKpiReviewTable() {
                         </div>
                       )}
 
-                      {/* Manager assessment */}
-                      <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-3 space-y-2">
-                        <p className="text-xs font-semibold text-indigo-700 uppercase">Your Assessment</p>
-                        {canReview ? (
-                          <>
-                            <StatusSelector
-                              value={inp.managerStatus || ''}
-                              onChange={(v) => handleInputChange(id, 'managerStatus', v)}
-                              size="sm"
-                            />
-                            <input
-                              type="text"
-                              value={inp.managerComment || ''}
-                              onChange={(e) => handleInputChange(id, 'managerComment', e.target.value)}
-                              className="input-field text-sm"
-                              placeholder="Optional comment"
-                            />
-                          </>
-                        ) : isReviewed ? (
-                          <div className="flex items-center gap-2">
-                            {item.managerStatus && (
-                              <span className="text-sm font-semibold text-indigo-700">{item.managerStatus}</span>
-                            )}
-                            {item.managerComment && (
-                              <span className="text-xs text-gray-500 italic">"{item.managerComment}"</span>
-                            )}
-                            {item.managerScore != null && !item.managerStatus && (
-                              <span className="text-xs bg-gray-200 text-gray-500 px-2 py-0.5 rounded">
-                                Legacy score: {item.managerScore}
-                              </span>
-                            )}
-                          </div>
-                        ) : (
-                          <p className="text-xs text-indigo-400">Assessment available once employee submits achievement.</p>
-                        )}
-                      </div>
+                      {/* Manager assessment (non-commitment phases) */}
+                      {!awaitingCommitmentApproval && (
+                        <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-3 space-y-2">
+                          <p className="text-xs font-semibold text-indigo-700 uppercase">Your Assessment</p>
+                          {canReview ? (
+                            <>
+                              <StatusSelector
+                                value={inp.managerStatus || ''}
+                                onChange={(v) => handleInputChange(id, 'managerStatus', v)}
+                                size="sm"
+                              />
+                              <input
+                                type="text"
+                                value={inp.managerComment || ''}
+                                onChange={(e) => handleInputChange(id, 'managerComment', e.target.value)}
+                                className="input-field text-sm"
+                                placeholder="Optional comment"
+                              />
+                            </>
+                          ) : isReviewed ? (
+                            <div className="flex items-center gap-2">
+                              {item.managerStatus && (
+                                <span className="text-sm font-semibold text-indigo-700">{item.managerStatus}</span>
+                              )}
+                              {item.managerComment && (
+                                <span className="text-xs text-gray-500 italic">"{item.managerComment}"</span>
+                              )}
+                              {item.managerScore != null && !item.managerStatus && (
+                                <span className="text-xs bg-gray-200 text-gray-500 px-2 py-0.5 rounded">
+                                  Legacy score: {item.managerScore}
+                                </span>
+                              )}
+                            </div>
+                          ) : (
+                            <p className="text-xs text-indigo-400">Assessment available once employee submits achievement.</p>
+                          )}
+                        </div>
+                      )}
                     </div>
                   );
                 })}
+
+                {/* Submit commitment review */}
+                {awaitingCommitmentApproval && (() => {
+                  const decisions = commitDecisions[assignment._id] || {};
+                  const decidedCount = items.filter((item) => {
+                    const d = decisions[item._id];
+                    return d?.approval === 'approved' || d?.approval === 'rejected';
+                  }).length;
+                  const allDecided = decidedCount === items.length;
+                  const rejectedCount = items.filter((item) => decisions[item._id]?.approval === 'rejected').length;
+                  return (
+                    <div className="flex items-center gap-3 pt-2 border-t flex-wrap">
+                      <button
+                        onClick={() => handleSubmitCommitmentReview(assignment._id, items)}
+                        disabled={submitting[assignment._id] || !allDecided}
+                        className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-teal-600 text-white text-sm font-semibold hover:bg-teal-700 disabled:opacity-50"
+                      >
+                        <HiOutlineCheck className="w-4 h-4" />
+                        {submitting[assignment._id] ? 'Submitting...' : `Submit Review (${decidedCount}/${items.length})`}
+                      </button>
+                      {!allDecided && (
+                        <span className="text-xs text-amber-600">{items.length - decidedCount} item{items.length - decidedCount !== 1 ? 's' : ''} undecided</span>
+                      )}
+                      {allDecided && rejectedCount > 0 && (
+                        <span className="text-xs text-red-600">{rejectedCount} rejected — employee will resubmit</span>
+                      )}
+                      {allDecided && rejectedCount === 0 && (
+                        <span className="text-xs text-green-600">All approved — employee can proceed</span>
+                      )}
+                    </div>
+                  );
+                })()}
 
                 {canReview && (
                   <div className="flex justify-end pt-1">
@@ -380,7 +641,7 @@ export default function TeamKpiReviewTable() {
 
                 <div className="text-right">
                   <button
-                    onClick={() => navigate(`/manager/team-review/${assignment._id}`)}
+                    onClick={() => navigate(`/manager/review/${assignment._id}`)}
                     className="text-xs text-primary-600 hover:underline"
                   >
                     Open full review page →
@@ -403,6 +664,7 @@ export default function TeamKpiReviewTable() {
         }}
         onCancel={() => setReviewConfirm(null)}
       />
+
     </div>
   );
 }

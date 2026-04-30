@@ -8,6 +8,7 @@ const connectDB = require('./src/config/db');
 const { isDbReady } = connectDB;
 const { errorHandler } = require('./src/middleware/errorHandler');
 const routes = require('./src/routes');
+const logger = require('./src/utils/logger');
 
 const app = express();
 const PORT = process.env.PORT || 5105;
@@ -16,7 +17,18 @@ const PORT = process.env.PORT || 5105;
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
-app.use(morgan('dev'));
+
+// HTTP request logger — skips health-check noise
+morgan.token('body-size', (req) => {
+  const len = req.headers['content-length'];
+  return len ? `${len}b` : '-';
+});
+app.use(
+  morgan(':method :url :status :response-time ms - :body-size', {
+    stream: { write: (msg) => logger.http(msg.trim()) },
+    skip: (req) => req.url === '/health',
+  })
+);
 
 // Static files for uploads
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
@@ -59,7 +71,7 @@ if (require('fs').existsSync(frontendBuildPath)) {
 }
 
 app.listen(PORT, () => {
-  console.log(`PLI Portal API running on port ${PORT} in ${process.env.NODE_ENV} mode`);
+  logger.success(`PLI Portal API  →  http://localhost:${PORT}  (${process.env.NODE_ENV || 'development'})`);
   // Connect to DB after HTTP server is up — retries indefinitely until success
   connectDB();
 });

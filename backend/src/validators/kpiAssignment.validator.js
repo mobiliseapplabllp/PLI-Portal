@@ -13,14 +13,30 @@ const createAssignmentValidator = [
   body('items.*.targetValue').optional().isNumeric().withMessage('Target value must be numeric'),
 ];
 
-// NEW: Employee submits monthly commitment (beginning of month)
+// Employee submits monthly commitment — commit value per item + optional plan comment
 const commitValidator = [
   body('items').isArray({ min: 1 }).withMessage('Items array is required'),
   body('items.*.id').isUUID().withMessage('Valid KPI item ID required'),
-  body('items.*.employeeCommitmentStatus')
-    .isIn(KPI_SUBMISSION_VALUES)
-    .withMessage(`Commitment status must be one of: ${KPI_SUBMISSION_VALUES.join(', ')}`),
+  body('items.*.commitValue').optional().trim(),
   body('items.*.employeeCommitmentComment').optional().trim(),
+];
+
+// Manager approves commitment
+const approveCommitmentValidator = [];
+
+// Manager rejects commitment with optional reason
+const rejectCommitmentValidator = [
+  body('rejectionComment').optional().trim(),
+];
+
+// Manager reviews commitment per item (approve/reject each KPI)
+const reviewCommitmentValidator = [
+  body('items').isArray({ min: 1 }).withMessage('Items array is required'),
+  body('items.*.id').isUUID().withMessage('Valid KPI item ID required'),
+  body('items.*.approval')
+    .isIn(['approved', 'rejected'])
+    .withMessage('Approval must be "approved" or "rejected"'),
+  body('items.*.comment').optional().trim(),
 ];
 
 // UPDATED: Employee submits monthly achievement (end of month / beginning of next)
@@ -49,6 +65,9 @@ const finalReviewValidator = [];
 module.exports = {
   createAssignmentValidator,
   commitValidator,
+  approveCommitmentValidator,
+  rejectCommitmentValidator,
+  reviewCommitmentValidator,
   employeeSubmitValidator,
   managerReviewValidator,
   finalReviewValidator,

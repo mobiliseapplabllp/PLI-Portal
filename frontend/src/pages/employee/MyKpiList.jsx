@@ -1,430 +1,647 @@
 import { useEffect, useState, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { useDispatch, useSelector } from 'react-redux';
-import { fetchAssignments } from '../../store/kpiSlice';
-import { getAssignmentByIdApi, commitKpiApi, employeeSubmitApi } from '../../api/kpiAssignments.api';
-import PageHeader from '../../components/common/PageHeader';
-import Pagination from '../../components/common/Pagination';
-import StatusBadge from '../../components/common/StatusBadge';
-import FilterBar from '../../components/common/FilterBar';
+import { useSelector } from 'react-redux';
+import {
+  getAssignmentsApi,
+  getAssignmentByIdApi,
+  commitKpiApi,
+  saveDraftApi,
+  employeeSubmitApi,
+} from '../../api/kpiAssignments.api';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
-import EmptyState from '../../components/common/EmptyState';
-import StatusSelector from '../../components/common/StatusSelector';
-import CommitVsAchieveRow from '../../components/common/CommitVsAchieveRow';
-import WorkflowStepper from '../../components/common/WorkflowStepper';
-import { getMonthName, formatScore, formatDate } from '../../utils/formatters';
-import { getCurrentFinancialYear, KPI_STATUS } from '../../utils/constants';
+import {
+  getCurrentFinancialYear,
+  KPI_STATUS,
+  KPI_STATUS_LABELS,
+  KPI_STATUS_COLORS,
+  FINANCIAL_YEARS,
+  KPI_HEADS,
+  KPI_HEAD_LABELS,
+  KPI_SUBMISSION_VALUES,
+} from '../../utils/constants';
+import { getMonthName } from '../../utils/formatters';
+import WorkflowGuide from '../../components/common/WorkflowGuide';
 import toast from 'react-hot-toast';
-import { HiChevronRight, HiChevronDown, HiOutlineExclamation } from 'react-icons/hi';
+import {
+  HiOutlineExclamation,
+  HiOutlineClipboardCheck,
+  HiOutlineClipboardList,
+  HiOutlineClock,
+  HiOutlineRefresh,
+  HiOutlineCheckCircle,
+  HiOutlineSave,
+} from 'react-icons/hi';
+
+// Indian FY months in order: Apr → Mar
+const FY_MONTHS = [4, 5, 6, 7, 8, 9, 10, 11, 12, 1, 2, 3];
+
+const STATUS_ORDER = [
+  KPI_STATUS.DRAFT,
+  KPI_STATUS.ASSIGNED,
+  KPI_STATUS.COMMITMENT_SUBMITTED,
+  KPI_STATUS.COMMITMENT_APPROVED,
+  KPI_STATUS.EMPLOYEE_SUBMITTED,
+  KPI_STATUS.MANAGER_REVIEWED,
+  KPI_STATUS.FINAL_APPROVED,
+  KPI_STATUS.FINAL_REVIEWED,
+  KPI_STATUS.LOCKED,
+];
+const statusRank = (s) => { const i = STATUS_ORDER.indexOf(s); return i === -1 ? 99 : i; };
+
+// Match admin HEAD_STYLES exactly
+const HEAD_STYLES = {
+  Performance:     { active: 'border-violet-500 text-violet-700 bg-violet-50',   inactive: 'text-gray-500 hover:text-violet-600 hover:border-violet-300',   badge: 'bg-violet-100 text-violet-700',   banner: 'from-violet-600 to-violet-700' },
+  CustomerCentric: { active: 'border-blue-500 text-blue-700 bg-blue-50',          inactive: 'text-gray-500 hover:text-blue-600 hover:border-blue-300',        badge: 'bg-blue-100 text-blue-700',       banner: 'from-blue-600 to-blue-700'    },
+  CoreValues:      { active: 'border-emerald-500 text-emerald-700 bg-emerald-50', inactive: 'text-gray-500 hover:text-emerald-600 hover:border-emerald-300',  badge: 'bg-emerald-100 text-emerald-700', banner: 'from-emerald-600 to-emerald-700' },
+  Trainings:       { active: 'border-amber-500 text-amber-700 bg-amber-50',       inactive: 'text-gray-500 hover:text-amber-600 hover:border-amber-300',      badge: 'bg-amber-100 text-amber-700',     banner: 'from-amber-500 to-amber-600'  },
+};
+
+const SUBMIT_COLORS = {
+  Meets:   'bg-blue-100 text-blue-700',
+  Exceeds: 'bg-emerald-100 text-emerald-700',
+  Below:   'bg-red-100 text-red-700',
+};
 
 export default function MyKpiList() {
-  const dispatch = useDispatch();
-  const navigate = useNavigate();
-  const { user } = useSelector((state) => state.auth);
-  const { assignments, pagination, loading } = useSelector((state) => state.kpi);
+  const { user } = useSelector((s) => s.auth);
+  const now = new Date();
 
-  const [filters, setFilters] = useState(() => {
-    const now = new Date();
-    return {
-      financialYear: getCurrentFinancialYear(now),
-      month: String(now.getMonth() + 1),
-      page: 1,
-    };
-  });
-
-  const [expandedId, setExpandedId] = useState(null);
-  const [expandedData, setExpandedData] = useState({});
-  const [expandLoading, setExpandLoading] = useState(null);
-  // inlineForm[assignmentId][itemId] = { status, comment }
-  const [inlineForm, setInlineForm] = useState({});
+  const [fy, setFy] = useState(getCurrentFinancialYear(now));
+  const [selectedMonth, setSelectedMonth] = useState(now.getMonth() + 1);
+  const [assignments, setAssignments] = useState([]);
+  const [items, setItems] = useState([]);
+  const [editMap, setEditMap] = useState({});
+  const [loading, setLoading] = useState(false);
+  const [itemsLoading, setItemsLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [activeHead, setActiveHead] = useState(KPI_HEADS[0]);
 
-  useEffect(() => {
-    dispatch(fetchAssignments({ ...filters, employee: user._id }));
-  }, [dispatch, filters, user._id]);
-
-  useEffect(() => {
-    setExpandedId(null);
-    setExpandedData({});
-    setInlineForm({});
-  }, [filters]);
-
-  const toggleExpand = useCallback(
-    async (assignmentId) => {
-      if (expandedId === assignmentId) {
-        setExpandedId(null);
-        return;
-      }
-
-      setExpandedId(assignmentId);
-
-      if (expandedData[assignmentId]) return;
-
-      setExpandLoading(assignmentId);
-      try {
-        const res = await getAssignmentByIdApi(assignmentId);
-        const { assignment, items } = res.data.data;
-
-        setExpandedData((prev) => ({ ...prev, [assignmentId]: { assignment, items } }));
-
-        // Build initial form state per mode
-        const isCommit = assignment.status === KPI_STATUS.ASSIGNED;
-        const isAchieve = assignment.status === KPI_STATUS.COMMITMENT_SUBMITTED;
-
-        const initial = {};
-        items.forEach((item) => {
-          initial[item._id] = {
-            status: isCommit
-              ? (item.employeeCommitmentStatus || '')
-              : isAchieve
-              ? (item.employeeStatus || '')
-              : '',
-            comment: isCommit
-              ? (item.employeeCommitmentComment || '')
-              : (item.employeeComment || ''),
-          };
-        });
-        setInlineForm((prev) => ({ ...prev, [assignmentId]: initial }));
-      } catch {
-        toast.error('Failed to load KPI details');
-        setExpandedId(null);
-      } finally {
-        setExpandLoading(null);
-      }
-    },
-    [expandedId, expandedData]
-  );
-
-  const handleInlineChange = (assignmentId, itemId, field, value) => {
-    setInlineForm((prev) => ({
-      ...prev,
-      [assignmentId]: {
-        ...prev[assignmentId],
-        [itemId]: { ...prev[assignmentId]?.[itemId], [field]: value },
-      },
-    }));
-  };
-
-  const handleInlineSubmit = async (assignmentId) => {
-    const data = expandedData[assignmentId];
-    if (!data) return;
-
-    const form = inlineForm[assignmentId] || {};
-    const isCommit = data.assignment.status === KPI_STATUS.ASSIGNED;
-    const isAchieve = data.assignment.status === KPI_STATUS.COMMITMENT_SUBMITTED;
-
-    if (!isCommit && !isAchieve) return;
-
-    const items = data.items.map((item) => ({
-      id: item._id,
-      ...(isCommit
-        ? {
-            employeeCommitmentStatus: form[item._id]?.status,
-            employeeCommitmentComment: form[item._id]?.comment || '',
-          }
-        : {
-            employeeStatus: form[item._id]?.status,
-            employeeComment: form[item._id]?.comment || '',
-          }),
-    }));
-
-    const anyMissing = items.some((i) =>
-      isCommit ? !i.employeeCommitmentStatus : !i.employeeStatus
-    );
-    if (anyMissing) {
-      toast.error('Please select a status for all KPI items');
-      return;
+  const loadAssignments = useCallback(async () => {
+    if (!user?._id) return;
+    setLoading(true);
+    try {
+      const res = await getAssignmentsApi({ financialYear: fy, employee: user._id, limit: 12 });
+      const raw = res.data.data;
+      setAssignments(Array.isArray(raw) ? raw : (raw?.assignments || []));
+    } catch {
+      toast.error('Failed to load KPI assignments');
+    } finally {
+      setLoading(false);
     }
+  }, [fy, user?._id]);
 
+  useEffect(() => { loadAssignments(); }, [loadAssignments]);
+
+  const currentAssignment = assignments.find((a) => a.month === selectedMonth) || null;
+
+  const fetchItems = useCallback(async (assignmentId) => {
+    if (!assignmentId) { setItems([]); setEditMap({}); return; }
+    setItemsLoading(true);
+    try {
+      const res = await getAssignmentByIdApi(assignmentId);
+      const d = res.data.data || res.data;
+      const fetched = d.items || [];
+      setItems(fetched);
+      const map = {};
+      fetched.forEach((item) => {
+        const id = item._id || item.id;
+        map[id] = {
+          commitValue: item.commitValue || '',
+          employeeCommitmentComment: item.employeeCommitmentComment || '',
+          employeeStatus: item.employeeStatus || '',
+          employeeComment: item.employeeComment || '',
+        };
+      });
+      setEditMap(map);
+      const firstHead = KPI_HEADS.find((h) => fetched.some((i) => (i.kpiHead || 'Performance') === h));
+      if (firstHead) setActiveHead(firstHead);
+    } catch {
+      toast.error('Failed to load KPI items');
+      setItems([]);
+    } finally {
+      setItemsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchItems(currentAssignment?._id);
+  }, [currentAssignment?._id, fetchItems]);
+
+  const status = currentAssignment?.status;
+  const rank = statusRank(status);
+  const canCommit = status === KPI_STATUS.ASSIGNED;
+  const canSelfReview = status === KPI_STATUS.COMMITMENT_APPROVED;
+  const showCommitCol = rank >= statusRank(KPI_STATUS.ASSIGNED);
+  const showSelfReviewCol = rank >= statusRank(KPI_STATUS.COMMITMENT_APPROVED);
+  const showManagerCol = rank >= statusRank(KPI_STATUS.EMPLOYEE_SUBMITTED);
+  const showFinalCol = rank >= statusRank(KPI_STATUS.MANAGER_REVIEWED);
+
+  const headItems = items.filter((i) => (i.kpiHead || 'Performance') === activeHead);
+
+  // Weightage per head (matching admin's headWt display)
+  const headWt = (head) =>
+    Math.round(items.filter((i) => (i.kpiHead || 'Performance') === head).reduce((s, i) => s + Number(i.weightage || 0), 0) * 100) / 100;
+  const headCount = (head) => items.filter((i) => (i.kpiHead || 'Performance') === head).length;
+  const headItemsWeightTotal = Math.round(headItems.reduce((s, i) => s + Number(i.weightage || 0), 0) * 100) / 100;
+
+  const pendingItems = assignments.filter((a) => a.status === KPI_STATUS.COMMITMENT_SUBMITTED);
+
+  const updateEdit = (itemId, field, value) =>
+    setEditMap((prev) => ({ ...prev, [itemId]: { ...(prev[itemId] || {}), [field]: value } }));
+
+  const handleSubmitCommitment = async () => {
+    const assignmentId = currentAssignment?._id;
+    if (!assignmentId) return;
+    const payload = items.map((item) => {
+      const id = item._id || item.id;
+      const e = editMap[id] || {};
+      return { id, commitValue: e.commitValue || '', employeeCommitmentComment: e.employeeCommitmentComment || '' };
+    });
     setSubmitting(true);
     try {
-      if (isCommit) {
-        await commitKpiApi(assignmentId, { items });
-        toast.success('Commitment submitted');
-      } else {
-        await employeeSubmitApi(assignmentId, { items });
-        toast.success('Achievement submitted');
-      }
-      dispatch(fetchAssignments({ ...filters, employee: user._id }));
-      setExpandedId(null);
-      setExpandedData((prev) => { const n = { ...prev }; delete n[assignmentId]; return n; });
-      setInlineForm((prev) => { const n = { ...prev }; delete n[assignmentId]; return n; });
+      await commitKpiApi(assignmentId, payload);
+      toast.success('Commitment submitted successfully!');
+      await loadAssignments();
+      await fetchItems(assignmentId);
     } catch (err) {
-      toast.error(err.response?.data?.error?.message || 'Submission failed');
+      toast.error(err.response?.data?.error?.message || 'Failed to submit commitment');
     } finally {
       setSubmitting(false);
     }
   };
 
-  const getWeightageColor = (w) => {
-    if (w === 100) return 'text-green-600';
-    if (w < 100) return 'text-yellow-600';
-    return 'text-red-600';
+  const handleSaveDraft = async () => {
+    const assignmentId = currentAssignment?._id;
+    if (!assignmentId) return;
+    const payload = items.map((item) => {
+      const id = item._id || item.id;
+      const e = editMap[id] || {};
+      return canCommit
+        ? { id, commitValue: e.commitValue || '', employeeCommitmentComment: e.employeeCommitmentComment || '' }
+        : { id, employeeStatus: e.employeeStatus || '', employeeComment: e.employeeComment || '' };
+    });
+    setSubmitting(true);
+    try {
+      await saveDraftApi(assignmentId, payload);
+      toast.success('Draft saved successfully!');
+      await fetchItems(assignmentId);
+    } catch (err) {
+      toast.error(err.response?.data?.error?.message || 'Failed to save draft');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleSubmitSelfReview = async () => {
+    const assignmentId = currentAssignment?._id;
+    if (!assignmentId) return;
+    const missing = items.find((item) => !editMap[item._id || item.id]?.employeeStatus);
+    if (missing) { toast.error('Please select self-review status for all KPI items'); return; }
+    const payload = items.map((item) => {
+      const id = item._id || item.id;
+      const e = editMap[id] || {};
+      return { id, employeeStatus: e.employeeStatus, employeeComment: e.employeeComment || '' };
+    });
+    setSubmitting(true);
+    try {
+      await employeeSubmitApi(assignmentId, payload);
+      toast.success('Self-review submitted successfully!');
+      await loadAssignments();
+      await fetchItems(assignmentId);
+    } catch (err) {
+      toast.error(err.response?.data?.error?.message || 'Failed to submit self-review');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   if (user?.kpiReviewApplicable === false) {
     return (
-      <div>
-        <PageHeader title="My KPIs" subtitle="View and submit your monthly KPI assessments" />
-        <div className="bg-amber-50 border border-amber-200 rounded-lg px-5 py-4 text-center">
-          <HiOutlineExclamation className="w-8 h-8 text-amber-400 mx-auto mb-2" />
-          <p className="text-sm text-amber-700 font-medium">KPI Review is not applicable for your role.</p>
-          <p className="text-xs text-amber-600 mt-1">No KPI assessments are required. Contact your manager for details.</p>
+      <div className="max-w-xl mx-auto mt-12">
+        <div className="bg-amber-50 border border-amber-200 rounded-xl px-6 py-8 text-center">
+          <HiOutlineExclamation className="w-10 h-10 text-amber-400 mx-auto mb-3" />
+          <p className="text-base font-semibold text-amber-800">KPI Review not applicable</p>
+          <p className="text-sm text-amber-600 mt-1">No KPI assessments are required for your role. Contact your manager for details.</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div>
-      <PageHeader title="My KPIs" subtitle="View and submit your monthly KPI assessments" />
-      <FilterBar filters={filters} onChange={setFilters} showQuarter={false} />
+    <div className="flex flex-col gap-5">
 
-      {loading ? (
-        <LoadingSpinner />
-      ) : !assignments || assignments.length === 0 ? (
-        <EmptyState message="No KPI assignments found" />
-      ) : (
-        <div className="space-y-3">
-          {assignments.map((row) => {
-            const isExpanded = expandedId === row._id;
-            const detail = expandedData[row._id];
-            const isLoadingDetail = expandLoading === row._id;
+      {/* ── Workflow guide ───────────────────────────────────────────────────── */}
+      <WorkflowGuide status={status} />
 
-            const isCommit = row.status === KPI_STATUS.ASSIGNED;
-            const isAchieve = row.status === KPI_STATUS.COMMITMENT_SUBMITTED;
-            const canAct = isCommit || isAchieve;
-
-            return (
-              <div key={row._id} className="card">
-                {/* Row header */}
-                <div
-                  className="flex items-center justify-between cursor-pointer py-1"
-                  onClick={() => toggleExpand(row._id)}
-                >
-                  <div className="flex items-center gap-3">
-                    <span className="text-gray-400">
-                      {isExpanded
-                        ? <HiChevronDown className="w-5 h-5" />
-                        : <HiChevronRight className="w-5 h-5" />}
-                    </span>
-                    <div>
-                      <p className="font-semibold text-gray-900">
-                        {getMonthName(row.month)} {row.financialYear}
-                        <span className="ml-2 text-sm font-normal text-gray-500">({row.quarter})</span>
-                      </p>
-                      <p className="text-xs text-gray-400">
-                        Manager: {row.currentManager?.name || row.manager?.name || '—'} &bull; Assigned {formatDate(row.createdAt)}
-                      </p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    {canAct && (
-                      <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${isCommit ? 'bg-primary-100 text-primary-700' : 'bg-amber-100 text-amber-700'}`}>
-                        {isCommit ? 'Submit Commitment' : 'Submit Achievement'}
-                      </span>
-                    )}
-                    <StatusBadge status={row.status} />
-                    <span className={`text-sm font-semibold ${getWeightageColor(row.totalWeightage)}`}>
-                      {row.totalWeightage}%
-                    </span>
-                    {row.monthlyWeightedScore != null && (
-                      <span className="text-sm font-bold text-primary-700 bg-primary-50 px-2 py-0.5 rounded">
-                        {formatScore(row.monthlyWeightedScore)}
-                      </span>
-                    )}
-                  </div>
-                </div>
-
-                {/* Expanded detail */}
-                {isExpanded && (
-                  <div className="mt-4 border-t pt-4">
-                    {isLoadingDetail ? (
-                      <div className="flex justify-center py-6">
-                        <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary-600" />
-                      </div>
-                    ) : detail ? (
-                      <ExpandedDetail
-                        assignment={detail.assignment}
-                        items={detail.items}
-                        form={inlineForm[row._id] || {}}
-                        canAct={canAct}
-                        isCommit={isCommit}
-                        submitting={submitting}
-                        onFormChange={(itemId, field, value) => handleInlineChange(row._id, itemId, field, value)}
-                        onSubmit={() => handleInlineSubmit(row._id)}
-                        onNavigate={() => navigate(`/employee/kpis/${row._id}`)}
-                      />
-                    ) : (
-                      <p className="text-sm text-gray-400 text-center py-4">Failed to load — click to retry.</p>
-                    )}
-                  </div>
-                )}
-              </div>
-            );
-          })}
+      {/* ── Pending approval notice ──────────────────────────────────────────── */}
+      {!loading && pendingItems.length > 0 && (
+        <div className="bg-sky-50 border border-sky-200 rounded-xl px-5 py-3 flex items-start gap-3">
+          <HiOutlineClock className="w-5 h-5 text-sky-500 flex-shrink-0 mt-0.5" />
+          <div>
+            <p className="text-sm font-semibold text-sky-800">
+              {pendingItems.length === 1
+                ? `${getMonthName(pendingItems[0].month)} commitment is awaiting manager approval`
+                : `${pendingItems.length} commitments are awaiting manager approval`}
+            </p>
+            <p className="text-xs text-sky-600 mt-0.5">You will be notified once your manager approves or rejects.</p>
+          </div>
         </div>
       )}
 
-      <div className="mt-4">
-        <Pagination pagination={pagination} onPageChange={(p) => setFilters({ ...filters, page: p })} />
-      </div>
-    </div>
-  );
-}
+      {/* ── KPI Detail Panel (matches admin Edit KPI layout) ────────────────── */}
+      <div className="flex flex-col bg-gray-50 rounded-xl border border-gray-200 overflow-hidden">
 
-function ExpandedDetail({ assignment, items, form, canAct, isCommit, submitting, onFormChange, onSubmit, onNavigate }) {
-  const isReadOnly = !canAct;
-  const isAchieve = !isCommit && canAct;
+        {/* Toolbar — FY, Month selectors + status badge + submit buttons */}
+        <div className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between gap-4 flex-wrap min-w-0">
+          {/* Left: selectors */}
+          <div className="flex items-center gap-3 flex-wrap">
+            <div className="flex items-center gap-2">
+              <label className="text-xs font-semibold text-gray-500 whitespace-nowrap">Financial Year</label>
+              <select value={fy} onChange={(e) => setFy(e.target.value)} className="input-field text-sm py-1.5 w-28">
+                {FINANCIAL_YEARS.map((y) => <option key={y} value={y}>{y}</option>)}
+              </select>
+            </div>
+            <span className="text-gray-300 text-lg hidden sm:block">›</span>
+            <div className="flex items-center gap-2">
+              <label className="text-xs font-semibold text-gray-500 whitespace-nowrap">Month</label>
+              <select
+                value={selectedMonth}
+                onChange={(e) => setSelectedMonth(Number(e.target.value))}
+                className="input-field text-sm py-1.5 w-36"
+              >
+                {FY_MONTHS.map((m) => (
+                  <option key={m} value={m}>{getMonthName(m)}</option>
+                ))}
+              </select>
+            </div>
+            <button
+              onClick={loadAssignments}
+              disabled={loading}
+              className="p-1.5 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-gray-500 disabled:opacity-40"
+            >
+              <HiOutlineRefresh className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+            </button>
+          </div>
 
-  // Progress bar
-  const filled = items.filter((item) => form[item._id]?.status).length;
-  const progressPct = items.length > 0 ? Math.round((filled / items.length) * 100) : 0;
-
-  return (
-    <div className="space-y-4">
-      {/* Workflow stepper */}
-      <WorkflowStepper status={assignment.status} />
-
-      {/* Mode banner */}
-      {canAct && (
-        <div className={`rounded-lg border px-4 py-3 ${isCommit ? 'bg-primary-50 border-primary-200' : 'bg-amber-50 border-amber-200'}`}>
-          <p className={`text-sm font-medium ${isCommit ? 'text-primary-800' : 'text-amber-800'}`}>
-            {isCommit
-              ? `Commit to your targets for ${getMonthName(assignment.month)} ${assignment.financialYear}`
-              : `Submit your actual achievement for ${getMonthName(assignment.month)} ${assignment.financialYear}`}
-          </p>
-          {items.length > 0 && (
-            <div className="mt-2">
-              <div className="flex justify-between text-xs text-gray-500 mb-1">
-                <span>{filled} of {items.length} filled</span>
-                <span>{progressPct}%</span>
-              </div>
-              <div className="w-full bg-white/70 rounded-full h-1.5 overflow-hidden border border-gray-200">
-                <div
-                  className={`h-full rounded-full transition-all ${isCommit ? 'bg-primary-500' : 'bg-amber-500'}`}
-                  style={{ width: `${progressPct}%` }}
-                />
-              </div>
+          {/* Right: status badge only */}
+          {currentAssignment && (
+            <div className="flex items-center gap-2 flex-shrink-0 flex-wrap">
+              <span className="w-px h-6 bg-gray-200 hidden sm:block" />
+              <span className={`text-xs px-2.5 py-1 rounded-full font-medium whitespace-nowrap ${KPI_STATUS_COLORS[status] || 'bg-gray-100 text-gray-600'}`}>
+                {KPI_STATUS_LABELS[status] || status}
+              </span>
+              {currentAssignment.totalWeightage != null && (
+                <span className="text-xs text-gray-500 whitespace-nowrap">
+                  Monthly: <strong className="text-violet-600">{(Number(currentAssignment.totalWeightage) / 12).toFixed(2)}%</strong>
+                </span>
+              )}
             </div>
           )}
         </div>
-      )}
 
-      {/* KPI items */}
-      <div className="space-y-3">
-        {items.map((item) => {
-          const id = item._id;
-          const fd = form[id] || {};
+        {/* Rejection banner */}
+        {currentAssignment?.commitmentRejectionComment && (
+          <div className="px-6 py-1.5 text-xs font-semibold flex items-center gap-2 bg-red-50 text-red-600 border-b border-red-100">
+            <span className="w-2 h-2 rounded-full flex-shrink-0 bg-red-400" />
+            Commitment rejected — {currentAssignment.commitmentRejectionComment}. Please revise and resubmit.
+          </div>
+        )}
 
-          return (
-            <div key={id} className="bg-gray-50 rounded-xl border border-gray-200 p-4 space-y-3">
-              {/* Item header */}
-              <div className="flex justify-between items-start">
-                <div>
-                  <p className="font-semibold text-gray-900 text-sm">{item.title}</p>
-                  <p className="text-xs text-gray-500">{item.category} · {item.unit} · Weightage: {item.weightage}%</p>
-                </div>
-                <span className="text-xs text-gray-500">Target: <b>{item.targetValue ?? '—'}</b></span>
+        {/* Info banner based on status */}
+        {currentAssignment && !currentAssignment.commitmentRejectionComment && (() => {
+          if (status === KPI_STATUS.COMMITMENT_SUBMITTED) return (
+            <div className="px-6 py-1.5 text-xs font-medium flex items-center gap-2 bg-sky-50 text-sky-700 border-b border-sky-100">
+              <span className="w-2 h-2 rounded-full flex-shrink-0 bg-sky-400" />
+              Commitment submitted — awaiting manager approval. You will be notified when reviewed.
+            </div>
+          );
+          if (status === KPI_STATUS.COMMITMENT_APPROVED) return (
+            <div className="px-6 py-1.5 text-xs font-medium flex items-center gap-2 bg-amber-50 text-amber-700 border-b border-amber-100">
+              <span className="w-2 h-2 rounded-full flex-shrink-0 bg-amber-400" />
+              Commitment approved — for each KPI below, select <strong>Exceeds</strong>, <strong>Meets</strong>, or <strong>Below</strong>, then submit your self-review.
+            </div>
+          );
+          if (status === KPI_STATUS.EMPLOYEE_SUBMITTED) return (
+            <div className="px-6 py-1.5 text-xs font-medium flex items-center gap-2 bg-purple-50 text-purple-700 border-b border-purple-100">
+              <span className="w-2 h-2 rounded-full flex-shrink-0 bg-purple-400" />
+              Self-review submitted — awaiting manager review.
+            </div>
+          );
+          if (status === KPI_STATUS.MANAGER_REVIEWED) return (
+            <div className="px-6 py-1.5 text-xs font-medium flex items-center gap-2 bg-indigo-50 text-indigo-700 border-b border-indigo-100">
+              <span className="w-2 h-2 rounded-full flex-shrink-0 bg-indigo-400" />
+              Manager review complete — pending final approver sign-off.
+            </div>
+          );
+          return null;
+        })()}
+
+        {loading ? (
+          <div className="flex justify-center py-20"><LoadingSpinner /></div>
+        ) : !currentAssignment ? (
+          <div className="flex flex-col items-center justify-center py-20 text-gray-400 gap-2">
+            <HiOutlineClipboardList className="h-14 w-14 text-gray-300" />
+            <p className="text-base font-medium text-gray-500">No KPI assignment for {getMonthName(selectedMonth)} {fy}</p>
+            <p className="text-sm text-gray-400">KPIs will appear here once your HR Admin publishes a plan for your department.</p>
+          </div>
+        ) : (
+          <div>
+            {/* ── KPI Head Cards (matches admin grid) ─────────────────────── */}
+            <div className="bg-white border-b border-gray-200 px-6 py-4">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                {KPI_HEADS.map((head) => {
+                  const s = HEAD_STYLES[head];
+                  const isActive = activeHead === head;
+                  const wt = headWt(head);
+                  const cnt = headCount(head);
+                  return (
+                    <button
+                      key={head}
+                      onClick={() => setActiveHead(head)}
+                      className={`rounded-xl border-2 px-4 py-3 text-left transition-all cursor-pointer hover:shadow-md ${
+                        isActive ? s.active + ' shadow-sm' : 'border-gray-200 bg-white hover:border-gray-300'
+                      }`}
+                    >
+                      <div className={`text-xs font-semibold mb-1 ${isActive ? '' : 'text-gray-500'}`}>
+                        {KPI_HEAD_LABELS[head]}
+                      </div>
+                      <div className={`text-2xl font-bold ${isActive ? '' : 'text-gray-700'}`}>
+                        {wt}%
+                      </div>
+                      {cnt > 0 && (
+                        <div className={`text-[10px] font-medium mt-0.5 ${isActive ? '' : 'text-gray-400'}`}>
+                          {cnt} KPI{cnt !== 1 ? 's' : ''}
+                        </div>
+                      )}
+                    </button>
+                  );
+                })}
               </div>
+            </div>
 
-              {/* Achievement mode: show commitment context */}
-              {isAchieve && (
-                <CommitVsAchieveRow
-                  commitmentStatus={item.employeeCommitmentStatus}
-                  commitmentComment={item.employeeCommitmentComment}
-                  achievementStatus={fd.status || null}
-                  achievementComment={fd.comment || null}
-                />
-              )}
-
-              {/* Read-only mode: 4-badge timeline */}
-              {isReadOnly && (
-                <div className="flex flex-wrap gap-2 mt-1">
-                  {item.employeeCommitmentStatus && (
-                    <span className="text-xs px-2 py-0.5 rounded-full bg-primary-100 text-primary-700 font-medium">
-                      Committed: {item.employeeCommitmentStatus}
-                    </span>
-                  )}
-                  {item.employeeStatus && (
-                    <span className="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 font-medium">
-                      Achieved: {item.employeeStatus}
-                    </span>
-                  )}
-                  {item.managerStatus && (
-                    <span className="text-xs px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 font-medium">
-                      Manager: {item.managerStatus}
-                    </span>
-                  )}
-                  {item.finalApproverStatus && (
-                    <span className="text-xs px-2 py-0.5 rounded-full bg-cyan-100 text-cyan-700 font-medium">
-                      Final: {item.finalApproverStatus}
-                    </span>
-                  )}
-                  {/* Legacy fallback */}
-                  {!item.employeeStatus && item.employeeValue != null && (
-                    <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">
-                      Legacy value: {item.employeeValue}
-                    </span>
-                  )}
-                  {!item.managerStatus && item.managerScore != null && (
-                    <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">
-                      Legacy mgr: {formatScore(item.managerScore)}
-                    </span>
-                  )}
+            {/* ── KPI Table ────────────────────────────────────────────────── */}
+            <div className="p-4 overflow-x-auto">
+              {itemsLoading ? (
+                <div className="flex justify-center py-12"><LoadingSpinner /></div>
+              ) : headItems.length === 0 ? (
+                <div className="text-center py-14 text-gray-400 border-2 border-dashed border-gray-200 rounded-xl">
+                  <HiOutlineClipboardList className="h-10 w-10 mx-auto mb-2 text-gray-300" />
+                  <p className="font-medium">No KPIs in {KPI_HEAD_LABELS[activeHead]}</p>
                 </div>
+              ) : (
+                <table className="w-full text-sm border-collapse">
+                  <thead>
+                    <tr className="bg-gray-100 text-gray-600 text-xs uppercase tracking-wide">
+                      <th className="px-3 py-2.5 text-center w-10 border border-gray-200">#</th>
+                      <th className="px-3 py-2.5 text-left border border-gray-200 min-w-[220px]">KPI</th>
+                      <th className="px-3 py-2.5 text-left border border-gray-200 min-w-[180px]">Target Definition</th>
+                      <th className="px-3 py-2.5 text-center border border-gray-200 w-20">Wt%</th>
+                      <th className="px-3 py-2.5 text-center border border-gray-200 w-24 text-violet-600">Monthly Wt%</th>
+                      {showCommitCol && (
+                        <th className="px-3 py-2.5 text-center border border-gray-200 min-w-[150px] text-blue-600">Commitment Definition</th>
+                      )}
+                      {showSelfReviewCol && canSelfReview && (
+                        <th className="px-3 py-2.5 text-center border border-gray-200 min-w-[220px] text-amber-600" colSpan={2}>
+                          Self-Review &amp; Note
+                        </th>
+                      )}
+                      {showSelfReviewCol && !canSelfReview && (
+                        <>
+                          <th className="px-3 py-2.5 text-center border border-gray-200 min-w-[110px] text-amber-600">Self-Review</th>
+                          <th className="px-3 py-2.5 text-center border border-gray-200 min-w-[110px] text-amber-500">Review Note</th>
+                        </>
+                      )}
+                      {showManagerCol && (
+                        <th className="px-3 py-2.5 text-center border border-gray-200 min-w-[100px] text-purple-600">Mgr Review</th>
+                      )}
+                      {showFinalCol && (
+                        <th className="px-3 py-2.5 text-center border border-gray-200 min-w-[110px] text-emerald-600">Final Approval</th>
+                      )}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {headItems.map((item, idx) => {
+                      const itemId = item._id || item.id;
+                      const edit = editMap[itemId] || {};
+                      return (
+                        <tr key={itemId} className="border-b border-gray-200 bg-white hover:bg-gray-50 transition-colors align-top">
+                          <td className="px-3 py-3 text-center text-gray-400 text-xs border border-gray-200">{idx + 1}</td>
+
+                          {/* KPI column */}
+                          <td className="px-3 py-3 border border-gray-200">
+                            <span className="font-medium text-gray-800 block">{item.title}</span>
+                            <div className="flex items-center gap-1.5 mt-1">
+                              <span className="text-[10px] bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded">{item.category}</span>
+                              <span className="text-[10px] text-gray-400">{item.unit}</span>
+                            </div>
+                          </td>
+
+                          {/* Target Definition column */}
+                          <td className="px-3 py-3 border border-gray-200">
+                            {item.description && (
+                              <span className="text-sm text-gray-600 block mb-1">{item.description}</span>
+                            )}
+                            <div className="space-y-0.5">
+                              {item.targetValue != null && (
+                                <span className="text-xs text-gray-500 block">Target: <strong className="text-gray-700">{Number(item.targetValue)}</strong></span>
+                              )}
+                              {item.thresholdValue != null && (
+                                <span className="text-xs text-gray-400 block">Min: {Number(item.thresholdValue)}</span>
+                              )}
+                              {item.stretchTarget != null && (
+                                <span className="text-xs text-emerald-600 block">Stretch: {Number(item.stretchTarget)}</span>
+                              )}
+                            </div>
+                          </td>
+
+                          {/* Wt% column */}
+                          <td className="px-3 py-3 text-center border border-gray-200">
+                            <span className="font-semibold text-gray-700">{item.weightage}%</span>
+                          </td>
+
+                          {/* Monthly Wt% column */}
+                          <td className="px-3 py-3 text-center border border-gray-200">
+                            <span className="font-bold text-violet-600">
+                              {(Number(item.weightage || 0) / 12).toFixed(2)}%
+                            </span>
+                          </td>
+
+                          {/* Commitment Value */}
+                          {showCommitCol && (
+                            <td className="px-2 py-2 text-center border border-gray-200">
+                              {canCommit ? (
+                                <input
+                                  type="text"
+                                  value={edit.commitValue || ''}
+                                  onChange={(e) => updateEdit(itemId, 'commitValue', e.target.value)}
+                                  placeholder="Commitment Definition"
+                                  className="input-field text-xs py-1.5 px-2 w-full text-center"
+                                />
+                              ) : (
+                                <span className={`text-xs font-medium px-2 py-0.5 rounded-full inline-block ${
+                                  item.commitValue ? 'bg-blue-50 text-blue-700' : 'text-gray-400'
+                                }`}>
+                                  {item.commitValue || '—'}
+                                </span>
+                              )}
+                            </td>
+                          )}
+
+
+                          {/* Self-Review Status + Note (combined cell when editable) */}
+                          {showSelfReviewCol && (
+                            <td className="px-2 py-2 text-center border border-gray-200" colSpan={canSelfReview ? 2 : 1}>
+                              {canSelfReview ? (
+                                <div className="flex flex-col gap-1.5 items-center">
+                                  {/* Status dropdown */}
+                                  <select
+                                    value={edit.employeeStatus || ''}
+                                    onChange={(e) => updateEdit(itemId, 'employeeStatus', e.target.value)}
+                                    className="input-field text-xs py-1 px-2 w-full"
+                                  >
+                                    <option value="">-- Select Status --</option>
+                                    <option value="Exceeds">Exceeds</option>
+                                    <option value="Meets">Meets</option>
+                                    <option value="Below">Below</option>
+                                  </select>
+                                  {/* Comment input */}
+                                  <input
+                                    type="text"
+                                    value={edit.employeeComment || ''}
+                                    onChange={(e) => updateEdit(itemId, 'employeeComment', e.target.value)}
+                                    placeholder="Add a note (optional)"
+                                    className="input-field text-xs py-1 px-2 w-full"
+                                  />
+                                </div>
+                              ) : (
+                                <span className={`text-xs font-semibold px-2 py-0.5 rounded-full inline-block ${
+                                  item.employeeStatus
+                                    ? (SUBMIT_COLORS[item.employeeStatus] || 'bg-gray-100 text-gray-600')
+                                    : 'text-gray-400'
+                                }`}>
+                                  {item.employeeStatus || '—'}
+                                </span>
+                              )}
+                            </td>
+                          )}
+
+                          {/* Self-Review Note — separate column only when read-only */}
+                          {showSelfReviewCol && !canSelfReview && (
+                            <td className="px-2 py-2 text-center border border-gray-200">
+                              <span className="text-xs text-gray-500 block text-left">
+                                {item.employeeComment || '—'}
+                              </span>
+                            </td>
+                          )}
+
+                          {/* Manager Review */}
+                          {showManagerCol && (
+                            <td className="px-3 py-3 text-center border border-gray-200">
+                              <span className={`text-xs font-semibold px-2 py-0.5 rounded-full inline-block ${
+                                item.managerStatus
+                                  ? (SUBMIT_COLORS[item.managerStatus] || 'bg-gray-100 text-gray-600')
+                                  : 'text-gray-400'
+                              }`}>
+                                {item.managerStatus || '—'}
+                              </span>
+                            </td>
+                          )}
+
+                          {/* Final Approval */}
+                          {showFinalCol && (
+                            <td className="px-3 py-3 text-center border border-gray-200">
+                              <span className={`text-xs font-semibold px-2 py-0.5 rounded-full inline-block ${
+                                item.finalApproverStatus
+                                  ? (SUBMIT_COLORS[item.finalApproverStatus] || 'bg-gray-100 text-gray-600')
+                                  : 'text-gray-400'
+                              }`}>
+                                {item.finalApproverStatus || '—'}
+                              </span>
+                              {item.finalApproverAchievedWeightage != null && (
+                                <div className="text-[10px] text-emerald-600 mt-0.5">
+                                  {Number(item.finalApproverAchievedWeightage).toFixed(1)}% credited
+                                </div>
+                              )}
+                            </td>
+                          )}
+                        </tr>
+                      );
+                    })}
+
+                    {/* Head totals row — matches admin style */}
+                    <tr className="bg-gray-50 font-semibold text-sm">
+                      <td colSpan={3} className="px-3 py-2.5 text-right text-gray-600 border border-gray-200">
+                        {KPI_HEAD_LABELS[activeHead]} Total:
+                      </td>
+                      <td className="px-2 py-2.5 text-center border border-gray-200">
+                        <span className="font-bold text-base text-gray-800">{headItemsWeightTotal}%</span>
+                      </td>
+                      <td className="px-2 py-2.5 text-center border border-gray-200">
+                        <span className="font-bold text-base text-violet-700">
+                          {(headItemsWeightTotal / 12).toFixed(2)}%
+                        </span>
+                      </td>
+                      {showCommitCol && <td className="border border-gray-200" />}
+                      {showSelfReviewCol && <td colSpan={2} className="border border-gray-200" />}
+                      {showManagerCol && <td className="border border-gray-200" />}
+                      {showFinalCol && <td className="border border-gray-200" />}
+                    </tr>
+                  </tbody>
+                </table>
               )}
 
-              {/* Editable form */}
-              {canAct && (
-                <div className="space-y-2">
-                  <p className="text-xs font-medium text-gray-600">
-                    {isCommit ? 'I commit to achieving:' : 'I actually achieved:'}
+              {/* Bottom submit bar */}
+              {(canCommit || canSelfReview) && (
+                <div className="flex items-center justify-between mt-4 pt-4 border-t border-gray-200 flex-wrap gap-3">
+                  <p className="text-xs text-gray-400">
+                    {canCommit
+                      ? 'Fill in your commitment definition. Save Draft to preserve progress, or Submit Commitment to send for manager approval.'
+                      : 'Select status for all KPI items. Save Draft to preserve progress, or Submit Self-Review to finalise (cannot be changed after submission).'}
                   </p>
-                  <StatusSelector
-                    value={fd.status || ''}
-                    onChange={(v) => onFormChange(id, 'status', v)}
-                    size="sm"
-                  />
-                  <input
-                    type="text"
-                    value={fd.comment || ''}
-                    onChange={(e) => onFormChange(id, 'comment', e.target.value)}
-                    className="input-field text-sm"
-                    placeholder={isCommit ? 'Your plan to achieve this (optional)' : 'Notes / explanation (optional)'}
-                  />
+                  <div className="flex items-center gap-2">
+                    {(canCommit || canSelfReview) && (
+                      <button
+                        onClick={handleSaveDraft}
+                        disabled={submitting}
+                        className="btn-secondary text-sm flex items-center gap-2 disabled:opacity-50"
+                      >
+                        {submitting
+                          ? <HiOutlineRefresh className="w-4 h-4 animate-spin" />
+                          : <HiOutlineSave className="w-4 h-4" />}
+                        Save Draft
+                      </button>
+                    )}
+                    {canCommit && (
+                      <button
+                        onClick={handleSubmitCommitment}
+                        disabled={submitting}
+                        className="btn-primary text-sm flex items-center gap-2 disabled:opacity-50"
+                      >
+                        {submitting
+                          ? <HiOutlineRefresh className="w-4 h-4 animate-spin" />
+                          : <HiOutlineClipboardCheck className="w-4 h-4" />}
+                        Submit Commitment
+                      </button>
+                    )}
+                    {canSelfReview && (
+                      <button
+                        onClick={handleSubmitSelfReview}
+                        disabled={submitting}
+                        className="btn-success text-sm flex items-center gap-2 disabled:opacity-50"
+                      >
+                        {submitting
+                          ? <HiOutlineRefresh className="w-4 h-4 animate-spin" />
+                          : <HiOutlineCheckCircle className="w-4 h-4" />}
+                        Submit Self-Review
+                      </button>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
-          );
-        })}
-      </div>
-
-      {/* Submit button */}
-      {canAct && (
-        <div className="flex items-center gap-3 pt-1">
-          <button
-            onClick={onSubmit}
-            disabled={submitting}
-            className="btn-primary text-sm"
-          >
-            {submitting
-              ? 'Submitting...'
-              : isCommit
-              ? 'Submit Commitment'
-              : 'Submit Achievement'}
-          </button>
-          <span className="text-xs text-gray-400">
-            {filled}/{items.length} items filled
-          </span>
-        </div>
-      )}
-
-      <div className="text-right">
-        <button onClick={onNavigate} className="text-xs text-primary-600 hover:underline">
-          Open full detail view →
-        </button>
+          </div>
+        )}
       </div>
     </div>
   );
 }
+

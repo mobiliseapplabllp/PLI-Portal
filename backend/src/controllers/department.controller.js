@@ -1,4 +1,6 @@
 const departmentService = require('../services/department.service');
+const User = require('../models/User');
+const { Op } = require('sequelize');
 const { sendSuccess } = require('../utils/response');
 
 const getDepartments = async (req, res, next) => {
@@ -28,4 +30,19 @@ const updateDepartment = async (req, res, next) => {
   }
 };
 
-module.exports = { getDepartments, createDepartment, updateDepartment };
+const getDepartmentRoles = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const users = await User.findAll({
+      where: { departmentId: id, role: { [Op.not]: null }, isActive: true },
+      attributes: ['role'],
+    });
+    // Deduplicate in JS to avoid MySQL strict-mode GROUP BY issues
+    const roles = [...new Set(users.map((u) => u.role))];
+    sendSuccess(res, roles);
+  } catch (error) {
+    next(error);
+  }
+};
+
+module.exports = { getDepartments, createDepartment, updateDepartment, getDepartmentRoles };
