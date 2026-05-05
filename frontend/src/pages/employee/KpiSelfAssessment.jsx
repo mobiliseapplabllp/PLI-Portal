@@ -9,7 +9,7 @@ import WorkflowStepper from '../../components/common/WorkflowStepper';
 import DeadlineCountdown from '../../components/common/DeadlineCountdown';
 import toast from 'react-hot-toast';
 import { getMonthName, formatScore } from '../../utils/formatters';
-import { KPI_STATUS } from '../../utils/constants';
+import { KPI_STATUS, KPI_HEAD_LABELS } from '../../utils/constants';
 import { HiOutlinePaperClip, HiOutlineDownload, HiOutlineX, HiOutlineSave } from 'react-icons/hi';
 
 // ── Compact inline status picker ─────────────────────────────────────────────
@@ -85,15 +85,50 @@ export default function KpiSelfAssessment() {
   const handleCommitSubmit = async () => {
     const items = currentItems.map((item) => {
       const id = item._id || item.id;
-      return { id, commitValue: formData[id]?.commitValue || '', employeeCommitmentComment: formData[id]?.employeeCommitmentComment || '' };
+      return {
+        id,
+        title: item.title,
+        kpiHead: item.kpiHead || 'Performance',
+        commitValue: formData[id]?.commitValue || '',
+        employeeCommitmentComment: formData[id]?.employeeCommitmentComment || '',
+      };
     });
-    if (items.some((i) => !i.commitValue?.trim())) {
-      toast.error('Please enter a committed value for all KPI items');
+
+    const blankItems = items.filter((i) => !i.commitValue?.trim());
+    if (blankItems.length > 0) {
+      const byHead = {};
+      blankItems.forEach((i) => {
+        const head = i.kpiHead || 'Performance';
+        if (!byHead[head]) byHead[head] = [];
+        byHead[head].push(i.title);
+      });
+      toast(
+        (t) => (
+          <div className="flex items-start gap-3">
+            <div className="flex-1 min-w-0">
+              <p className="font-semibold text-sm text-red-800 mb-1">
+                Commitment Definition missing for {blankItems.length} KPI{blankItems.length > 1 ? 's' : ''}:
+              </p>
+              {Object.entries(byHead).map(([head, titles]) => (
+                <div key={head} className="mt-0.5">
+                  <span className="font-medium text-xs underline text-red-700">{KPI_HEAD_LABELS[head] || head}</span>
+                  {titles.map((title) => <div key={title} className="ml-2 text-xs text-red-600">• {title}</div>)}
+                </div>
+              ))}
+            </div>
+            <button onClick={() => toast.dismiss(t.id)} className="flex-shrink-0 text-red-400 hover:text-red-600 mt-0.5">
+              <HiOutlineX className="w-4 h-4" />
+            </button>
+          </div>
+        ),
+        { duration: Infinity, style: { background: '#fef2f2', border: '1px solid #fecaca' } }
+      );
       return;
     }
+
     setSubmitting(true);
     try {
-      await commitKpiApi(assignmentId, items);
+      await commitKpiApi(assignmentId, items.map(({ id, commitValue, employeeCommitmentComment }) => ({ id, commitValue, employeeCommitmentComment })));
       toast.success('Commitment submitted successfully');
       navigate('/employee/kpis');
     } catch (err) {

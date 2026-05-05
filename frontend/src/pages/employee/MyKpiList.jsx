@@ -29,6 +29,7 @@ import {
   HiOutlineRefresh,
   HiOutlineCheckCircle,
   HiOutlineSave,
+  HiOutlineX,
 } from 'react-icons/hi';
 
 // Indian FY months in order: Apr → Mar
@@ -151,14 +152,55 @@ export default function MyKpiList() {
   const handleSubmitCommitment = async () => {
     const assignmentId = currentAssignment?._id;
     if (!assignmentId) return;
+
     const payload = items.map((item) => {
       const id = item._id || item.id;
       const e = editMap[id] || {};
-      return { id, commitValue: e.commitValue || '', employeeCommitmentComment: e.employeeCommitmentComment || '' };
+      return {
+        id,
+        title: item.title,
+        kpiHead: item.kpiHead || 'Performance',
+        commitValue: e.commitValue || '',
+        employeeCommitmentComment: e.employeeCommitmentComment || '',
+      };
     });
+
+    const blankItems = payload.filter((i) => !i.commitValue?.trim());
+    if (blankItems.length > 0) {
+      const byHead = {};
+      blankItems.forEach((i) => {
+        const head = i.kpiHead || 'Performance';
+        if (!byHead[head]) byHead[head] = [];
+        byHead[head].push(i.title);
+      });
+      toast(
+        (t) => (
+          <div className="flex items-start gap-3">
+            <div className="flex-1 min-w-0">
+              <p className="font-semibold text-sm text-red-800 mb-1">
+                Commitment Definition missing for {blankItems.length} KPI{blankItems.length > 1 ? 's' : ''}:
+              </p>
+              {Object.entries(byHead).map(([head, titles]) => (
+                <div key={head} className="mt-0.5">
+                  <span className="font-medium text-xs underline text-red-700">{KPI_HEAD_LABELS[head] || head}</span>
+                  {titles.map((title) => <div key={title} className="ml-2 text-xs text-red-600">• {title}</div>)}
+                </div>
+              ))}
+            </div>
+            <button onClick={() => toast.dismiss(t.id)} className="flex-shrink-0 text-red-400 hover:text-red-600 mt-0.5">
+              <HiOutlineX className="w-4 h-4" />
+            </button>
+          </div>
+        ),
+        { duration: Infinity, style: { background: '#fef2f2', border: '1px solid #fecaca' } }
+      );
+      return;
+    }
+
+    const cleanPayload = payload.map(({ id, commitValue, employeeCommitmentComment }) => ({ id, commitValue, employeeCommitmentComment }));
     setSubmitting(true);
     try {
-      await commitKpiApi(assignmentId, payload);
+      await commitKpiApi(assignmentId, cleanPayload);
       toast.success('Commitment submitted successfully!');
       await loadAssignments();
       await fetchItems(assignmentId);
