@@ -20,8 +20,8 @@
     "mysql2": "^3.11.0",
     "sequelize": "^6.37.3",
     "morgan": "^1.10.0",
-    "multer": "^1.4.5-lts.1",
-    "nodemailer": "^6.9.14",
+    "multer": "^2.1.1",
+    "nodemailer": "^8.0.5",
     "pdfkit": "^0.15.0"
   },
   "devDependencies": {
