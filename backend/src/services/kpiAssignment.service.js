@@ -306,6 +306,8 @@ const commitKpi = async (id, itemsData, user) => {
 
   const now = new Date();
   for (const item of itemsData) {
+    const existing = await KpiItem.findOne({ where: { id: item.id, kpiAssignmentId: id }, attributes: ['managerCommitmentApproval'] });
+    if (existing?.managerCommitmentApproval === 'approved') continue;
     await KpiItem.update(
       {
         commitValue: item.commitValue != null ? String(item.commitValue) : null,
@@ -540,6 +542,10 @@ const saveDraft = async (id, itemsData, user) => {
   }
 
   for (const item of itemsData) {
+    if (isCommitPhase) {
+      const existing = await KpiItem.findOne({ where: { id: item.id, kpiAssignmentId: id }, attributes: ['managerCommitmentApproval'] });
+      if (existing?.managerCommitmentApproval === 'approved') continue;
+    }
     let fields;
     if (isCommitPhase) {
       fields = { commitValue: item.commitValue != null ? String(item.commitValue) : null, employeeCommitmentComment: item.employeeCommitmentComment || null };

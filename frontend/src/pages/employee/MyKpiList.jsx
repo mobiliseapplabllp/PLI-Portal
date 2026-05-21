@@ -74,6 +74,7 @@ export default function MyKpiList() {
   const [loading, setLoading] = useState(false);
   const [itemsLoading, setItemsLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [savingDraft, setSavingDraft] = useState(false);
   const [activeHead, setActiveHead] = useState(KPI_HEADS[0]);
 
   const loadAssignments = useCallback(async () => {
@@ -221,7 +222,7 @@ export default function MyKpiList() {
         ? { id, commitValue: e.commitValue || '', employeeCommitmentComment: e.employeeCommitmentComment || '' }
         : { id, employeeStatus: e.employeeStatus || '', employeeComment: e.employeeComment || '' };
     });
-    setSubmitting(true);
+    setSavingDraft(true);
     try {
       await saveDraftApi(assignmentId, payload);
       toast.success('Draft saved successfully!');
@@ -229,7 +230,7 @@ export default function MyKpiList() {
     } catch (err) {
       toast.error(err.response?.data?.error?.message || 'Failed to save draft');
     } finally {
-      setSubmitting(false);
+      setSavingDraft(false);
     }
   };
 
@@ -464,6 +465,8 @@ export default function MyKpiList() {
                     {headItems.map((item, idx) => {
                       const itemId = item._id || item.id;
                       const edit = editMap[itemId] || {};
+                      const isRejectedItem = canCommit && item.managerCommitmentApproval === 'rejected';
+                      const isApprovedItem = canCommit && item.managerCommitmentApproval === 'approved';
                       return (
                         <tr key={itemId} className="border-b border-gray-200 bg-white hover:bg-gray-50 transition-colors align-top">
                           <td className="px-3 py-3 text-center text-gray-400 text-xs border border-gray-200">{idx + 1}</td>
@@ -509,15 +512,37 @@ export default function MyKpiList() {
 
                           {/* Commitment Value */}
                           {showCommitCol && (
-                            <td className="px-2 py-2 text-center border border-gray-200">
+                            <td className={`px-2 py-2 text-center border ${
+                              isApprovedItem ? 'border-green-300 bg-green-50' :
+                              isRejectedItem ? 'border-red-300 bg-red-50' :
+                              'border-gray-200'
+                            }`}>
                               {canCommit ? (
-                                <input
-                                  type="text"
-                                  value={edit.commitValue || ''}
-                                  onChange={(e) => updateEdit(itemId, 'commitValue', e.target.value)}
-                                  placeholder="Commitment Definition"
-                                  className="input-field text-xs py-1.5 px-2 w-full text-center"
-                                />
+                                <div className="flex flex-col gap-1.5">
+                                  {isApprovedItem ? (
+                                    <div className="flex items-start gap-1.5 justify-center">
+                                      <HiOutlineCheckCircle className="w-4 h-4 text-green-600 flex-shrink-0 mt-0.5" />
+                                      <span className="text-xs text-green-800 font-medium text-left leading-snug">
+                                        {item.commitValue || '—'}
+                                      </span>
+                                    </div>
+                                  ) : (
+                                    <div className="relative">
+                                      {isRejectedItem && (
+                                        <HiOutlineX className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-red-400 pointer-events-none z-10" />
+                                      )}
+                                      <input
+                                        type="text"
+                                        value={edit.commitValue || ''}
+                                        onChange={(e) => updateEdit(itemId, 'commitValue', e.target.value)}
+                                        placeholder="Commitment Definition"
+                                        className={`input-field text-xs py-1.5 w-full text-center ${
+                                          isRejectedItem ? 'pl-6 pr-2 border-red-300 focus:border-red-400 focus:ring-red-200' : 'px-2'
+                                        }`}
+                                      />
+                                    </div>
+                                  )}
+                                </div>
                               ) : (
                                 <span className={`text-xs font-medium px-2 py-0.5 rounded-full inline-block ${
                                   item.commitValue ? 'bg-blue-50 text-blue-700' : 'text-gray-400'
@@ -643,10 +668,10 @@ export default function MyKpiList() {
                     {(canCommit || canSelfReview) && (
                       <button
                         onClick={handleSaveDraft}
-                        disabled={submitting}
+                        disabled={savingDraft || submitting}
                         className="btn-secondary text-sm flex items-center gap-2 disabled:opacity-50"
                       >
-                        {submitting
+                        {savingDraft
                           ? <HiOutlineRefresh className="w-4 h-4 animate-spin" />
                           : <HiOutlineSave className="w-4 h-4" />}
                         Save Draft

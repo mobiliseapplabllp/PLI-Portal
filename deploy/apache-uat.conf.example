@@ -1,0 +1,37 @@
+# Apache 2.4 Virtual Host — UAT environment
+# Domain  : lakshyauat.onmobilise.com
+# Backend : 127.0.0.1:5106
+# Frontend: /home/lakshyauat/PLI-Portal-uat/frontend/dist
+#
+# Steps:
+#   1. Copy this file to /etc/apache2/sites-available/lakshyauat.onmobilise.com.conf
+#   2. sudo a2ensite lakshyauat.onmobilise.com
+#   3. sudo systemctl reload apache2
+
+<VirtualHost *:80>
+    ServerName lakshyauat.onmobilise.com
+    Redirect permanent / https://lakshyauat.onmobilise.com/
+</VirtualHost>
+
+<VirtualHost *:443>
+    ServerName lakshyauat.onmobilise.com
+
+    DocumentRoot /home/lakshyauat/PLI-Portal-uat/frontend/dist
+
+    <Directory /home/lakshyauat/PLI-Portal-uat/frontend/dist>
+        Options -Indexes +FollowSymLinks
+        AllowOverride None
+        Require all granted
+        FallbackResource /index.html
+    </Directory>
+
+    ProxyPreserveHost On
+    ProxyPass        /api      http://127.0.0.1:5106/api
+    ProxyPassReverse /api      http://127.0.0.1:5106/api
+    ProxyPass        /uploads  http://127.0.0.1:5106/uploads
+    ProxyPassReverse /uploads  http://127.0.0.1:5106/uploads
+
+    SSLEngine on
+    SSLCertificateFile    /etc/letsencrypt/live/lakshyauat.onmobilise.com/fullchain.pem
+    SSLCertificateKeyFile /etc/letsencrypt/live/lakshyauat.onmobilise.com/privkey.pem
+</VirtualHost>
