@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import { fetchAssignmentDetail } from '../../store/kpiSlice';
-import { commitKpiApi, saveDraftApi, employeeSubmitApi, downloadEmployeeAttachmentApi } from '../../api/kpiAssignments.api';
+import { commitKpiApi, saveDraftApi, employeeSubmitApi, downloadEmployeeAttachmentApi, uploadItemAttachmentApi, downloadItemAttachmentApi, deleteItemAttachmentApi } from '../../api/kpiAssignments.api';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
 import Breadcrumbs from '../../components/common/Breadcrumbs';
 import WorkflowStepper from '../../components/common/WorkflowStepper';
@@ -47,12 +47,15 @@ export default function KpiSelfAssessment() {
   const [achieveFile, setAchieveFile] = useState(null);
   const achieveFileRef = useRef(null);
   const [submitting, setSubmitting] = useState(false);
+  const [itemAttachments, setItemAttachments] = useState({});
+  const [uploadingItem, setUploadingItem] = useState(null);
 
   useEffect(() => { dispatch(fetchAssignmentDetail(assignmentId)); }, [dispatch, assignmentId]);
 
   useEffect(() => {
     if (currentItems.length > 0) {
       const init = {};
+      const attachInit = {};
       currentItems.forEach((item) => {
         const id = item._id || item.id;
         init[id] = {
@@ -61,10 +64,46 @@ export default function KpiSelfAssessment() {
           employeeStatus: item.employeeStatus || '',
           employeeComment: item.employeeComment || '',
         };
+        if (item.selfReviewAttachmentName) {
+          attachInit[id] = { name: item.selfReviewAttachmentName };
+        }
       });
       setFormData(init);
+      setItemAttachments(attachInit);
     }
   }, [currentItems]);
+
+  const handleItemFileChange = async (itemId, file) => {
+    if (!file) return;
+    setUploadingItem(itemId);
+    try {
+      await uploadItemAttachmentApi(assignmentId, itemId, file);
+      setItemAttachments((prev) => ({ ...prev, [itemId]: { name: file.name } }));
+      toast.success('Attachment uploaded');
+    } catch (err) {
+      toast.error(err.response?.data?.error?.message || 'Upload failed');
+    } finally { setUploadingItem(null); }
+  };
+
+  const handleItemFileRemove = async (itemId) => {
+    try {
+      await deleteItemAttachmentApi(assignmentId, itemId);
+      setItemAttachments((prev) => { const n = { ...prev }; delete n[itemId]; return n; });
+      toast.success('Attachment removed');
+    } catch (err) {
+      toast.error('Could not remove attachment');
+    }
+  };
+
+  const handleItemFileDownload = async (itemId, fileName) => {
+    try {
+      const res = await downloadItemAttachmentApi(assignmentId, itemId);
+      const url = URL.createObjectURL(res.data);
+      const a = document.createElement('a');
+      a.href = url; a.download = fileName || 'attachment'; a.click();
+      URL.revokeObjectURL(url);
+    } catch { toast.error('Could not download attachment'); }
+  };
 
   const status = currentAssignment?.status;
   const isCommitMode     = status === KPI_STATUS.ASSIGNED;
@@ -189,7 +228,7 @@ export default function KpiSelfAssessment() {
   const monthlyWt     = (Number(currentAssignment.totalWeightage || totalWt || 0) / 12).toFixed(2);
 
   // Column counts for colspan in totals row
-  const extraCols = isCommitMode || isPending ? 2 : isAchieveMode ? 3 : 4;
+  const extraCols = isCommitMode || isPending ? 2 : isAchieveMode ? 4 : 4;
 
   return (
     <div className="space-y-5">
@@ -289,6 +328,7 @@ export default function KpiSelfAssessment() {
                     Achievement<span className="text-red-400 ml-0.5">*</span>
                   </th>
                   <th className="px-3 py-3 text-left min-w-[160px]">Notes</th>
+                  <th className="px-3 py-3 text-center min-w-[100px]">Attachment</th>
                 </>}
 
                 {/* Read-only columns */}
@@ -409,6 +449,32 @@ export default function KpiSelfAssessment() {
                           rows={2}
                           placeholder="Optional note"
                         />
+                      </td>
+                      {/* Per-item attachment */}
+                      <td className="px-2 py-2 align-top">
+                        {itemAttachments[id] ? (
+                          <div className="flex flex-col gap-1">
+                            <div className="flex items-center gap-1 text-xs text-gray-600 bg-gray-50 border border-gray-200 rounded px-2 py-1">
+                              <HiOutlinePaperClip className="w-3.5 h-3.5 flex-shrink-0 text-gray-400" />
+                              <span className="truncate max-w-[90px]" title={itemAttachments[id].name}>{itemAttachments[id].name}</span>
+                            </div>
+                            <div className="flex gap-1">
+                              <button onClick={() => handleItemFileDownload(id, itemAttachments[id].name)} className="text-[10px] text-primary-600 hover:underline flex items-center gap-0.5">
+                                <HiOutlineDownload className="w-3 h-3" /> Download
+                              </button>
+                              <span className="text-gray-300">·</span>
+                              <button onClick={() => handleItemFileRemove(id)} className="text-[10px] text-red-500 hover:underline flex items-center gap-0.5">
+                                <HiOutlineX className="w-3 h-3" /> Remove
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <label className={`cursor-pointer inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-dashed border-gray-300 text-gray-500 hover:border-primary-400 hover:text-primary-600 transition-colors ${uploadingItem === id ? 'opacity-50 pointer-events-none' : ''}`}>
+                            <HiOutlinePaperClip className="w-3.5 h-3.5" />
+                            {uploadingItem === id ? 'Uploading...' : 'Attach'}
+                            <input type="file" className="hidden" onChange={(e) => handleItemFileChange(id, e.target.files[0])} />
+                          </label>
+                        )}
                       </td>
                     </>}
 

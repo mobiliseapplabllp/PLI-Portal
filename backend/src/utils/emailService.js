@@ -173,6 +173,109 @@ const sendManagerReviewedEmail = async (adminEmail, adminName, month, year) => {
   return sendEmail(adminEmail, subject, html);
 };
 
+/**
+ * Remind employee that commitment deadline is approaching.
+ */
+const sendCommitmentDeadlineReminderEmail = async (employeeEmail, employeeName, month, year, deadline, daysLeft) => {
+  const urgency = daysLeft <= 1 ? '#dc2626' : daysLeft <= 3 ? '#d97706' : '#1e40af';
+  const subject = `Action Required: KPI Commitment Due in ${daysLeft} Day${daysLeft === 1 ? '' : 's'} — ${month} ${year}`;
+  const html = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+      <h2 style="color: ${urgency};">KPI Commitment Deadline Reminder</h2>
+      <p>Dear <strong>${employeeName}</strong>,</p>
+      <p>Your KPI commitment for <strong>${month} ${year}</strong> is due in <strong>${daysLeft} day${daysLeft === 1 ? '' : 's'}</strong> (by <strong>${deadline}</strong>).</p>
+      <p>Please log in to the PLI Portal and submit your KPI commitment before the deadline.</p>
+      <p style="margin-top: 24px;">
+        <a href="${process.env.FRONTEND_URL || 'http://localhost:5173'}/employee/my-kpis"
+           style="background-color: ${urgency}; color: white; padding: 10px 24px; text-decoration: none; border-radius: 6px;">
+          Submit Commitment Now
+        </a>
+      </p>
+      <hr style="margin-top: 32px; border: none; border-top: 1px solid #e5e7eb;" />
+      <p style="font-size: 12px; color: #6b7280;">This is an automated reminder from the PLI Portal.</p>
+    </div>
+  `;
+  return sendEmail(employeeEmail, subject, html);
+};
+
+/**
+ * Remind employee that self-review (achievement submission) deadline is approaching.
+ */
+const sendSelfReviewDeadlineReminderEmail = async (employeeEmail, employeeName, month, year, deadline, daysLeft) => {
+  const urgency = daysLeft <= 1 ? '#dc2626' : daysLeft <= 3 ? '#d97706' : '#1e40af';
+  const subject = `Action Required: KPI Self-Review Due in ${daysLeft} Day${daysLeft === 1 ? '' : 's'} — ${month} ${year}`;
+  const html = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+      <h2 style="color: ${urgency};">KPI Self-Review Deadline Reminder</h2>
+      <p>Dear <strong>${employeeName}</strong>,</p>
+      <p>Your KPI self-review for <strong>${month} ${year}</strong> is due in <strong>${daysLeft} day${daysLeft === 1 ? '' : 's'}</strong> (by <strong>${deadline}</strong>).</p>
+      <p>Please log in to the PLI Portal and submit your achievement self-review before the deadline.</p>
+      <p style="margin-top: 24px;">
+        <a href="${process.env.FRONTEND_URL || 'http://localhost:5173'}/employee/my-kpis"
+           style="background-color: ${urgency}; color: white; padding: 10px 24px; text-decoration: none; border-radius: 6px;">
+          Submit Self-Review Now
+        </a>
+      </p>
+      <hr style="margin-top: 32px; border: none; border-top: 1px solid #e5e7eb;" />
+      <p style="font-size: 12px; color: #6b7280;">This is an automated reminder from the PLI Portal.</p>
+    </div>
+  `;
+  return sendEmail(employeeEmail, subject, html);
+};
+
+/**
+ * Remind manager that their KPI review deadline is approaching.
+ */
+const sendManagerReviewDeadlineReminderEmail = async (managerEmail, managerName, month, year, deadline, daysLeft) => {
+  const urgency = daysLeft <= 1 ? '#dc2626' : daysLeft <= 3 ? '#d97706' : '#7c3aed';
+  const subject = `Action Required: Manager KPI Review Due in ${daysLeft} Day${daysLeft === 1 ? '' : 's'} — ${month} ${year}`;
+  const html = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+      <h2 style="color: ${urgency};">Manager Review Deadline Reminder</h2>
+      <p>Dear <strong>${managerName}</strong>,</p>
+      <p>The KPI manager review for <strong>${month} ${year}</strong> is due in <strong>${daysLeft} day${daysLeft === 1 ? '' : 's'}</strong> (by <strong>${deadline}</strong>).</p>
+      <p>Please log in to the PLI Portal and complete your team's KPI review before the deadline.</p>
+      <p style="margin-top: 24px;">
+        <a href="${process.env.FRONTEND_URL || 'http://localhost:5173'}/manager/team-overview"
+           style="background-color: ${urgency}; color: white; padding: 10px 24px; text-decoration: none; border-radius: 6px;">
+          Review Team KPIs Now
+        </a>
+      </p>
+      <hr style="margin-top: 32px; border: none; border-top: 1px solid #e5e7eb;" />
+      <p style="font-size: 12px; color: #6b7280;">This is an automated reminder from the PLI Portal.</p>
+    </div>
+  `;
+  return sendEmail(managerEmail, subject, html);
+};
+
+/**
+ * Notify an employee that the appraisal cycle is now open.
+ */
+const sendCycleOpenedEmail = async (employeeEmail, employeeName, month, year, commitmentDeadline) => {
+  const subject = `KPI Appraisal Cycle Open — ${month} ${year}`;
+  const deadlineNote = commitmentDeadline
+    ? `<p>Commitment deadline: <strong>${commitmentDeadline}</strong></p>`
+    : '';
+  const html = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+      <h2 style="color: #059669;">KPI Appraisal Cycle is Now Open</h2>
+      <p>Dear <strong>${employeeName}</strong>,</p>
+      <p>The KPI appraisal cycle for <strong>${month} ${year}</strong> is now open. Please log in to the PLI Portal to view and submit your KPI commitments.</p>
+      ${deadlineNote}
+      <p style="color: #6b7280; font-style: italic;">If you have already submitted your commitments, please ignore this notification.</p>
+      <p style="margin-top: 24px;">
+        <a href="${process.env.FRONTEND_URL || 'http://localhost:5173'}/employee/my-kpis"
+           style="background-color: #059669; color: white; padding: 10px 24px; text-decoration: none; border-radius: 6px;">
+          View My KPIs
+        </a>
+      </p>
+      <hr style="margin-top: 32px; border: none; border-top: 1px solid #e5e7eb;" />
+      <p style="font-size: 12px; color: #6b7280;">This is an automated notification from the PLI Portal.</p>
+    </div>
+  `;
+  return sendEmail(employeeEmail, subject, html);
+};
+
 module.exports = {
   sendEmail,
   sendKpiAssignedEmail,
@@ -180,4 +283,8 @@ module.exports = {
   sendReviewCompleteEmail,
   sendEmployeeSubmittedEmail,
   sendManagerReviewedEmail,
+  sendCommitmentDeadlineReminderEmail,
+  sendSelfReviewDeadlineReminderEmail,
+  sendManagerReviewDeadlineReminderEmail,
+  sendCycleOpenedEmail,
 };

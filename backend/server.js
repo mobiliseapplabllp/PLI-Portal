@@ -74,6 +74,9 @@ app.listen(PORT, () => {
   logger.success(`PLI Portal API  →  http://localhost:${PORT}  (${process.env.NODE_ENV || 'development'})`);
   // Connect to DB after HTTP server is up — retries indefinitely until success
   connectDB();
+  // Start scheduled jobs after DB is available
+  const { startDeadlineReminderJob } = require('./src/jobs/deadlineReminder.job');
+  startDeadlineReminderJob();
 });
 
 module.exports = app;

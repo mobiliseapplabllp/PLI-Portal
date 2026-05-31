@@ -28,8 +28,14 @@ import { ROLE_CONFIG } from '../../utils/constants';
 const navItems = {
   employee: [
     { to: '/employee/dashboard', label: 'Dashboard', icon: HiOutlineHome },
-    { to: '/employee/kpis', label: 'My KPIs', icon: HiOutlineClipboardList },
-    { to: '/employee/quarterly', label: 'Quarterly Summary', icon: HiOutlineChartBar },
+    {
+      label: 'KPI',
+      icon: HiOutlineClipboardList,
+      children: [
+        { to: '/employee/kpis', label: 'My KPIs', icon: HiOutlineClipboardList },
+        { to: '/employee/quarterly', label: 'Quarterly Summary', icon: HiOutlineChartBar },
+      ],
+    },
   ],
   manager: [
     { to: '/manager/dashboard', label: 'Dashboard', icon: HiOutlineHome },
@@ -38,14 +44,12 @@ const navItems = {
       label: 'KPI',
       icon: HiOutlineClipboardList,
       children: [
-        // { to: '/manager/assign-kpis', label: 'Assign KPIs', icon: HiOutlineClipboardCheck },
         { to: '/manager/team-kpi', label: 'Team KPIs', icon: HiOutlineClipboardList },
+        { to: '/employee/kpis', label: 'My KPIs', icon: HiOutlineClipboardCheck },
+        { to: '/employee/quarterly', label: 'Quarterly Summary', icon: HiOutlineChartBar },
       ],
     },
     { to: '/admin/reports', label: 'Reports', icon: HiOutlineDocumentReport },
-    { section: 'My Self-Assessment' },
-    { to: '/employee/kpis', label: 'My KPIs', icon: HiOutlineClipboardList },
-    { to: '/employee/quarterly', label: 'Quarterly Summary', icon: HiOutlineChartBar },
   ],
   senior_manager: [
     { to: '/manager/dashboard', label: 'Dashboard', icon: HiOutlineHome },
@@ -54,18 +58,15 @@ const navItems = {
       label: 'KPI',
       icon: HiOutlineClipboardList,
       children: [
-        // { to: '/manager/assign-kpis', label: 'Assign KPIs', icon: HiOutlineClipboardCheck },
         { to: '/manager/team-kpi', label: 'Team KPIs', icon: HiOutlineClipboardList },
+        { to: '/employee/kpis', label: 'My KPIs', icon: HiOutlineClipboardCheck },
+        { to: '/employee/quarterly', label: 'Quarterly Summary', icon: HiOutlineChartBar },
       ],
     },
     { to: '/admin/reports', label: 'Reports', icon: HiOutlineDocumentReport },
-    { section: 'My Self-Assessment' },
-    { to: '/employee/kpis', label: 'My KPIs', icon: HiOutlineClipboardList },
-    { to: '/employee/quarterly', label: 'Quarterly Summary', icon: HiOutlineChartBar },
   ],
   hr_admin: [
     { to: '/hr-admin/dashboard', label: 'Dashboard', icon: HiOutlineHome },
-    { section: 'KPI Management' },
     {
       label: 'KPI',
       icon: HiOutlineClipboardList,
@@ -74,15 +75,11 @@ const navItems = {
         { to: '/hr-admin/kpi-plans', label: 'Edit KPI', icon: HiOutlinePencilAlt },
       ],
     },
-    // { to: '/admin/kpi-templates', label: 'KPI Templates', icon: HiOutlineViewGridAdd },
-    { section: 'Reports' },
     { to: '/admin/reports', label: 'Reports', icon: HiOutlineChartBar },
   ],
   final_approver: [
     { to: '/final-approver/dashboard', label: 'Dashboard', icon: HiOutlineHome },
-    { section: 'Final Approval' },
     { to: '/final-approver/workbench', label: 'Approval Workbench', icon: HiOutlineClipboardCheck },
-    { section: 'Reports' },
     { to: '/admin/reports', label: 'Reports', icon: HiOutlineChartBar },
   ],
   admin: [
@@ -92,13 +89,10 @@ const navItems = {
     { to: '/admin/cycles', label: 'Appraisal Cycles', icon: HiOutlineCalendar },
     { to: '/admin/review-table', label: 'Review Table', icon: HiOutlineTable },
     { to: '/admin/final-review', label: 'Final Approval Overview', icon: HiOutlineShieldCheck },
-    // { to: '/admin/kpi-templates', label: 'KPI Templates', icon: HiOutlineCollection },
     { to: '/admin/pli-rules', label: 'PLI Rules', icon: HiOutlineCog },
     { to: '/admin/reports', label: 'Reports', icon: HiOutlineDocumentReport },
     { to: '/admin/audit-logs', label: 'Audit Logs', icon: HiOutlineDocumentText },
-    { section: 'My Team' },
     { to: '/manager/team', label: 'My Team', icon: HiOutlineUserGroup },
-    // { to: '/manager/assign-kpis', label: 'Assign KPIs', icon: HiOutlineClipboardCheck },
     {
       label: 'KPI',
       icon: HiOutlineClipboardList,
@@ -106,11 +100,10 @@ const navItems = {
         { to: '/hr-admin/kpi-plans/create', label: 'Create KPI', icon: HiOutlinePlus },
         { to: '/hr-admin/kpi-plans', label: 'Edit KPI', icon: HiOutlinePencilAlt },
         { to: '/manager/team-kpi', label: 'Team KPIs', icon: HiOutlineClipboardList },
+        { to: '/employee/kpis', label: 'My KPIs', icon: HiOutlineClipboardCheck },
+        { to: '/employee/quarterly', label: 'Quarterly Summary', icon: HiOutlineChartBar },
       ],
     },
-    { section: 'My Self-Assessment' },
-    { to: '/employee/kpis', label: 'My KPIs', icon: HiOutlineClipboardList },
-    { to: '/employee/quarterly', label: 'Quarterly Summary', icon: HiOutlineChartBar },
   ],
 };
 

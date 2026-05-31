@@ -1439,6 +1439,51 @@ const generateImportTemplate = async () => {
   return workbook;
 };
 
+// ── Per-item self-review attachment ──────────────────────────────────────────
+const saveItemAttachment = async (assignmentId, itemId, file, user) => {
+  if (!file) throw new ValidationError('No file uploaded');
+  const assignment = await KpiAssignment.findByPk(assignmentId);
+  if (!assignment) throw new NotFoundError('KPI Assignment');
+  if (assignment.isLocked) throw new ValidationError('Assignment is locked');
+  if (![KPI_STATUS.COMMITMENT_APPROVED, KPI_STATUS.EMPLOYEE_SUBMITTED].includes(assignment.status)) {
+    throw new ValidationError('Attachments can only be added during self-review phase');
+  }
+  if (user.role === 'employee' && String(assignment.employeeId) !== String(user._id)) {
+    throw new ForbiddenError('You can only upload attachments for your own assignments');
+  }
+  const item = await KpiItem.findOne({ where: { id: itemId, kpiAssignmentId: assignmentId } });
+  if (!item) throw new NotFoundError('KPI Item');
+  await item.update({
+    selfReviewAttachmentBlob: file.buffer,
+    selfReviewAttachmentName: file.originalname,
+    selfReviewAttachmentMime: file.mimetype,
+  });
+  return { fileName: file.originalname, size: file.size };
+};
+
+const getItemAttachmentData = async (assignmentId, itemId, user) => {
+  const assignment = await KpiAssignment.findByPk(assignmentId);
+  if (!assignment) throw new NotFoundError('KPI Assignment');
+  const canView = String(assignment.employeeId) === String(user._id) ||
+    ['manager', 'senior_manager', 'final_approver', 'admin'].includes(user.role);
+  if (!canView) throw new ForbiddenError('Access denied');
+  const item = await KpiItem.findOne({ where: { id: itemId, kpiAssignmentId: assignmentId } });
+  if (!item || !item.selfReviewAttachmentBlob) throw new NotFoundError('Attachment');
+  return { blob: item.selfReviewAttachmentBlob, name: item.selfReviewAttachmentName, mime: item.selfReviewAttachmentMime };
+};
+
+const deleteItemAttachment = async (assignmentId, itemId, user) => {
+  const assignment = await KpiAssignment.findByPk(assignmentId);
+  if (!assignment) throw new NotFoundError('KPI Assignment');
+  if (assignment.isLocked) throw new ValidationError('Assignment is locked');
+  if (user.role === 'employee' && String(assignment.employeeId) !== String(user._id)) {
+    throw new ForbiddenError('You can only remove your own attachments');
+  }
+  const item = await KpiItem.findOne({ where: { id: itemId, kpiAssignmentId: assignmentId } });
+  if (!item) throw new NotFoundError('KPI Item');
+  await item.update({ selfReviewAttachmentBlob: null, selfReviewAttachmentName: null, selfReviewAttachmentMime: null });
+};
+
 module.exports = {
   getAssignments,
   getAssignmentById,
@@ -1462,4 +1507,7 @@ module.exports = {
   bulkCloneKpis,
   bulkImportFromExcel,
   generateImportTemplate,
+  saveItemAttachment,
+  getItemAttachmentData,
+  deleteItemAttachment,
 };

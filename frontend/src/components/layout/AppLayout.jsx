@@ -2,6 +2,7 @@ import { useState, useCallback } from 'react';
 import { Outlet } from 'react-router-dom';
 import Sidebar from './Sidebar';
 import Header from './Header';
+import DeadlinePopup from '../common/DeadlinePopup';
 
 export default function AppLayout() {
   const [collapsed, setCollapsed] = useState(false);
@@ -50,6 +51,8 @@ export default function AppLayout() {
           <Outlet />
         </main>
       </div>
+
+      <DeadlinePopup />
     </div>
   );
 }

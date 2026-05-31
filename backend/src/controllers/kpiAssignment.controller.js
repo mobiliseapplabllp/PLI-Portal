@@ -272,6 +272,45 @@ const bulkImportKpis = [
   },
 ];
 
+// ── Per-item self-review attachment ──────────────────────────────────────────
+const uploadItemAttachment = [
+  attachmentUpload.single('attachment'),
+  async (req, res, next) => {
+    try {
+      const result = await kpiAssignmentService.saveItemAttachment(
+        req.params.id, req.params.itemId, req.file, req.user
+      );
+      sendSuccess(res, result);
+    } catch (error) {
+      next(error);
+    }
+  },
+];
+
+const getItemAttachment = async (req, res, next) => {
+  try {
+    const item = await kpiAssignmentService.getItemAttachmentData(
+      req.params.id, req.params.itemId, req.user
+    );
+    res.setHeader('Content-Type', item.mime);
+    res.setHeader('Content-Disposition', `attachment; filename="${item.name}"`);
+    res.send(item.blob);
+  } catch (error) {
+    next(error);
+  }
+};
+
+const deleteItemAttachment = async (req, res, next) => {
+  try {
+    await kpiAssignmentService.deleteItemAttachment(
+      req.params.id, req.params.itemId, req.user
+    );
+    sendSuccess(res, { message: 'Attachment removed' });
+  } catch (error) {
+    next(error);
+  }
+};
+
 const getImportTemplate = async (req, res, next) => {
   try {
     const workbook = await kpiAssignmentService.generateImportTemplate();
@@ -311,4 +350,7 @@ module.exports = {
   getImportTemplate,
   getEmployeeAttachment,
   getManagerAttachment,
+  uploadItemAttachment,
+  getItemAttachment,
+  deleteItemAttachment,
 };

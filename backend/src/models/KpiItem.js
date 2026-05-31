@@ -90,6 +90,11 @@ const KpiItem = sequelize.define(
 
     // ── NEW: Back-reference to source KpiPlanItem ─────────────────────────────
     kpiPlanItemId: { type: DataTypes.UUID, allowNull: true },
+
+    // ── NEW: Per-item self-review attachment ──────────────────────────────────
+    selfReviewAttachmentBlob: { type: DataTypes.BLOB('long'), allowNull: true },
+    selfReviewAttachmentName: { type: DataTypes.STRING(255), allowNull: true },
+    selfReviewAttachmentMime: { type: DataTypes.STRING(128), allowNull: true },
   },
   { tableName: 'kpi_items' }
 );

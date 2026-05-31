@@ -53,6 +53,11 @@ router.post('/:id/manager-review', authorize('manager', 'senior_manager', 'admin
 router.get('/:id/employee-attachment', ctrl.getEmployeeAttachment);
 router.get('/:id/manager-attachment', authorize('manager', 'senior_manager', 'final_approver', 'admin'), ctrl.getManagerAttachment);
 
+// Per-item self-review attachment
+router.post('/:id/items/:itemId/attachment', authorize('employee', 'manager', 'admin'), ...ctrl.uploadItemAttachment);
+router.get('/:id/items/:itemId/attachment', ctrl.getItemAttachment);
+router.delete('/:id/items/:itemId/attachment', authorize('employee', 'manager', 'admin'), ctrl.deleteItemAttachment);
+
 // NOTE: /final-review route is REMOVED — replaced by /api/final-approver/approvals/:id/submit
 // Kept as 410 Gone for any legacy clients
 router.post('/:id/final-review', (req, res) => {

@@ -45,3 +45,14 @@ export const bulkImportKpisApi = (formData) => api.post('/kpi-assignments/bulk-i
 export const downloadKpiTemplate = () => api.get('/kpi-assignments/import-template', { responseType: 'blob' });
 export const downloadEmployeeAttachmentApi = (id) => api.get(`/kpi-assignments/${id}/employee-attachment`, { responseType: 'blob' });
 export const downloadManagerAttachmentApi = (id) => api.get(`/kpi-assignments/${id}/manager-attachment`, { responseType: 'blob' });
+
+// Per-item self-review attachments
+export const uploadItemAttachmentApi = (assignmentId, itemId, file) => {
+  const fd = new FormData();
+  fd.append('attachment', file);
+  return api.post(`/kpi-assignments/${assignmentId}/items/${itemId}/attachment`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+};
+export const downloadItemAttachmentApi = (assignmentId, itemId) =>
+  api.get(`/kpi-assignments/${assignmentId}/items/${itemId}/attachment`, { responseType: 'blob' });
+export const deleteItemAttachmentApi = (assignmentId, itemId) =>
+  api.delete(`/kpi-assignments/${assignmentId}/items/${itemId}/attachment`);
