@@ -43,9 +43,25 @@ import PliRuleConfig from '../pages/admin/PliRuleConfig';
 import Reports from '../pages/admin/Reports';
 import AuditLogs from '../pages/admin/AuditLogs';
 
+// PM pages
+import PMDashboard from '../pages/pm/PMDashboard';
+import ProjectList from '../pages/pm/ProjectList';
+import CreateProject from '../pages/pm/CreateProject';
+import ProjectDetail from '../pages/pm/ProjectDetail';
+import MilestoneBoard from '../pages/pm/MilestoneBoard';
+import GanttView from '../pages/pm/GanttView';
+import TaskBoard from '../pages/pm/TaskBoard';
+import DailyLogForm from '../pages/pm/DailyLogForm';
+import DailyLogHistory from '../pages/pm/DailyLogHistory';
+import MyTasks from '../pages/pm/MyTasks';
+import PMSettings from '../pages/pm/PMSettings';
+
 // Common
 import ProfilePage from '../pages/common/ProfilePage';
 import NotFoundPage from '../pages/common/NotFoundPage';
+
+const ALL_ROLES = ['admin', 'manager', 'senior_manager', 'employee', 'hr_admin', 'final_approver', 'md', 'director'];
+const PM_CREATORS = ['admin', 'manager', 'senior_manager'];
 
 function HomeRedirect() {
   const { user } = useSelector((state) => state.auth);
@@ -57,8 +73,10 @@ function HomeRedirect() {
     hr_admin:        '/hr-admin/dashboard',
     final_approver:  '/final-approver/dashboard',
     admin:           '/admin/dashboard',
+    md:              '/pm/dashboard',
+    director:        '/pm/dashboard',
   };
-  return <Navigate to={map[user.role] || '/login'} replace />;
+  return <Navigate to={map[user.role] || '/pm/dashboard'} replace />;
 }
 
 export default function AppRoutes() {
@@ -97,7 +115,6 @@ export default function AppRoutes() {
         <Route path="/hr-admin/dashboard" element={<RoleRoute roles={['hr_admin', 'admin']}><HrAdminDashboard /></RoleRoute>} />
         <Route path="/hr-admin/kpi-plans" element={<RoleRoute roles={['hr_admin', 'admin']}><KpiPlanManagement /></RoleRoute>} />
         <Route path="/hr-admin/kpi-plans/create" element={<RoleRoute roles={['hr_admin', 'admin']}><CreateKpiPlan /></RoleRoute>} />
-        {/* HR Admin can also access KPI templates */}
         <Route path="/admin/kpi-templates" element={<RoleRoute roles={['hr_admin', 'admin']}><KpiTemplates /></RoleRoute>} />
 
         {/* Final Approver routes */}
@@ -116,7 +133,19 @@ export default function AppRoutes() {
         <Route path="/admin/pli-rules" element={<RoleRoute roles={['admin']}><PliRuleConfig /></RoleRoute>} />
         <Route path="/admin/reports" element={<RoleRoute roles={['hr_admin', 'final_approver', 'admin', 'manager', 'senior_manager']}><Reports /></RoleRoute>} />
         <Route path="/admin/audit-logs" element={<RoleRoute roles={['admin']}><AuditLogs /></RoleRoute>} />
-        <Route path="/admin/review-table" element={<RoleRoute roles={['admin', 'final_approver']}><AdminReviewTable /></RoleRoute>} />
+
+        {/* PM routes — accessible to all roles */}
+        <Route path="/pm/dashboard" element={<RoleRoute roles={ALL_ROLES}><PMDashboard /></RoleRoute>} />
+        <Route path="/pm/projects" element={<RoleRoute roles={ALL_ROLES}><ProjectList /></RoleRoute>} />
+        <Route path="/pm/projects/create" element={<RoleRoute roles={PM_CREATORS}><CreateProject /></RoleRoute>} />
+        <Route path="/pm/projects/:id" element={<RoleRoute roles={ALL_ROLES}><ProjectDetail /></RoleRoute>} />
+        <Route path="/pm/projects/:id/milestones" element={<RoleRoute roles={ALL_ROLES}><MilestoneBoard /></RoleRoute>} />
+        <Route path="/pm/projects/:id/gantt" element={<RoleRoute roles={ALL_ROLES}><GanttView /></RoleRoute>} />
+        <Route path="/pm/projects/:id/tasks" element={<RoleRoute roles={ALL_ROLES}><TaskBoard /></RoleRoute>} />
+        <Route path="/pm/projects/:id/daily-log" element={<RoleRoute roles={ALL_ROLES}><DailyLogForm /></RoleRoute>} />
+        <Route path="/pm/projects/:id/daily-logs" element={<RoleRoute roles={ALL_ROLES}><DailyLogHistory /></RoleRoute>} />
+        <Route path="/pm/my-tasks" element={<RoleRoute roles={ALL_ROLES}><MyTasks /></RoleRoute>} />
+        <Route path="/pm/settings" element={<RoleRoute roles={['admin']}><PMSettings /></RoleRoute>} />
       </Route>
 
       <Route path="*" element={<NotFoundPage />} />

@@ -77,6 +77,8 @@ app.listen(PORT, () => {
   // Start scheduled jobs after DB is available
   const { startDeadlineReminderJob } = require('./src/jobs/deadlineReminder.job');
   startDeadlineReminderJob();
+  const { startProjectDailyReportJob } = require('./src/jobs/projectDailyReport.job');
+  startProjectDailyReportJob();
 });
 
 module.exports = app;

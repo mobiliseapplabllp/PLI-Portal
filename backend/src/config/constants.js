@@ -6,6 +6,8 @@ const ROLES = {
   HR_ADMIN: 'hr_admin',
   FINAL_APPROVER: 'final_approver',
   ADMIN: 'admin',
+  MD: 'md',
+  DIRECTOR: 'director',
 };
 
 // KPI Assignment statuses
@@ -107,6 +109,10 @@ const NOTIFICATION_TYPES = {
   RECORD_LOCKED: 'record_locked',
   RECORD_UNLOCKED: 'record_unlocked',
   CYCLE_DEADLINE: 'cycle_deadline',
+  // Project Management
+  PM_PROJECT_ASSIGNED: 'pm_project_assigned',
+  PM_MILESTONE_UPDATED: 'pm_milestone_updated',
+  PM_DAILY_LOG: 'pm_daily_log',
 };
 
 // Audit actions
@@ -125,6 +131,41 @@ const AUDIT_ACTIONS = {
   LOGIN: 'login',
   PASSWORD_CHANGED: 'password_changed',
 };
+
+// Project Management statuses
+const PM_PROJECT_STATUS = {
+  PLANNING: 'planning',
+  ACTIVE: 'active',
+  ON_HOLD: 'on_hold',
+  COMPLETED: 'completed',
+  CANCELLED: 'cancelled',
+};
+
+const PM_MILESTONE_STATUS = {
+  NOT_STARTED: 'not_started',
+  IN_PROGRESS: 'in_progress',
+  COMPLETED: 'completed',
+  DELAYED: 'delayed',
+  ON_HOLD: 'on_hold',
+  CANCELLED: 'cancelled',
+};
+
+const PM_TASK_STATUS = {
+  TODO: 'todo',
+  IN_PROGRESS: 'in_progress',
+  COMPLETED: 'completed',
+  BLOCKED: 'blocked',
+};
+
+const PM_OVERALL_STATUS = {
+  ON_TRACK: 'on_track',
+  AT_RISK: 'at_risk',
+  DELAYED: 'delayed',
+  COMPLETED: 'completed',
+};
+
+// Roles that can see Project Management module
+const PM_VIEWER_ROLES = ['admin', 'manager', 'senior_manager', 'employee', 'hr_admin', 'final_approver', 'md', 'director'];
 
 // Quarter mapping: month number -> quarter
 const QUARTER_MAP = {
@@ -162,4 +203,9 @@ module.exports = {
   AUDIT_ACTIONS,
   QUARTER_MAP,
   QUARTER_MONTHS,
+  PM_PROJECT_STATUS,
+  PM_MILESTONE_STATUS,
+  PM_TASK_STATUS,
+  PM_OVERALL_STATUS,
+  PM_VIEWER_ROLES,
 };

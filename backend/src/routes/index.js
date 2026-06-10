@@ -14,5 +14,6 @@ router.use('/kpi-templates', require('./kpiTemplate.routes'));
 router.use('/pli-rules', require('./pliRule.routes'));
 router.use('/notifications', require('./notification.routes'));
 router.use('/audit-logs', require('./audit.routes'));
+router.use('/pm', require('./pm/index'));
 
 module.exports = router;

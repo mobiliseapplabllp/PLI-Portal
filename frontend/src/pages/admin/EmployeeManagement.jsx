@@ -179,6 +179,8 @@ export default function EmployeeManagement() {
               <option value="hr_admin">HR Admin</option>
               <option value="final_approver">Final Approver</option>
               <option value="admin">Admin</option>
+              <option value="md">MD (Managing Director)</option>
+              <option value="director">Director</option>
             </select>
           </div>
           <div>

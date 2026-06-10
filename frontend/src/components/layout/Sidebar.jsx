@@ -22,10 +22,16 @@ import {
   HiOutlinePencilAlt,
   HiOutlineChevronDown,
   HiOutlineChevronUp,
+  HiOutlineFolderOpen,
+  HiOutlineFlag,
+  HiOutlineCheckCircle,
+  HiOutlineClipboard,
+  HiOutlineEye,
 } from 'react-icons/hi';
 import { ROLE_CONFIG } from '../../utils/constants';
 
-const navItems = {
+// ── KPI Nav Items ─────────────────────────────────────────────────────────────
+const kpiNavItems = {
   employee: [
     { to: '/employee/dashboard', label: 'Dashboard', icon: HiOutlineHome },
     {
@@ -105,16 +111,82 @@ const navItems = {
       ],
     },
   ],
+  // MD/Director fallback to PM
+  md: [],
+  director: [],
+};
+
+// ── PM Nav Items ──────────────────────────────────────────────────────────────
+const pmNavItems = {
+  employee: [
+    { to: '/pm/dashboard', label: 'PM Dashboard', icon: HiOutlineHome },
+    { to: '/pm/projects', label: 'My Projects', icon: HiOutlineFolderOpen },
+  ],
+  manager: [
+    { to: '/pm/dashboard', label: 'PM Dashboard', icon: HiOutlineHome },
+    {
+      label: 'Projects',
+      icon: HiOutlineFolderOpen,
+      children: [
+        { to: '/pm/projects', label: 'All Projects', icon: HiOutlineFolderOpen },
+        { to: '/pm/projects/create', label: 'Create Project', icon: HiOutlinePlus },
+      ],
+    },
+    { to: '/pm/my-tasks', label: 'My Tasks', icon: HiOutlineCheckCircle },
+  ],
+  senior_manager: [
+    { to: '/pm/dashboard', label: 'PM Dashboard', icon: HiOutlineHome },
+    {
+      label: 'Projects',
+      icon: HiOutlineFolderOpen,
+      children: [
+        { to: '/pm/projects', label: 'All Projects', icon: HiOutlineFolderOpen },
+        { to: '/pm/projects/create', label: 'Create Project', icon: HiOutlinePlus },
+      ],
+    },
+    { to: '/pm/my-tasks', label: 'My Tasks', icon: HiOutlineCheckCircle },
+  ],
+  hr_admin: [
+    { to: '/pm/dashboard', label: 'PM Dashboard', icon: HiOutlineHome },
+    { to: '/pm/projects', label: 'All Projects', icon: HiOutlineFolderOpen },
+  ],
+  final_approver: [
+    { to: '/pm/dashboard', label: 'PM Dashboard', icon: HiOutlineHome },
+    { to: '/pm/projects', label: 'All Projects', icon: HiOutlineFolderOpen },
+  ],
+  md: [
+    { to: '/pm/dashboard', label: 'PM Dashboard', icon: HiOutlineHome },
+    { to: '/pm/projects', label: 'All Projects', icon: HiOutlineFolderOpen },
+  ],
+  director: [
+    { to: '/pm/dashboard', label: 'PM Dashboard', icon: HiOutlineHome },
+    { to: '/pm/projects', label: 'All Projects', icon: HiOutlineFolderOpen },
+  ],
+  admin: [
+    { to: '/pm/dashboard', label: 'PM Dashboard', icon: HiOutlineHome },
+    {
+      label: 'Projects',
+      icon: HiOutlineFolderOpen,
+      children: [
+        { to: '/pm/projects', label: 'All Projects', icon: HiOutlineFolderOpen },
+        { to: '/pm/projects/create', label: 'Create Project', icon: HiOutlinePlus },
+      ],
+    },
+    { to: '/pm/my-tasks', label: 'My Tasks', icon: HiOutlineCheckCircle },
+    { to: '/pm/settings', label: 'PM Settings', icon: HiOutlineCog },
+  ],
 };
 
 export default function Sidebar({ collapsed, onToggle, onNavClick }) {
   const { user } = useSelector((state) => state.auth);
+  const { activeModule } = useSelector((state) => state.app);
   const location = useLocation();
   const [openMenus, setOpenMenus] = useState({});
 
   if (!user) return null;
 
-  const items = navItems[user.role] || [];
+  const navMap = activeModule === 'pm' ? pmNavItems : kpiNavItems;
+  const items = navMap[user.role] || navMap.employee || [];
   const roleConfig = ROLE_CONFIG[user.role] || ROLE_CONFIG.employee;
 
   const toggleMenu = (label) => setOpenMenus((prev) => ({ ...prev, [label]: !prev[label] }));
@@ -129,20 +201,23 @@ export default function Sidebar({ collapsed, onToggle, onNavClick }) {
         : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
     }`;
 
+  // PM module gets a different accent
+  const pmAccentClass = 'from-emerald-600 to-emerald-700';
+  const headerAccent = activeModule === 'pm' ? pmAccentClass : roleConfig.accentClass;
+  const headerLabel = activeModule === 'pm' ? 'Project Mgmt' : roleConfig.label;
+
   return (
     <aside
-      className={`${
-        collapsed ? 'w-16' : 'w-64'
-      } h-full bg-white border-r border-gray-200 flex flex-col transition-all duration-200 ease-in-out`}
+      className={`${collapsed ? 'w-16' : 'w-64'} h-full bg-white border-r border-gray-200 flex flex-col transition-all duration-200 ease-in-out`}
     >
       {/* Role-accented header */}
-      <div className={`h-16 flex items-center justify-between px-4 border-b border-gray-200 bg-gradient-to-r ${roleConfig.accentClass}`}>
+      <div className={`h-16 flex items-center justify-between px-4 border-b border-gray-200 bg-gradient-to-r ${headerAccent}`}>
         <div className={`flex items-center ${collapsed ? 'justify-center w-full' : ''}`}>
           <HiOutlineCollection className="w-7 h-7 text-white flex-shrink-0" />
           {!collapsed && (
             <div className="ml-2">
               <div className="text-xs text-white/70 leading-none">PLI Portal</div>
-              <div className="text-sm font-bold text-white leading-tight whitespace-nowrap">{roleConfig.label}</div>
+              <div className="text-sm font-bold text-white leading-tight whitespace-nowrap">{headerLabel}</div>
             </div>
           )}
         </div>
