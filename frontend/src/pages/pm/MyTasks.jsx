@@ -3,8 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useSelector } from 'react-redux';
 import toast from 'react-hot-toast';
 import { getProjectsApi } from '../../api/pm/projects.api';
-import { getTasksApi, updateTaskStatusApi } from '../../api/pm/tasks.api';
-import { getMilestonesApi } from '../../api/pm/milestones.api';
+import { getAllProjectTasksApi, updateTaskStatusApi } from '../../api/pm/tasks.api';
 import { HiOutlineCheckCircle, HiOutlineClock, HiOutlineExclamation } from 'react-icons/hi';
 
 const STATUS_COLORS = {
@@ -27,16 +26,14 @@ export default function MyTasks() {
       try {
         const pRes = await getProjectsApi();
         const projects = pRes.data.data || [];
+        // Single request per project — no N+1 per milestone
         const allTasks = [];
-        for (const p of projects) {
-          const mRes = await getMilestonesApi(p.id).catch(() => ({ data: { data: [] } }));
-          const milestones = mRes.data.data || [];
-          for (const m of milestones) {
-            const tRes = await getTasksApi(p.id, m.id).catch(() => ({ data: { data: [] } }));
-            const tasks = (tRes.data.data || []).filter(t => t.assignedToId === user?._id || t.assignedToId === user?.id);
-            tasks.forEach(t => allTasks.push({ ...t, projectName: p.name, projectId: p.id, milestoneName: m.name }));
-          }
-        }
+        await Promise.all(projects.map(async (p) => {
+          const pid = p._id || p.id;
+          const tRes = await getAllProjectTasksApi(pid).catch(() => ({ data: { data: [] } }));
+          const tasks = (tRes.data.data || []).filter(t => t.assignedToId === user?._id || t.assignedToId === user?.id);
+          tasks.forEach(t => allTasks.push({ ...t, projectName: p.name, projectId: pid, milestoneName: t.milestone?.name || '—' }));
+        }));
         setMyTasks(allTasks);
       } catch { toast.error('Failed to load tasks'); }
       finally { setLoading(false); }
@@ -49,8 +46,8 @@ export default function MyTasks() {
 
   const handleStatus = async (task, status) => {
     try {
-      await updateTaskStatusApi(task.projectId, task.milestoneId, task.id, status);
-      setMyTasks(p => p.map(t => t.id === task.id ? { ...t, status } : t));
+      await updateTaskStatusApi(task.projectId, task.milestoneId, task._id || task.id, status);
+      setMyTasks(p => p.map(t => (t._id || t.id) === (task._id || task.id) ? { ...t, status } : t));
       toast.success('Status updated');
     } catch { toast.error('Failed'); }
   };
@@ -96,7 +93,7 @@ export default function MyTasks() {
               {filtered.map(task => {
                 const isOverdue = task.dueDate && task.dueDate < today && task.status !== 'completed';
                 return (
-                  <tr key={task.id} className={isOverdue ? 'bg-red-50' : 'hover:bg-gray-50'}>
+                  <tr key={task._id || task.id} className={isOverdue ? 'bg-red-50' : 'hover:bg-gray-50'}>
                     <td className="px-5 py-3 font-medium text-gray-900">{task.title}</td>
                     <td className="px-5 py-3">
                       <button onClick={() => navigate(`/pm/projects/${task.projectId}`)} className="text-emerald-600 hover:underline text-xs">

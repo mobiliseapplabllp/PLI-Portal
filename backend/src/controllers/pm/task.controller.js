@@ -22,4 +22,9 @@ const updateTaskStatus = async (req, res, next) => {
   catch (e) { next(e); }
 };
 
-module.exports = { getTasks, createTask, updateTask, deleteTask, updateTaskStatus };
+const getAllProjectTasks = async (req, res, next) => {
+  try { sendSuccess(res, await taskService.getAllProjectTasks(req.params.id)); }
+  catch (e) { next(e); }
+};
+
+module.exports = { getTasks, getAllProjectTasks, createTask, updateTask, deleteTask, updateTaskStatus };

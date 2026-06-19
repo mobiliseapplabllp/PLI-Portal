@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+﻿import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useSelector } from 'react-redux';
 import toast from 'react-hot-toast';
@@ -53,7 +53,7 @@ export default function MilestoneBoard() {
   const set = (f, v) => setForm(prev => ({ ...prev, [f]: v }));
 
   const openCreate = () => { setForm(EMPTY_FORM); setEditingId(null); setShowForm(true); };
-  const openEdit = (m) => { setForm({ name: m.name, description: m.description || '', startDate: m.startDate || '', endDate: m.endDate || '', accountableUserId: m.accountableUserId || '', status: m.status, completionPercentage: m.completionPercentage || 0 }); setEditingId(m.id); setShowForm(true); };
+  const openEdit = (m) => { setForm({ name: m.name, description: m.description || '', startDate: m.startDate || '', endDate: m.endDate || '', accountableUserId: m.accountableUserId || '', status: m.status, completionPercentage: m.completionPercentage || 0 }); setEditingId(m._id || m.id); setShowForm(true); };
 
   const handleSave = async () => {
     if (!form.name.trim()) return toast.error('Milestone name is required');
@@ -85,14 +85,14 @@ export default function MilestoneBoard() {
   const handleStatusChange = async (milestoneId, status) => {
     try {
       await updateMilestoneStatusApi(id, milestoneId, status);
-      setMilestones(prev => prev.map(m => m.id === milestoneId ? { ...m, status } : m));
+      setMilestones(prev => prev.map(m => (m._id || m.id) === milestoneId ? { ...m, status } : m));
     } catch { toast.error('Failed to update status'); }
   };
 
   const handleProgressChange = async (milestoneId, completionPercentage) => {
     try {
       await updateMilestoneProgressApi(id, milestoneId, Number(completionPercentage));
-      setMilestones(prev => prev.map(m => m.id === milestoneId ? { ...m, completionPercentage: Number(completionPercentage) } : m));
+      setMilestones(prev => prev.map(m => (m._id || m.id) === milestoneId ? { ...m, completionPercentage: Number(completionPercentage) } : m));
     } catch { toast.error('Failed to update progress'); }
   };
 
@@ -146,7 +146,7 @@ export default function MilestoneBoard() {
               <label className="text-xs font-medium text-gray-600 block mb-1">Accountable Person</label>
               <select value={form.accountableUserId} onChange={e => set('accountableUserId', e.target.value)} className={inputClass}>
                 <option value="">Select person</option>
-                {users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+                {users.map(u => <option key={u._id || u.id} value={u._id || u.id}>{u.name}</option>)}
               </select>
             </div>
             <div>
@@ -197,23 +197,23 @@ export default function MilestoneBoard() {
               {milestones.map((m, i) => {
                 const isDelayed = m.endDate && m.endDate < today && m.status !== 'completed';
                 return (
-                  <tr key={m.id} className={isDelayed ? 'bg-red-50' : 'hover:bg-gray-50'}>
+                  <tr key={m._id || m.id} className={isDelayed ? 'bg-red-50' : 'hover:bg-gray-50'}>
                     <td className="px-5 py-3 text-gray-400 text-xs">{i + 1}</td>
                     <td className="px-5 py-3">
                       <p className="font-medium text-gray-900">{m.name}</p>
                       {m.description && <p className="text-xs text-gray-400 mt-0.5">{m.description}</p>}
                     </td>
-                    <td className="px-5 py-3 text-gray-600">{m.accountableUser?.name || '—'}</td>
-                    <td className="px-5 py-3 text-gray-500 text-xs">{m.startDate ? new Date(m.startDate).toLocaleDateString('en-IN') : '—'}</td>
+                    <td className="px-5 py-3 text-gray-600">{m.accountableUser?.name || 'â€”'}</td>
+                    <td className="px-5 py-3 text-gray-500 text-xs">{m.startDate ? new Date(m.startDate).toLocaleDateString('en-IN') : 'â€”'}</td>
                     <td className={`px-5 py-3 text-xs ${isDelayed ? 'text-red-600 font-semibold' : 'text-gray-500'}`}>
-                      {m.endDate ? new Date(m.endDate).toLocaleDateString('en-IN') : '—'}
-                      {isDelayed && ' ⚠️'}
+                      {m.endDate ? new Date(m.endDate).toLocaleDateString('en-IN') : 'â€”'}
+                      {isDelayed && ' âš ï¸'}
                     </td>
                     <td className="px-5 py-3">
                       {canManage ? (
                         <select
                           value={m.status}
-                          onChange={e => handleStatusChange(m.id, e.target.value)}
+                          onChange={e => handleStatusChange(m._id || m.id, e.target.value)}
                           className={`text-xs font-medium px-2 py-1 rounded-full border-0 cursor-pointer capitalize ${STATUS_COLORS[m.status] || 'bg-gray-100'}`}
                         >
                           {STATUS_OPTIONS.map(s => <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>)}
@@ -230,7 +230,7 @@ export default function MilestoneBoard() {
                           <input
                             type="range" min="0" max="100" step="5"
                             value={m.completionPercentage || 0}
-                            onChange={e => handleProgressChange(m.id, e.target.value)}
+                            onChange={e => handleProgressChange(m._id || m.id, e.target.value)}
                             className="w-20"
                           />
                           <span className="text-xs text-gray-500 w-8">{m.completionPercentage || 0}%</span>
@@ -250,7 +250,7 @@ export default function MilestoneBoard() {
                           <button onClick={() => openEdit(m)} className="p-1.5 hover:bg-gray-100 rounded text-gray-400 hover:text-gray-700 transition-colors">
                             <HiOutlinePencil className="w-3.5 h-3.5" />
                           </button>
-                          <button onClick={() => handleDelete(m.id)} className="p-1.5 hover:bg-red-50 rounded text-gray-400 hover:text-red-600 transition-colors">
+                          <button onClick={() => handleDelete(m._id || m.id)} className="p-1.5 hover:bg-red-50 rounded text-gray-400 hover:text-red-600 transition-colors">
                             <HiOutlineTrash className="w-3.5 h-3.5" />
                           </button>
                         </div>
@@ -266,3 +266,4 @@ export default function MilestoneBoard() {
     </div>
   );
 }
+

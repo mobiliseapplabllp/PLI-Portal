@@ -43,9 +43,19 @@ const connectDB = async () => {
       logger.db(`MySQL connected (attempt ${attempt}) — ${sequelize.config.host} / ${sequelize.config.database}`);
       dbReady = true;
       await dropLegacyKpiPlanIndexes(sequelize);
-      sequelize.sync({ alter: true })
-        .then(() => logger.db('Models synchronised (alter mode)'))
-        .catch((err) => logger.error('DB sync error (non-fatal):', err.message));
+
+      // SAFE SYNC POLICY:
+      // - Development: alter:true — auto-adjusts columns during development.
+      // - Production:  no sync at all — schema must be managed via init-db-and-sync.js
+      //   manually before deployment.  Never auto-alter a live production database.
+      const isProduction = (process.env.NODE_ENV || 'development') === 'production';
+      if (!isProduction) {
+        sequelize.sync({ alter: true })
+          .then(() => logger.db('Models synchronised (alter mode — dev only)'))
+          .catch((err) => logger.error('DB sync error (non-fatal):', err.message));
+      } else {
+        logger.db('Production mode — skipping auto-sync. Run "node scripts/init-db-and-sync.js" to apply schema changes safely.');
+      }
       return;
     } catch (error) {
       logger.error(`MySQL connection failed (attempt ${attempt}): ${error.message}`);

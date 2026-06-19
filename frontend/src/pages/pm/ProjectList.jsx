@@ -101,8 +101,8 @@ export default function ProjectList() {
 
             return (
               <div
-                key={p.id}
-                onClick={() => navigate(`/pm/projects/${p.id}`)}
+                key={p._id || p.id}
+                onClick={() => navigate(`/pm/projects/${p._id || p.id}`)}
                 className="bg-white rounded-xl border border-gray-200 p-5 hover:shadow-md hover:border-emerald-200 cursor-pointer transition-all"
               >
                 <div className="flex items-start justify-between mb-3">

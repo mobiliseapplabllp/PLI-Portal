@@ -28,7 +28,7 @@ const pmSlice = createSlice({
     error: null,
   },
   reducers: {
-    clearActiveProject(state) { state.activeProject = null; },
+    clearActiveProject(state) { state.activeProject = null; state.error = null; },
   },
   extraReducers: (builder) => {
     builder

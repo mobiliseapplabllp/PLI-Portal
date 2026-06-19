@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+﻿import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useSelector, useDispatch } from 'react-redux';
 import { fetchProjects } from '../../store/pmSlice';
@@ -97,15 +97,15 @@ export default function PMDashboard() {
                 const pct = milestones.length > 0 ? Math.round((done / milestones.length) * 100) : 0;
                 return (
                   <div
-                    key={p.id}
-                    onClick={() => navigate(`/pm/projects/${p.id}`)}
+                    key={p._id || p.id}
+                    onClick={() => navigate(`/pm/projects/${p._id || p.id}`)}
                     className="px-5 py-3 hover:bg-gray-50 cursor-pointer transition-colors"
                   >
                     <div className="flex items-center justify-between">
                       <div>
                         <p className="text-sm font-medium text-gray-900">{p.name}</p>
                         <p className="text-xs text-gray-500 mt-0.5">
-                          PM: {p.projectManager?.name || '—'} · {milestones.length} milestones
+                          PM: {p.projectManager?.name || 'â€”'} Â· {milestones.length} milestones
                         </p>
                       </div>
                       <div className="text-right">
@@ -136,7 +136,7 @@ export default function PMDashboard() {
             <div className="divide-y divide-gray-50">
               {upcomingMilestones.slice(0, 8).map(m => (
                 <div
-                  key={m.id}
+                  key={m._id || m.id}
                   onClick={() => navigate(`/pm/projects/${m.projectId}`)}
                   className="px-5 py-3 hover:bg-gray-50 cursor-pointer transition-colors flex items-center gap-3"
                 >
@@ -182,8 +182,8 @@ export default function PMDashboard() {
                   const pct = ms.length > 0 ? Math.round((ms.filter(m => m.status === 'completed').length / ms.length) * 100) : 0;
                   return (
                     <tr
-                      key={p.id}
-                      onClick={() => navigate(`/pm/projects/${p.id}`)}
+                      key={p._id || p.id}
+                      onClick={() => navigate(`/pm/projects/${p._id || p.id}`)}
                       className="hover:bg-gray-50 cursor-pointer transition-colors"
                     >
                       <td className="px-5 py-3 font-medium text-gray-900">{p.name}</td>
@@ -192,9 +192,9 @@ export default function PMDashboard() {
                           {p.status?.replace(/_/g, ' ')}
                         </span>
                       </td>
-                      <td className="px-5 py-3 text-gray-600">{p.projectManager?.name || '—'}</td>
+                      <td className="px-5 py-3 text-gray-600">{p.projectManager?.name || 'â€”'}</td>
                       <td className="px-5 py-3 text-gray-600">
-                        {p.endDate ? new Date(p.endDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}
+                        {p.endDate ? new Date(p.endDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : 'â€”'}
                       </td>
                       <td className="px-5 py-3">
                         <div className="flex items-center gap-2">
@@ -215,3 +215,4 @@ export default function PMDashboard() {
     </div>
   );
 }
+

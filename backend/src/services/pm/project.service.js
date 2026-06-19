@@ -16,6 +16,13 @@ const PROJECT_INCLUDE = [
     model: ProjectMember, as: 'members',
     include: [{ model: User, as: 'user', attributes: ['id', 'name', 'email', 'designation', 'role'] }],
   },
+  // Milestones are included in list to support progress calculation on dashboard/project list
+  {
+    model: Milestone, as: 'milestones',
+    attributes: ['id', 'name', 'status', 'endDate', 'completionPercentage', 'order'],
+    include: [{ model: User, as: 'accountableUser', attributes: ['id', 'name'] }],
+    order: [['order', 'ASC']],
+  },
 ];
 
 function canManageProject(user) {

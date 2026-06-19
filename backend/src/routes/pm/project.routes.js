@@ -1,5 +1,6 @@
 const router = require('express').Router();
 const ctrl = require('../../controllers/pm/project.controller');
+const taskCtrl = require('../../controllers/pm/task.controller');
 const { authorize } = require('../../middleware/rbac');
 
 const MANAGERS = ['admin', 'manager', 'senior_manager'];
@@ -11,6 +12,9 @@ router.get('/:id', authorize(...ALL), ctrl.getProjectById);
 router.get('/:id/summary', authorize(...ALL), ctrl.getProjectSummary);
 router.put('/:id', authorize(...MANAGERS), ctrl.updateProject);
 router.delete('/:id', authorize('admin'), ctrl.deleteProject);
+
+// All tasks for a project (flat, no milestone filter) — avoids N+1 in MyTasks
+router.get('/:id/tasks', authorize(...ALL), taskCtrl.getAllProjectTasks);
 
 // Members
 router.get('/:id/members', authorize(...ALL), ctrl.getMembers);

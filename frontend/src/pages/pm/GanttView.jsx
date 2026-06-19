@@ -195,7 +195,7 @@ export default function GanttView() {
               const barWidth = barStart !== null ? Math.max(1, (barEnd - barStart + 1)) * DAY_WIDTH : 0;
 
               return (
-                <div key={m.id} className={`flex border-b border-gray-50 ${rowIdx % 2 === 0 ? 'bg-white' : 'bg-gray-50/40'}`} style={{ height: ROW_HEIGHT }}>
+                <div key={m._id || m.id} className={`flex border-b border-gray-50 ${rowIdx % 2 === 0 ? 'bg-white' : 'bg-gray-50/40'}`} style={{ height: ROW_HEIGHT }}>
                   {/* Label */}
                   <div style={{ width: LABEL_WIDTH, minWidth: LABEL_WIDTH }} className="px-4 border-r border-gray-200 flex-shrink-0 flex flex-col justify-center">
                     <p className="text-xs font-medium text-gray-800 truncate">{m.name}</p>

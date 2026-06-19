@@ -1,3 +1,4 @@
+const { Op } = require('sequelize');
 const Project = require('../../models/pm/Project');
 const ProjectMember = require('../../models/pm/ProjectMember');
 const Milestone = require('../../models/pm/Milestone');
@@ -193,7 +194,7 @@ async function sendDailyReportForProject(project) {
 
   // MD and Director users system-wide
   const mdDirectors = await User.findAll({
-    where: { role: ['md', 'director'], isActive: true },
+    where: { role: { [Op.in]: ['md', 'director'] }, isActive: true },
     attributes: ['email', 'name'],
   });
   mdDirectors.forEach(u => emailSet.add(u.email));

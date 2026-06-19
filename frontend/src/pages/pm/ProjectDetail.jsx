@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react';
+﻿import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useSelector, useDispatch } from 'react-redux';
-import { fetchProjectById } from '../../store/pmSlice';
+import { fetchProjectById, clearActiveProject } from '../../store/pmSlice';
 import toast from 'react-hot-toast';
 import {
   HiOutlineArrowLeft, HiOutlinePencil, HiOutlineUserAdd,
@@ -34,7 +34,7 @@ export default function ProjectDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
   const dispatch = useDispatch();
-  const { activeProject: project, loading } = useSelector(s => s.pm);
+  const { activeProject: project, loading, error } = useSelector(s => s.pm);
   const { user } = useSelector(s => s.auth);
   const [activeTab, setActiveTab] = useState('overview');
   const [allUsers, setAllUsers] = useState([]);
@@ -42,7 +42,10 @@ export default function ProjectDetail() {
   const [memberForm, setMemberForm] = useState({ userId: '', role: '', responsibilities: '' });
   const [statusUpdating, setStatusUpdating] = useState(false);
 
-  useEffect(() => { dispatch(fetchProjectById(id)); }, [dispatch, id]);
+  useEffect(() => {
+    dispatch(clearActiveProject());
+    dispatch(fetchProjectById(id));
+  }, [dispatch, id]);
 
   useEffect(() => {
     if (MANAGER_ROLES.includes(user?.role)) {
@@ -85,11 +88,24 @@ export default function ProjectDetail() {
     } catch { toast.error('Failed to remove member'); }
   };
 
-  if (loading || !project) {
+  if (loading) {
     return (
       <div className="space-y-4 animate-pulse">
         <div className="h-8 bg-gray-200 rounded w-1/3" />
         <div className="h-32 bg-gray-100 rounded-xl" />
+        <div className="h-24 bg-gray-100 rounded-xl" />
+      </div>
+    );
+  }
+
+  if (!project) {
+    return (
+      <div className="flex flex-col items-center justify-center py-24 text-center">
+        <p className="text-lg font-semibold text-gray-700 mb-2">Project not found</p>
+        <p className="text-sm text-gray-400 mb-6">{error || 'This project may have been deleted or you may not have access.'}</p>
+        <button onClick={() => navigate('/pm/projects')} className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm hover:bg-emerald-700 transition-colors">
+          Back to Projects
+        </button>
       </div>
     );
   }
@@ -137,8 +153,8 @@ export default function ProjectDetail() {
             )}
           </div>
           <div className="flex items-center gap-4 mt-1 text-sm text-gray-500 flex-wrap">
-            <span>PM: <strong className="text-gray-700">{project.projectManager?.name || '—'}</strong></span>
-            <span>Owner: <strong className="text-gray-700">{project.owner?.name || '—'}</strong></span>
+            <span>PM: <strong className="text-gray-700">{project.projectManager?.name || 'â€”'}</strong></span>
+            <span>Owner: <strong className="text-gray-700">{project.owner?.name || 'â€”'}</strong></span>
             {project.clientName && <span>Client: <strong className="text-gray-700">{project.clientName}</strong></span>}
             {project.endDate && <span>Due: <strong className="text-gray-700">{new Date(project.endDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</strong></span>}
           </div>
@@ -205,9 +221,9 @@ export default function ProjectDetail() {
             )}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 pt-2">
               {[
-                ['Start Date', project.startDate ? new Date(project.startDate).toLocaleDateString('en-IN') : '—'],
-                ['End Date', project.endDate ? new Date(project.endDate).toLocaleDateString('en-IN') : '—'],
-                ['Client', project.clientName || '—'],
+                ['Start Date', project.startDate ? new Date(project.startDate).toLocaleDateString('en-IN') : 'â€”'],
+                ['End Date', project.endDate ? new Date(project.endDate).toLocaleDateString('en-IN') : 'â€”'],
+                ['Client', project.clientName || 'â€”'],
                 ['Notify Client', project.notifyClient ? 'Yes' : 'No'],
               ].map(([l, v]) => (
                 <div key={l}>
@@ -226,7 +242,7 @@ export default function ProjectDetail() {
                 onClick={() => navigate(`/pm/projects/${id}/gantt`)}
                 className="text-xs text-emerald-600 hover:underline"
               >
-                Full Gantt View →
+                Full Gantt View â†’
               </button>
             </div>
             {milestones.length === 0 ? (
@@ -236,7 +252,7 @@ export default function ProjectDetail() {
                 {milestones.map(m => {
                   const isDelayed = m.endDate && m.endDate < today && m.status !== 'completed';
                   return (
-                    <div key={m.id} className="flex items-center gap-3">
+                    <div key={m._id || m.id} className="flex items-center gap-3">
                       <div className="w-1/3 text-xs text-gray-700 truncate">{m.name}</div>
                       <span className={`text-xs px-2 py-0.5 rounded-full font-medium capitalize whitespace-nowrap ${MILESTONE_STATUS_COLORS[m.status] || 'bg-gray-100'}`}>
                         {m.status?.replace(/_/g, ' ')}
@@ -287,17 +303,17 @@ export default function ProjectDetail() {
                   {milestones.map((m, i) => {
                     const isDelayed = m.endDate && m.endDate < today && m.status !== 'completed';
                     return (
-                      <tr key={m.id} className={isDelayed ? 'bg-red-50' : ''}>
+                      <tr key={m._id || m.id} className={isDelayed ? 'bg-red-50' : ''}>
                         <td className="px-5 py-3 text-gray-400 text-xs">{i + 1}</td>
                         <td className="px-5 py-3">
                           <p className="font-medium text-gray-900">{m.name}</p>
                           {m.description && <p className="text-xs text-gray-400 mt-0.5">{m.description}</p>}
                         </td>
-                        <td className="px-5 py-3 text-gray-600">{m.accountableUser?.name || '—'}</td>
-                        <td className="px-5 py-3 text-gray-500 text-xs">{m.startDate ? new Date(m.startDate).toLocaleDateString('en-IN') : '—'}</td>
+                        <td className="px-5 py-3 text-gray-600">{m.accountableUser?.name || 'â€”'}</td>
+                        <td className="px-5 py-3 text-gray-500 text-xs">{m.startDate ? new Date(m.startDate).toLocaleDateString('en-IN') : 'â€”'}</td>
                         <td className={`px-5 py-3 text-xs ${isDelayed ? 'text-red-600 font-semibold' : 'text-gray-500'}`}>
-                          {m.endDate ? new Date(m.endDate).toLocaleDateString('en-IN') : '—'}
-                          {isDelayed && ' ⚠️'}
+                          {m.endDate ? new Date(m.endDate).toLocaleDateString('en-IN') : 'â€”'}
+                          {isDelayed && ' âš ï¸'}
                         </td>
                         <td className="px-5 py-3">
                           <span className={`text-xs px-2 py-0.5 rounded-full font-medium capitalize ${MILESTONE_STATUS_COLORS[m.status] || 'bg-gray-100'}`}>
@@ -341,7 +357,7 @@ export default function ProjectDetail() {
                   <label className="text-xs font-medium text-gray-600 block mb-1">User</label>
                   <select value={memberForm.userId} onChange={e => setMemberForm(f => ({ ...f, userId: e.target.value }))} className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm">
                     <option value="">Select user</option>
-                    {allUsers.filter(u => !members.some(m => m.userId === u.id)).map(u => <option key={u.id} value={u.id}>{u.name} ({u.role})</option>)}
+                    {allUsers.filter(u => !members.some(m => m.userId === (u._id || u.id))).map(u => <option key={u._id || u.id} value={u._id || u.id}>{u.name} ({u.role})</option>)}
                   </select>
                 </div>
                 <div>
@@ -363,18 +379,18 @@ export default function ProjectDetail() {
           ) : (
             <div className="divide-y divide-gray-50">
               {members.map(m => (
-                <div key={m.id} className="px-5 py-3 flex items-center gap-4">
+                <div key={m._id || m.id} className="px-5 py-3 flex items-center gap-4">
                   <div className="w-9 h-9 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center text-sm font-bold flex-shrink-0">
                     {m.user?.name?.charAt(0).toUpperCase() || '?'}
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-gray-900">{m.user?.name}</p>
-                    <p className="text-xs text-gray-500">{m.user?.email} · {m.user?.role?.replace(/_/g, ' ')}</p>
+                    <p className="text-xs text-gray-500">{m.user?.email} Â· {m.user?.role?.replace(/_/g, ' ')}</p>
                     {m.role && <p className="text-xs text-emerald-700 mt-0.5">Project Role: {m.role}</p>}
                     {m.responsibilities && <p className="text-xs text-gray-400 mt-0.5">{m.responsibilities}</p>}
                   </div>
                   {canManage && (
-                    <button onClick={() => handleRemoveMember(m.id)} className="text-xs text-red-500 hover:text-red-700 transition-colors">Remove</button>
+                    <button onClick={() => handleRemoveMember(m._id || m.id)} className="text-xs text-red-500 hover:text-red-700 transition-colors">Remove</button>
                   )}
                 </div>
               ))}
@@ -402,3 +418,4 @@ export default function ProjectDetail() {
     </div>
   );
 }
+

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { upsertTodayLogApi, getDailyLogsApi } from '../../api/pm/dailyLogs.api';
+import { upsertTodayLogApi, getTodayLogApi } from '../../api/pm/dailyLogs.api';
 import { getProjectByIdApi } from '../../api/pm/projects.api';
 import { HiOutlineArrowLeft, HiOutlineClock, HiOutlineClipboardList } from 'react-icons/hi';
 
@@ -25,11 +25,9 @@ export default function DailyLogForm() {
 
   useEffect(() => {
     getProjectByIdApi(id).then(r => setProject(r.data.data)).catch(() => {});
-    // Check if today's log exists
-    const today = new Date().toISOString().slice(0, 10);
-    getDailyLogsApi(id, { limit: 5 }).then(r => {
-      const logs = r.data?.data || [];
-      const todayLog = logs.find(l => l.reportDate === today);
+    // Check if today's log exists via dedicated endpoint
+    getTodayLogApi(id).then(r => {
+      const todayLog = r.data?.data;
       if (todayLog) {
         setForm({
           overallStatus: todayLog.overallStatus || 'on_track',

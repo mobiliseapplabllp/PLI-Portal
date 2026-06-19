@@ -58,4 +58,12 @@ const upsertTodayLog = async (projectId, data, user) => {
   return log;
 };
 
-module.exports = { getLogs, getLogById, upsertTodayLog };
+const getTodayLog = async (projectId) => {
+  const today = new Date().toISOString().slice(0, 10);
+  return DailyStatusLog.findOne({
+    where: { projectId, reportDate: today },
+    include: [{ model: User, as: 'createdBy', attributes: ['id', 'name'] }],
+  });
+};
+
+module.exports = { getLogs, getLogById, getTodayLog, upsertTodayLog };

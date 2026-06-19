@@ -8,6 +8,18 @@ import { HiOutlineArrowLeft } from 'react-icons/hi';
 
 const STATUS_OPTIONS = ['planning', 'active', 'on_hold'];
 
+// Must be defined outside the component — defining inside causes remount on every keystroke
+function Field({ label, required, children }) {
+  return (
+    <div>
+      <label className="block text-sm font-medium text-gray-700 mb-1">
+        {label} {required && <span className="text-red-500">*</span>}
+      </label>
+      {children}
+    </div>
+  );
+}
+
 export default function CreateProject() {
   const navigate = useNavigate();
   const { user } = useSelector(s => s.auth);
@@ -30,7 +42,7 @@ export default function CreateProject() {
   useEffect(() => {
     getUsersApi({ isActive: true, limit: 200 }).then(res => {
       setUsers(res.data?.data?.users || res.data?.data || []);
-    }).catch(() => {});
+    }).catch(() => toast.error('Failed to load users list — check connection'));
   }, []);
 
   const set = (field, val) => setForm(f => ({ ...f, [field]: val }));
@@ -42,22 +54,13 @@ export default function CreateProject() {
     try {
       const res = await createProjectApi(form);
       toast.success('Project created');
-      navigate(`/pm/projects/${res.data.data.id}`);
+      navigate(`/pm/projects/${res.data.data._id || res.data.data.id}`);
     } catch (err) {
       toast.error(err.response?.data?.error?.message || 'Failed to create project');
     } finally {
       setSaving(false);
     }
   };
-
-  const Field = ({ label, required, children }) => (
-    <div>
-      <label className="block text-sm font-medium text-gray-700 mb-1">
-        {label} {required && <span className="text-red-500">*</span>}
-      </label>
-      {children}
-    </div>
-  );
 
   const inputClass = "w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500";
 
@@ -98,7 +101,7 @@ export default function CreateProject() {
           <Field label="Project Owner">
             <select value={form.ownerId} onChange={e => set('ownerId', e.target.value)} className={inputClass}>
               <option value="">Select owner</option>
-              {users.map(u => <option key={u.id} value={u.id}>{u.name} ({u.role})</option>)}
+              {users.map(u => <option key={u._id || u.id} value={u._id || u.id}>{u.name} ({u.role})</option>)}
             </select>
           </Field>
         </div>
@@ -107,7 +110,7 @@ export default function CreateProject() {
           <select value={form.managerId} onChange={e => set('managerId', e.target.value)} className={inputClass}>
             <option value="">Select project manager</option>
             {users.filter(u => ['manager', 'senior_manager', 'admin'].includes(u.role)).map(u => (
-              <option key={u.id} value={u.id}>{u.name}</option>
+              <option key={u._id || u.id} value={u._id || u.id}>{u.name}</option>
             ))}
           </select>
         </Field>

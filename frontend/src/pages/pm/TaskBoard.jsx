@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+﻿import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useSelector } from 'react-redux';
 import toast from 'react-hot-toast';
@@ -39,7 +39,7 @@ export default function TaskBoard() {
       const ms = mRes.data.data || [];
       setMilestones(ms);
       // Load all tasks across all milestones
-      const taskArrays = await Promise.all(ms.map(m => getTasksApi(id, m.id).then(r => r.data.data || []).catch(() => [])));
+      const taskArrays = await Promise.all(ms.map(m => getTasksApi(id, m._id || m.id).then(r => r.data.data || []).catch(() => [])));
       setTasks(taskArrays.flat());
     } catch { toast.error('Failed to load tasks'); }
     finally { setLoading(false); }
@@ -58,7 +58,8 @@ export default function TaskBoard() {
     setSaving(true);
     try {
       if (editingTask) {
-        await updateTaskApi(id, form.milestoneId || editingTask.milestoneId, editingTask.id, form);
+        // Always route via the original milestoneId â€” the task is stored under that milestone in the DB
+        await updateTaskApi(id, editingTask.milestoneId, editingTask._id || editingTask.id, form);
         toast.success('Task updated');
       } else {
         await createTaskApi(id, form.milestoneId, form);
@@ -73,7 +74,7 @@ export default function TaskBoard() {
   const handleDelete = async (task) => {
     if (!window.confirm('Delete this task?')) return;
     try {
-      await deleteTaskApi(id, task.milestoneId, task.id);
+      await deleteTaskApi(id, task.milestoneId, task._id || task.id);
       toast.success('Task deleted');
       load();
     } catch { toast.error('Failed'); }
@@ -81,8 +82,8 @@ export default function TaskBoard() {
 
   const handleStatusChange = async (task, status) => {
     try {
-      await updateTaskStatusApi(id, task.milestoneId, task.id, status);
-      setTasks(p => p.map(t => t.id === task.id ? { ...t, status } : t));
+      await updateTaskStatusApi(id, task.milestoneId, task._id || task.id, status);
+      setTasks(p => p.map(t => (t._id || t.id) === (task._id || task.id) ? { ...t, status } : t));
     } catch { toast.error('Failed to update status'); }
   };
 
@@ -118,11 +119,11 @@ export default function TaskBoard() {
       <div className="flex gap-3 flex-wrap">
         <select value={milestoneFilter} onChange={e => setMilestoneFilter(e.target.value)} className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm">
           <option value="">All Milestones</option>
-          {milestones.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+          {milestones.map(m => <option key={m._id || m.id} value={m._id || m.id}>{m.name}</option>)}
         </select>
         <select value={assigneeFilter} onChange={e => setAssigneeFilter(e.target.value)} className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm">
           <option value="">All Assignees</option>
-          {users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+          {users.map(u => <option key={u._id || u.id} value={u._id || u.id}>{u.name}</option>)}
         </select>
         <span className="text-xs text-gray-400 self-center">{filteredTasks.length} tasks</span>
       </div>
@@ -136,14 +137,14 @@ export default function TaskBoard() {
               <label className="text-xs font-medium text-gray-600 block mb-1">Milestone *</label>
               <select value={form.milestoneId} onChange={e => set('milestoneId', e.target.value)} className={inputClass}>
                 <option value="">Select milestone</option>
-                {milestones.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                {milestones.map(m => <option key={m._id || m.id} value={m._id || m.id}>{m.name}</option>)}
               </select>
             </div>
             <div>
               <label className="text-xs font-medium text-gray-600 block mb-1">Assign To</label>
               <select value={form.assignedToId} onChange={e => set('assignedToId', e.target.value)} className={inputClass}>
                 <option value="">Unassigned</option>
-                {users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+                {users.map(u => <option key={u._id || u.id} value={u._id || u.id}>{u.name}</option>)}
               </select>
             </div>
             <div className="md:col-span-2">
@@ -189,9 +190,9 @@ export default function TaskBoard() {
                 </div>
                 <div className="space-y-2">
                   {colTasks.map(task => (
-                    <div key={task.id} className="bg-white rounded-lg border border-gray-200 p-3 shadow-sm">
+                    <div key={task._id || task.id} className="bg-white rounded-lg border border-gray-200 p-3 shadow-sm">
                       <p className="text-sm font-medium text-gray-900 leading-snug">{task.title}</p>
-                      <p className="text-xs text-gray-400 mt-1">{task.milestone?.name || '—'}</p>
+                      <p className="text-xs text-gray-400 mt-1">{task.milestone?.name || 'â€”'}</p>
                       {task.assignedTo && (
                         <div className="flex items-center gap-1.5 mt-2">
                           <div className="w-5 h-5 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center text-[10px] font-bold">
@@ -237,3 +238,4 @@ export default function TaskBoard() {
     </div>
   );
 }
+

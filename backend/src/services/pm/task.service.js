@@ -17,6 +17,18 @@ const getTasks = async (projectId, milestoneId) => {
   });
 };
 
+// Returns all tasks for a project across all milestones — avoids N+1 in MyTasks page
+const getAllProjectTasks = async (projectId) => {
+  return Task.findAll({
+    where: { projectId },
+    include: [
+      { model: User, as: 'assignedTo', attributes: ['id', 'name', 'email'] },
+      { model: Milestone, as: 'milestone', attributes: ['id', 'name', 'status'] },
+    ],
+    order: [['order', 'ASC']],
+  });
+};
+
 const createTask = async (projectId, milestoneId, data, user) => {
   const milestone = await Milestone.findOne({ where: { id: milestoneId, projectId } });
   if (!milestone) throw new NotFoundError('Milestone');
@@ -42,4 +54,4 @@ const updateTaskStatus = async (projectId, milestoneId, taskId, status) => {
   return updateTask(projectId, milestoneId, taskId, { status });
 };
 
-module.exports = { getTasks, createTask, updateTask, deleteTask, updateTaskStatus };
+module.exports = { getTasks, getAllProjectTasks, createTask, updateTask, deleteTask, updateTaskStatus };

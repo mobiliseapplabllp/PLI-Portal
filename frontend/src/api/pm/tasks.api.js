@@ -2,6 +2,9 @@ import api from '../axios';
 
 const base = (pid, mid) => `/pm/projects/${pid}/milestones/${mid}/tasks`;
 
+// All tasks for a project (flat) — used by MyTasks to avoid N+1
+export const getAllProjectTasksApi = (projectId) => api.get(`/pm/projects/${projectId}/tasks`);
+
 export const getTasksApi = (projectId, milestoneId) => api.get(base(projectId, milestoneId));
 export const createTaskApi = (projectId, milestoneId, data) => api.post(base(projectId, milestoneId), data);
 export const updateTaskApi = (projectId, milestoneId, taskId, data) => api.put(`${base(projectId, milestoneId)}/${taskId}`, data);

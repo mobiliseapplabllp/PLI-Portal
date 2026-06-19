@@ -170,6 +170,24 @@ function makeEmail(code) {
 }
 
 const seed = async () => {
+  // ══════════════════════════════════════════════════════════════
+  //  SAFETY GUARD — This script DESTROYS ALL DATA.
+  //  Must set SEED_CONFIRM=yes environment variable to proceed.
+  //  NEVER run this against a production database with live data.
+  // ══════════════════════════════════════════════════════════════
+  if (process.env.SEED_CONFIRM !== 'yes') {
+    console.error('\n⛔  ABORTED — seed.js will DESTROY ALL DATABASE DATA.');
+    console.error('    This script is for first-time setup only.');
+    console.error('    To confirm you understand and want to wipe all data, run:');
+    console.error('    SEED_CONFIRM=yes npm run seed\n');
+    process.exit(1);
+  }
+  if ((process.env.NODE_ENV || 'development') === 'production') {
+    console.error('\n⛔  ABORTED — Seed script must never run in NODE_ENV=production.\n');
+    process.exit(1);
+  }
+  console.warn('\n⚠️  SEED_CONFIRM=yes detected. Proceeding to WIPE AND RESEED the database...\n');
+
   try {
     await sequelize.authenticate();
     console.log('Connected to MySQL');

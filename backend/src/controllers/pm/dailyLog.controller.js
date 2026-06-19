@@ -17,4 +17,9 @@ const upsertTodayLog = async (req, res, next) => {
   catch (e) { next(e); }
 };
 
-module.exports = { getLogs, getLogById, upsertTodayLog };
+const getTodayLog = async (req, res, next) => {
+  try { sendSuccess(res, await dailyLogService.getTodayLog(req.params.id)); }
+  catch (e) { next(e); }
+};
+
+module.exports = { getLogs, getLogById, getTodayLog, upsertTodayLog };
