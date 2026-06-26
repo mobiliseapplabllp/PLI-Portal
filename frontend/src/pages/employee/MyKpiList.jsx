@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useSelector } from 'react-redux';
 import {
   getAssignmentsApi,
@@ -6,6 +6,10 @@ import {
   commitKpiApi,
   saveDraftApi,
   employeeSubmitApi,
+  uploadItemAttachmentApi,
+  downloadItemAttachmentApi,
+  deleteItemAttachmentApi,
+  downloadEmployeeAttachmentApi,
 } from '../../api/kpiAssignments.api';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
 import {
@@ -30,6 +34,8 @@ import {
   HiOutlineCheckCircle,
   HiOutlineSave,
   HiOutlineX,
+  HiOutlinePaperClip,
+  HiOutlineDownload,
 } from 'react-icons/hi';
 
 // Indian FY months in order: Apr → Mar
@@ -76,6 +82,10 @@ export default function MyKpiList() {
   const [submitting, setSubmitting] = useState(false);
   const [savingDraft, setSavingDraft] = useState(false);
   const [activeHead, setActiveHead] = useState(KPI_HEADS[0]);
+  const [achieveFile, setAchieveFile] = useState(null);
+  const achieveFileRef = useRef(null);
+  const [itemAttachments, setItemAttachments] = useState({});
+  const [uploadingItem, setUploadingItem] = useState(null);
 
   const loadAssignments = useCallback(async () => {
     if (!user?._id) return;
@@ -114,6 +124,14 @@ export default function MyKpiList() {
         };
       });
       setEditMap(map);
+      const attachInit = {};
+      fetched.forEach((item) => {
+        if (item.selfReviewAttachmentName) {
+          attachInit[item._id || item.id] = { name: item.selfReviewAttachmentName };
+        }
+      });
+      setItemAttachments(attachInit);
+      setAchieveFile(null);
       const firstHead = KPI_HEADS.find((h) => fetched.some((i) => (i.kpiHead || 'Performance') === h));
       if (firstHead) setActiveHead(firstHead);
     } catch {
@@ -246,8 +264,10 @@ export default function MyKpiList() {
     });
     setSubmitting(true);
     try {
-      await employeeSubmitApi(assignmentId, payload);
+      await employeeSubmitApi(assignmentId, payload, achieveFile || null);
       toast.success('Self-review submitted successfully!');
+      setAchieveFile(null);
+      if (achieveFileRef.current) achieveFileRef.current.value = '';
       await loadAssignments();
       await fetchItems(assignmentId);
     } catch (err) {
@@ -255,6 +275,54 @@ export default function MyKpiList() {
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const handleItemFileChange = async (itemId, file) => {
+    if (!file) return;
+    const assignmentId = currentAssignment?._id;
+    if (!assignmentId) return;
+    setUploadingItem(itemId);
+    try {
+      await uploadItemAttachmentApi(assignmentId, itemId, file);
+      setItemAttachments((prev) => ({ ...prev, [itemId]: { name: file.name } }));
+      toast.success('Attachment uploaded');
+    } catch (err) {
+      toast.error(err.response?.data?.error?.message || 'Upload failed');
+    } finally { setUploadingItem(null); }
+  };
+
+  const handleItemFileRemove = async (itemId) => {
+    const assignmentId = currentAssignment?._id;
+    if (!assignmentId) return;
+    try {
+      await deleteItemAttachmentApi(assignmentId, itemId);
+      setItemAttachments((prev) => { const n = { ...prev }; delete n[itemId]; return n; });
+      toast.success('Attachment removed');
+    } catch { toast.error('Could not remove attachment'); }
+  };
+
+  const handleItemFileDownload = async (itemId, fileName) => {
+    const assignmentId = currentAssignment?._id;
+    if (!assignmentId) return;
+    try {
+      const res = await downloadItemAttachmentApi(assignmentId, itemId);
+      const url = URL.createObjectURL(res.data);
+      const a = document.createElement('a');
+      a.href = url; a.download = fileName || 'attachment'; a.click();
+      URL.revokeObjectURL(url);
+    } catch { toast.error('Could not download attachment'); }
+  };
+
+  const handleOverallAttachmentDownload = async () => {
+    const assignmentId = currentAssignment?._id;
+    if (!assignmentId) return;
+    try {
+      const res = await downloadEmployeeAttachmentApi(assignmentId);
+      const url = URL.createObjectURL(res.data);
+      const a = document.createElement('a');
+      a.href = url; a.download = currentAssignment.employeeAttachmentName || 'attachment'; a.click();
+      URL.revokeObjectURL(url);
+    } catch { toast.error('Could not download attachment'); }
   };
 
   if (user?.kpiReviewApplicable === false) {
@@ -447,6 +515,11 @@ export default function MyKpiList() {
                           Self-Review &amp; Note
                         </th>
                       )}
+                      {showSelfReviewCol && canSelfReview && (
+                        <th className="px-3 py-2.5 text-center border border-gray-200 min-w-[100px] text-amber-600">
+                          Attachment
+                        </th>
+                      )}
                       {showSelfReviewCol && !canSelfReview && (
                         <>
                           <th className="px-3 py-2.5 text-center border border-gray-200 min-w-[110px] text-amber-600">Self-Review</th>
@@ -600,6 +673,43 @@ export default function MyKpiList() {
                             </td>
                           )}
 
+                          {/* Per-item attachment — editable only when canSelfReview */}
+                          {showSelfReviewCol && canSelfReview && (
+                            <td className="px-2 py-2 text-center border border-gray-200 align-top">
+                              {itemAttachments[itemId] ? (
+                                <div className="flex flex-col gap-1 items-start">
+                                  <div className="flex items-center gap-1 text-xs text-gray-600 bg-gray-50 border border-gray-200 rounded px-2 py-1">
+                                    <HiOutlinePaperClip className="w-3.5 h-3.5 flex-shrink-0 text-gray-400" />
+                                    <span className="truncate max-w-[90px]" title={itemAttachments[itemId].name}>
+                                      {itemAttachments[itemId].name}
+                                    </span>
+                                  </div>
+                                  <div className="flex gap-1">
+                                    <button
+                                      onClick={() => handleItemFileDownload(itemId, itemAttachments[itemId].name)}
+                                      className="text-[10px] text-primary-600 hover:underline flex items-center gap-0.5"
+                                    >
+                                      <HiOutlineDownload className="w-3 h-3" /> Download
+                                    </button>
+                                    <span className="text-gray-300">·</span>
+                                    <button
+                                      onClick={() => handleItemFileRemove(itemId)}
+                                      className="text-[10px] text-red-500 hover:underline flex items-center gap-0.5"
+                                    >
+                                      <HiOutlineX className="w-3 h-3" /> Remove
+                                    </button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <label className={`cursor-pointer inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-dashed border-gray-300 text-gray-500 hover:border-amber-400 hover:text-amber-600 transition-colors ${uploadingItem === itemId ? 'opacity-50 pointer-events-none' : ''}`}>
+                                  <HiOutlinePaperClip className="w-3.5 h-3.5" />
+                                  {uploadingItem === itemId ? 'Uploading...' : 'Attach'}
+                                  <input type="file" className="hidden" onChange={(e) => handleItemFileChange(itemId, e.target.files[0])} />
+                                </label>
+                              )}
+                            </td>
+                          )}
+
                           {/* Manager Review */}
                           {showManagerCol && (
                             <td className="px-3 py-3 text-center border border-gray-200">
@@ -648,7 +758,7 @@ export default function MyKpiList() {
                         </span>
                       </td>
                       {showCommitCol && <td className="border border-gray-200" />}
-                      {showSelfReviewCol && <td colSpan={2} className="border border-gray-200" />}
+                      {showSelfReviewCol && <td colSpan={canSelfReview ? 3 : 2} className="border border-gray-200" />}
                       {showManagerCol && <td className="border border-gray-200" />}
                       {showFinalCol && <td className="border border-gray-200" />}
                     </tr>
@@ -656,9 +766,53 @@ export default function MyKpiList() {
                 </table>
               )}
 
+              {/* Overall attachment download (read-only, after submission) */}
+              {!canSelfReview && currentAssignment?.hasEmployeeAttachment && (
+                <div className="flex items-center gap-3 mt-4 bg-white border border-gray-200 rounded-xl px-4 py-3">
+                  <HiOutlinePaperClip className="w-5 h-5 text-gray-400 flex-shrink-0" />
+                  <span className="flex-1 text-sm text-gray-600">Your self-review attachment</span>
+                  <button
+                    onClick={handleOverallAttachmentDownload}
+                    className="inline-flex items-center gap-1.5 text-xs text-primary-600 hover:text-primary-800 font-medium"
+                  >
+                    <HiOutlineDownload className="w-4 h-4" /> Download
+                  </button>
+                </div>
+              )}
+
               {/* Bottom submit bar */}
               {(canCommit || canSelfReview) && (
-                <div className="flex items-center justify-between mt-4 pt-4 border-t border-gray-200 flex-wrap gap-3">
+                <div className="mt-4 pt-4 border-t border-gray-200 space-y-3">
+                  {/* Overall attachment input (self-review mode only) */}
+                  {canSelfReview && (
+                    <div className="flex items-center gap-3 bg-white border border-gray-200 rounded-xl px-4 py-3">
+                      <HiOutlinePaperClip className="w-5 h-5 text-gray-400 flex-shrink-0" />
+                      <span className="text-sm text-gray-600 flex-1">
+                        Supporting attachment <span className="text-gray-400 text-xs">(optional — overall for this submission)</span>
+                        {currentAssignment?.hasEmployeeAttachment && !achieveFile && (
+                          <span className="ml-2 text-xs text-gray-400 italic">· existing file will be replaced</span>
+                        )}
+                      </span>
+                      {achieveFile ? (
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm text-amber-800 max-w-[200px] truncate">{achieveFile.name}</span>
+                          <button
+                            onClick={() => { setAchieveFile(null); if (achieveFileRef.current) achieveFileRef.current.value = ''; }}
+                            className="text-red-500 hover:text-red-700"
+                          >
+                            <HiOutlineX className="w-4 h-4" />
+                          </button>
+                        </div>
+                      ) : (
+                        <label className="inline-flex items-center gap-1.5 cursor-pointer text-xs text-primary-600 hover:text-primary-800 font-medium whitespace-nowrap">
+                          <HiOutlinePaperClip className="w-4 h-4" /> Attach file
+                          <input ref={achieveFileRef} type="file" className="hidden"
+                            onChange={(e) => setAchieveFile(e.target.files[0] || null)} />
+                        </label>
+                      )}
+                    </div>
+                  )}
+                  <div className="flex items-center justify-between flex-wrap gap-3">
                   <p className="text-xs text-gray-400">
                     {canCommit
                       ? 'Fill in your commitment definition. Save Draft to preserve progress, or Submit Commitment to send for manager approval.'
@@ -701,6 +855,7 @@ export default function MyKpiList() {
                         Submit Self-Review
                       </button>
                     )}
+                  </div>
                   </div>
                 </div>
               )}
