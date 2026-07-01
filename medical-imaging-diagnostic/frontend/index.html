@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MID · AI Diagnostic Assistant</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body class="bg-slate-100 text-slate-800">
+  <!-- Login -->
+  <div id="login-view" class="min-h-screen flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl shadow-xl w-full max-w-md p-8">
+      <div class="flex items-center gap-3 mb-6">
+        <div class="h-11 w-11 rounded-xl bg-teal-600 text-white grid place-items-center text-xl font-bold">✚</div>
+        <div>
+          <h1 class="text-xl font-bold">Diagnostic Assistant</h1>
+          <p class="text-xs text-slate-500">Multi-tenant AI for clinical imaging</p>
+        </div>
+      </div>
+      <label class="block text-sm font-medium mb-1">Email</label>
+      <input id="email" class="w-full border rounded-lg px-3 py-2 mb-3" value="admin@city-general.demo" />
+      <label class="block text-sm font-medium mb-1">Password</label>
+      <input id="password" type="password" class="w-full border rounded-lg px-3 py-2 mb-4" value="demo1234" />
+      <button id="login-btn" class="w-full bg-teal-600 hover:bg-teal-700 text-white rounded-lg py-2.5 font-medium">Sign in</button>
+      <p id="login-error" class="text-red-600 text-sm mt-3 hidden"></p>
+      <p class="text-xs text-slate-400 mt-4">Demo: admin@city-general.demo · radiology@sunrise-dx.demo — password <code>demo1234</code></p>
+    </div>
+  </div>
+
+  <!-- App -->
+  <div id="app-view" class="hidden min-h-screen">
+    <header class="bg-white border-b sticky top-0 z-10">
+      <div class="max-w-7xl mx-auto px-4 h-14 flex items-center justify-between">
+        <div class="flex items-center gap-2 font-bold">
+          <span class="h-7 w-7 rounded-lg bg-teal-600 text-white grid place-items-center">✚</span>
+          Diagnostic Assistant
+        </div>
+        <div class="flex items-center gap-3 text-sm">
+          <span id="who" class="text-slate-500"></span>
+          <button id="logout-btn" class="text-teal-700 hover:underline">Sign out</button>
+        </div>
+      </div>
+    </header>
+
+    <main class="max-w-7xl mx-auto px-4 py-6 grid grid-cols-12 gap-6">
+      <!-- Patient list -->
+      <aside class="col-span-12 md:col-span-4 lg:col-span-3">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="font-semibold">Patients</h2>
+          <button id="new-patient-btn" class="text-sm text-teal-700 hover:underline">+ New</button>
+        </div>
+        <div id="patient-list" class="space-y-2"></div>
+      </aside>
+
+      <!-- Patient profile -->
+      <section class="col-span-12 md:col-span-8 lg:col-span-9">
+        <div id="empty-state" class="text-slate-400 text-center py-24">
+          Select a patient to view their unified profile.
+        </div>
+        <div id="profile" class="hidden space-y-6"></div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

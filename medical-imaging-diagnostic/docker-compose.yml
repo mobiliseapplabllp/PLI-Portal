@@ -1,0 +1,34 @@
+# Scalable deployment: API + Postgres. Scale the stateless API horizontally
+# behind a load balancer:  docker compose up --scale api=3
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: mid
+      POSTGRES_PASSWORD: mid
+      POSTGRES_DB: mid
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mid"]
+      interval: 5s
+      retries: 10
+
+  api:
+    build: .
+    environment:
+      DATABASE_URL: postgresql+psycopg://mid:mid@db:5432/mid
+      SECRET_KEY: change-me-in-production
+      AI_ENGINE_MODE: mock
+      UPLOAD_DIR: /data/uploads
+    volumes:
+      - uploads:/data/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+
+volumes:
+  db_data:
+  uploads:
