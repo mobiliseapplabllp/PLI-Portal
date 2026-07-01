@@ -44,10 +44,10 @@ def _startup() -> None:
     os.makedirs(settings.upload_dir, exist_ok=True)
     init_db()
     log = logging.getLogger("uvicorn")
-    if settings.secret_key in ("dev-secret-change-me", "change-me-to-a-long-random-string"):
+    if settings.secret_is_ephemeral:
         log.warning(
-            "⚠️  SECRET_KEY is the built-in default — JWTs can be forged. "
-            "Set a strong random SECRET_KEY in .env before any non-local use."
+            "⚠️  No SECRET_KEY set — using a random per-process key. Logins will "
+            "not survive a restart. Set a strong SECRET_KEY in .env for real use."
         )
     log.info("🩺 %s ready — %s", settings.app_name, describe_active())
 
