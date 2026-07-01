@@ -74,11 +74,15 @@ Interactive API docs: **http://localhost:8000/docs**
 1. **Sign in** → pick **James Okoro** → you'll see two studies (Chest X-ray +
    CT), each with findings, a heatmap, and an AI-draft report, plus the
    patient-level **AI correlation** ("Suspicious pulmonary neoplasm").
-2. **Create a new study**: on any patient click **+ New study**, choose a
+2. **Generate a full medical report**: click **📄 Medical Report** on a patient
+   to open a formal, print-ready radiology report (with **Print / Save as PDF**).
+3. **See the models**: click **AI Models** in the top bar for the active engines,
+   modalities, and how to enable the real TorchXRayVision model.
+4. **Create a new study**: on any patient click **+ New study**, choose a
    modality (`xray`, `ct`, `mri`, `fundus`), and upload an image from
    `sample_data/images/` → click **Run AI analysis**.
-3. **Read sample reports** without the app: open any file in
-   `sample_data/reports/` (Markdown).
+5. **Read sample reports** without the app: open any `sample_data/reports/*.html`
+   (formatted report) or `*.md` (plain text).
 
 ---
 

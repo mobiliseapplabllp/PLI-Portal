@@ -1,11 +1,23 @@
 """Patient records — always scoped to the caller's organization."""
+import json
+
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import HTMLResponse
 from sqlmodel import Session, select
 
 from .. import services
 from ..database import get_session
 from ..deps import get_current_user
-from ..models import Correlation, Patient, Study, User
+from ..models import (
+    Correlation,
+    DiagnosticResult,
+    Organization,
+    Patient,
+    Report,
+    Study,
+    User,
+)
+from ..report_render import render_patient_report
 from ..schemas import PatientCreate
 
 router = APIRouter(prefix="/api/patients", tags=["patients"])
@@ -68,3 +80,43 @@ def correlate_patient(
     """(Re)compute the AI correlation across all of the patient's studies."""
     _get_owned_patient(session, patient_id, user.org_id)
     return services.regenerate_correlation(session, patient_id, user.org_id)
+
+
+@router.get("/{patient_id}/report.html", response_class=HTMLResponse)
+def patient_report_artifact(
+    patient_id: int,
+    user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+) -> HTMLResponse:
+    """Formal, print-ready medical report as a self-contained HTML artifact."""
+    patient = _get_owned_patient(session, patient_id, user.org_id)
+    org = session.get(Organization, patient.org_id)
+    studies = session.exec(
+        select(Study).where(Study.patient_id == patient_id).order_by(Study.id)
+    ).all()
+
+    items = []
+    for st in studies:
+        diag = session.exec(
+            select(DiagnosticResult).where(DiagnosticResult.study_id == st.id)
+            .order_by(DiagnosticResult.id.desc())
+        ).first()
+        report = session.exec(
+            select(Report).where(Report.study_id == st.id).order_by(Report.id.desc())
+        ).first()
+        items.append({
+            "study": st,
+            "diagnostic": ({**diag.model_dump(), "findings": json.loads(diag.findings_json)}
+                           if diag else None),
+            "report": report,
+        })
+
+    correlation = session.exec(
+        select(Correlation).where(Correlation.patient_id == patient_id)
+    ).first()
+
+    html = render_patient_report(
+        org=org, patient=patient, studies=items, correlation=correlation,
+        report_id=f"MID-{patient.org_id:02d}-{patient.id:04d}",
+    )
+    return HTMLResponse(content=html)

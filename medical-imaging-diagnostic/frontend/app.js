@@ -1,10 +1,23 @@
-// Medical Imaging Diagnostic Assistant — frontend logic (vanilla JS).
-const API = ""; // same origin
+// Medical Imaging Diagnostic Assistant — frontend logic (vanilla JS, no deps).
+const API = "";
 let token = localStorage.getItem("mid_token");
 let currentPatient = null;
+let allPatients = [];
 
 const $ = (id) => document.getElementById(id);
+const AV_COLORS = ["#0d9488", "#4f46e5", "#db2777", "#ea580c", "#0891b2", "#7c3aed", "#059669"];
+const initials = (name) => name.split(" ").map((w) => w[0]).slice(0, 2).join("").toUpperCase();
+const avColor = (name) => AV_COLORS[[...name].reduce((a, c) => a + c.charCodeAt(0), 0) % AV_COLORS.length];
 const sevBadge = (s) => `<span class="badge sev-${s}">${s}</span>`;
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+function ageFrom(dob) {
+  if (!dob) return "—";
+  const d = new Date(dob); if (isNaN(d)) return "—";
+  const t = new Date(); let a = t.getFullYear() - d.getFullYear();
+  if (t.getMonth() < d.getMonth() || (t.getMonth() === d.getMonth() && t.getDate() < d.getDate())) a--;
+  return `${a} y`;
+}
 
 async function api(path, { method = "GET", body, form } = {}) {
   const headers = {};
@@ -17,67 +30,70 @@ async function api(path, { method = "GET", body, form } = {}) {
   return res.status === 204 ? null : res.json();
 }
 
-// Auth-aware image loader (img tags can't send bearer headers).
 async function loadImage(imgEl, path) {
   try {
     const res = await fetch(API + path, { headers: { Authorization: `Bearer ${token}` } });
     if (!res.ok) throw new Error();
     imgEl.src = URL.createObjectURL(await res.blob());
-  } catch { imgEl.alt = "unavailable"; }
+  } catch { imgEl.style.opacity = 0.3; }
+}
+
+function toast(msg) {
+  const t = document.createElement("div"); t.className = "toast"; t.textContent = msg;
+  document.body.appendChild(t); setTimeout(() => t.remove(), 2600);
 }
 
 // ---- auth ----------------------------------------------------------------
 async function login() {
   const form = new URLSearchParams();
-  form.set("username", $("email").value);
-  form.set("password", $("password").value);
+  form.set("username", $("email").value); form.set("password", $("password").value);
   try {
     const res = await fetch(API + "/api/auth/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: form,
+      method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: form,
     });
-    if (!res.ok) throw new Error("Invalid credentials");
+    if (!res.ok) throw new Error("Invalid email or password");
     token = (await res.json()).access_token;
     localStorage.setItem("mid_token", token);
     await boot();
-  } catch (e) {
-    $("login-error").textContent = e.message;
-    $("login-error").classList.remove("hidden");
-  }
+  } catch (e) { $("login-error").textContent = e.message; $("login-error").classList.remove("hidden"); }
 }
-
 function logout() {
-  token = null;
-  localStorage.removeItem("mid_token");
-  $("app-view").classList.add("hidden");
-  $("login-view").classList.remove("hidden");
+  token = null; localStorage.removeItem("mid_token");
+  $("app-view").classList.add("hidden"); $("login-view").classList.remove("hidden");
 }
-
 async function boot() {
   const me = await api("/api/auth/me");
-  $("who").textContent = `${me.full_name} · ${me.role}`;
-  $("login-view").classList.add("hidden");
-  $("app-view").classList.remove("hidden");
+  $("who").innerHTML = `<b>${esc(me.full_name)}</b><span>${esc(me.role)}</span>`;
+  $("avatar").textContent = initials(me.full_name);
+  $("avatar").style.background = "#f0fdfa";
+  $("login-view").classList.add("hidden"); $("app-view").classList.remove("hidden");
   await loadPatients();
 }
 
 // ---- patients ------------------------------------------------------------
 async function loadPatients() {
-  const patients = await api("/api/patients");
-  $("patient-list").innerHTML = patients.map((p) => `
-    <button data-id="${p.id}" class="patient-item w-full text-left card px-3 py-2 hover:border-teal-400">
-      <div class="font-medium">${p.full_name}</div>
-      <div class="text-xs text-slate-500">MRN ${p.mrn} · ${p.sex || "?"} · ${p.date_of_birth || ""}</div>
-    </button>`).join("") || `<p class="text-sm text-slate-400">No patients yet.</p>`;
-  document.querySelectorAll(".patient-item").forEach((b) =>
-    b.addEventListener("click", () => openPatient(b.dataset.id)));
+  allPatients = await api("/api/patients");
+  renderPatientList(allPatients);
 }
-
+function renderPatientList(list) {
+  $("patient-list").innerHTML = list.map((p) => `
+    <button data-id="${p.id}" class="pcard ${p.id == currentPatient ? "active" : ""}">
+      <span class="pav" style="background:${avColor(p.full_name)}">${initials(p.full_name)}</span>
+      <span class="pmeta">
+        <span class="pname">${esc(p.full_name)}</span>
+        <span class="psub">MRN ${esc(p.mrn)} · ${esc(p.sex || "?")} · ${ageFrom(p.date_of_birth)}</span>
+      </span>
+    </button>`).join("") || `<p class="hint">No patients found.</p>`;
+  document.querySelectorAll(".pcard").forEach((b) => b.addEventListener("click", () => openPatient(b.dataset.id)));
+}
+$("patient-search")?.addEventListener("input", (e) => {
+  const q = e.target.value.toLowerCase();
+  renderPatientList(allPatients.filter((p) =>
+    p.full_name.toLowerCase().includes(q) || (p.mrn || "").toLowerCase().includes(q)));
+});
 async function newPatient() {
-  const full_name = prompt("Patient full name:");
-  if (!full_name) return;
-  const mrn = prompt("Medical record number (MRN):", "MRN-" + Math.floor(Math.random() * 9000 + 1000));
+  const full_name = prompt("Patient full name:"); if (!full_name) return;
+  const mrn = prompt("MRN:", "MRN-" + Math.floor(Math.random() * 9000 + 1000));
   await api("/api/patients", { method: "POST", body: { full_name, mrn, sex: "", date_of_birth: "" } });
   await loadPatients();
 }
@@ -86,123 +102,126 @@ async function newPatient() {
 async function openPatient(id) {
   currentPatient = id;
   $("empty-state").classList.add("hidden");
-  $("profile").classList.remove("hidden");
+  document.querySelectorAll(".pcard").forEach((b) => b.classList.toggle("active", b.dataset.id == id));
   const data = await api(`/api/patients/${id}`);
-  const p = data.patient;
-  const c = data.correlation;
-
+  const p = data.patient, c = data.correlation;
   const diff = c ? JSON.parse(c.differential_json) : [];
   const recs = c ? JSON.parse(c.recommendations_json) : [];
 
   $("profile").innerHTML = `
-    <div class="card p-5">
-      <div class="flex items-start justify-between">
+    <div class="card pad">
+      <div class="phead">
+        <span class="pav" style="background:${avColor(p.full_name)}">${initials(p.full_name)}</span>
         <div>
-          <h2 class="text-2xl font-bold">${p.full_name}</h2>
-          <p class="text-sm text-slate-500">MRN ${p.mrn} · ${p.sex || "?"} · DOB ${p.date_of_birth || "n/a"}</p>
+          <h2>${esc(p.full_name)}</h2>
+          <div class="sub">MRN ${esc(p.mrn)} · ${esc(p.sex || "?")} · DOB ${esc(p.date_of_birth || "n/a")} (${ageFrom(p.date_of_birth)})
+            ${c ? " · " + sevBadge(c.max_severity) : ""}</div>
+          ${p.notes ? `<div class="sub" style="margin-top:6px">📋 ${esc(p.notes)}</div>` : ""}
         </div>
-        <button id="add-study-btn" class="bg-teal-600 hover:bg-teal-700 text-white text-sm rounded-lg px-3 py-2">+ New study</button>
+        <div class="actions">
+          <button class="btn ghost sm" id="report-btn">📄 Medical Report</button>
+          <button class="btn ghost sm" id="recorrelate-btn">↻ Recompute</button>
+          <button class="btn sm" id="add-study-btn">+ New study</button>
+        </div>
       </div>
     </div>
 
-    <div class="card p-5 border-l-4 ${c ? "border-teal-500" : "border-slate-300"}">
-      <div class="flex items-center justify-between mb-2">
-        <h3 class="font-semibold flex items-center gap-2">🧠 AI Correlation ${c ? sevBadge(c.max_severity) : ""}</h3>
-        <button id="recorrelate-btn" class="text-xs text-teal-700 hover:underline">Recompute</button>
-      </div>
-      <p class="text-sm text-slate-700 mb-3">${c ? c.summary : "No correlation yet — analyse a study."}</p>
-      ${diff.length ? `<div class="mb-3"><div class="text-xs font-semibold text-slate-500 mb-1">DIFFERENTIAL</div>
-        ${diff.map((d) => `<div class="flex items-center justify-between text-sm py-1 border-b last:border-0">
-          <span>${d.condition} <span class="text-xs text-slate-400">(${d.supporting_findings.join(", ")})</span></span>
-          <span class="font-mono text-teal-700">${(d.confidence * 100).toFixed(0)}%</span></div>`).join("")}</div>` : ""}
-      ${recs.length ? `<div><div class="text-xs font-semibold text-slate-500 mb-1">RECOMMENDATIONS</div>
-        <ul class="list-disc list-inside text-sm text-slate-600">${recs.map((r) => `<li>${r}</li>`).join("")}</ul></div>` : ""}
+    <div class="card pad corr">
+      <div class="chead"><h3>🧠 AI Correlation</h3> ${c ? sevBadge(c.max_severity) : ""}</div>
+      <p class="summary">${c ? esc(c.summary) : "No correlation yet — analyse a study."}</p>
+      ${c ? `<div class="corr-cols">
+        <div><h4>Differential considerations</h4>
+          ${diff.map((d) => `<div class="diff-item">
+            <span class="cond">${esc(d.condition)}</span><span class="conf">${(d.confidence * 100).toFixed(0)}%</span>
+            <span class="supp">supporting: ${esc(d.supporting_findings.join(", "))}</span></div>`).join("")
+          || '<div class="hint">No multi-finding pattern matched.</div>'}
+        </div>
+        <div><h4>Recommendations</h4>
+          <ul class="recs">${recs.map((r) => `<li>${esc(r)}</li>`).join("") || '<li>Routine follow-up.</li>'}</ul>
+        </div>
+      </div>` : ""}
     </div>
 
-    <div>
-      <h3 class="font-semibold mb-3">Studies (${data.studies.length})</h3>
-      <div id="studies" class="grid md:grid-cols-2 gap-4"></div>
-    </div>
-  `;
+    <div class="section-title">Studies (${data.studies.length})</div>
+    <div class="studies" id="studies"></div>`;
 
+  $("report-btn").addEventListener("click", () => openReport(id));
   $("add-study-btn").addEventListener("click", () => addStudy(id));
   $("recorrelate-btn").addEventListener("click", async () => {
-    await api(`/api/patients/${id}/correlate`, { method: "POST" });
-    openPatient(id);
+    await api(`/api/patients/${id}/correlate`, { method: "POST" }); openPatient(id);
   });
 
-  const container = $("studies");
-  container.innerHTML = data.studies.map((s) => `
-    <div class="card p-4" id="study-${s.id}">
-      <div class="flex items-center justify-between">
-        <div><span class="font-semibold uppercase text-xs bg-slate-100 rounded px-2 py-0.5">${s.modality}</span>
-          <span class="ml-2 text-sm">${s.body_part || ""}</span></div>
-        <span class="text-xs text-slate-400">${s.status}</span>
+  $("studies").innerHTML = data.studies.map((s) => `
+    <div class="card study" id="study-${s.id}">
+      <div class="shead">
+        <div><span class="chip">${esc(s.modality)}</span> <span class="chip soft">${esc(s.body_part || "")}</span></div>
+        <span class="hint">${esc(s.status)}</span>
       </div>
-      <p class="text-xs text-slate-500 mt-1">${s.description || ""}</p>
-      <div class="study-detail mt-3 text-sm text-slate-400">Loading…</div>
-    </div>`).join("") || `<p class="text-sm text-slate-400">No studies.</p>`;
-
+      <div class="sdesc hint" style="margin:-4px 0 8px">${esc(s.description || "")}</div>
+      <div class="study-body">Loading…</div>
+    </div>`).join("") || `<p class="hint">No studies yet.</p>`;
   data.studies.forEach((s) => renderStudy(s.id));
 }
 
 async function renderStudy(studyId) {
-  const el = document.querySelector(`#study-${studyId} .study-detail`);
+  const el = document.querySelector(`#study-${studyId} .study-body`);
   const d = await api(`/api/studies/${studyId}`);
-  const diag = d.diagnostics[0];
-  const report = d.reports[0];
-  const hasImg = d.images.length > 0;
+  const diag = d.diagnostics[0], report = d.reports[0], hasImg = d.images.length > 0;
 
-  el.innerHTML = `
-    <div class="grid grid-cols-2 gap-3">
-      <div>
-        <img class="orig rounded-lg border w-full aspect-square object-cover bg-slate-100" alt="no image"/>
-        <div class="text-[10px] text-center text-slate-400 mt-1">Original</div>
-      </div>
-      <div>
-        <img class="heat rounded-lg border w-full aspect-square object-cover bg-slate-100" alt="run analysis"/>
-        <div class="text-[10px] text-center text-slate-400 mt-1">AI attention (Grad-CAM)</div>
-      </div>
-    </div>
-    ${diag ? `<div class="mt-3">
-        <div class="text-xs text-slate-400 mb-1">${diag.model_source}</div>
-        ${diag.findings.filter((f) => f.severity !== "normal").slice(0, 5).map((f) =>
-          `<div class="flex justify-between items-center py-0.5"><span>${f.label}</span>
-           <span>${(f.probability * 100).toFixed(0)}% ${sevBadge(f.severity)}</span></div>`).join("") ||
-          `<div class="text-green-700 text-sm">No significant findings.</div>`}
-      </div>
-      ${report ? `<details class="mt-2"><summary class="text-xs text-teal-700 cursor-pointer">AI-draft report</summary>
-        <pre class="text-xs whitespace-pre-wrap bg-slate-50 rounded p-2 mt-1">${report.body}</pre></details>` : ""}`
-    : `<button class="analyze-btn mt-3 w-full bg-slate-800 hover:bg-black text-white rounded-lg py-2 text-sm" data-id="${studyId}">
-         ${hasImg ? "▶ Run AI analysis" : "⚠ Upload an image first"}</button>`}
-  `;
-
-  if (hasImg) {
-    loadImage(el.querySelector(".orig"), `/api/studies/${studyId}/image-file`);
-    if (diag) loadImage(el.querySelector(".heat"), `/api/studies/${studyId}/image-file?heatmap=true`);
+  if (!diag) {
+    el.innerHTML = `<button class="btn dark analyze-cta" ${hasImg ? "" : "disabled"} data-id="${studyId}">
+      ${hasImg ? "▶ Run AI analysis" : "⚠ Upload an image first"}</button>`;
+    const btn = el.querySelector(".analyze-cta");
+    if (btn && hasImg) btn.addEventListener("click", async () => {
+      btn.textContent = "Analysing…"; btn.disabled = true;
+      await api(`/api/studies/${studyId}/analyze`, { method: "POST" }); openPatient(currentPatient);
+    });
+    return;
   }
-  const btn = el.querySelector(".analyze-btn");
-  if (btn && hasImg) btn.addEventListener("click", async () => {
-    btn.textContent = "Analysing…"; btn.disabled = true;
-    await api(`/api/studies/${studyId}/analyze`, { method: "POST" });
-    openPatient(currentPatient); // refresh profile + correlation
-  });
+
+  const pos = diag.findings.filter((f) => f.severity !== "normal").sort((a, b) => b.probability - a.probability);
+  const sevColor = { normal: "#15803d", low: "#0369a1", moderate: "#a16207", high: "#c2410c", critical: "#b91c1c" };
+  el.innerHTML = `
+    <div class="viewer"><img class="vimg" alt="scan"/></div>
+    <div class="tabs"><button class="on" data-h="0">Original</button><button data-h="1">AI attention</button></div>
+    <div>${pos.length ? pos.slice(0, 6).map((f) => `
+      <div class="finding"><span>${esc(f.label)}</span>
+        <div class="bar"><span style="width:${(f.probability * 100).toFixed(0)}%;background:${sevColor[f.severity]}"></span></div>
+        <span>${(f.probability * 100).toFixed(0)}% ${sevBadge(f.severity)}</span></div>`).join("")
+      : `<div class="none-good">✓ No significant findings.</div>`}</div>
+    <div class="model-tag">Model: <code>${esc(diag.model_source)}</code></div>
+    ${report ? `<details class="report"><summary>AI-draft report</summary><pre>${esc(report.body)}</pre></details>` : ""}`;
+
+  const img = el.querySelector(".vimg");
+  loadImage(img, `/api/studies/${studyId}/image-file`);
+  el.querySelectorAll(".tabs button").forEach((b) => b.addEventListener("click", () => {
+    el.querySelectorAll(".tabs button").forEach((x) => x.classList.remove("on"));
+    b.classList.add("on");
+    loadImage(img, `/api/studies/${studyId}/image-file${b.dataset.h === "1" ? "?heatmap=true" : ""}`);
+  }));
+}
+
+// ---- medical report artifact --------------------------------------------
+async function openReport(patientId) {
+  try {
+    const res = await fetch(`${API}/api/patients/${patientId}/report.html`,
+      { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) throw new Error();
+    const url = URL.createObjectURL(new Blob([await res.text()], { type: "text/html" }));
+    window.open(url, "_blank");
+    toast("Medical report opened in a new tab");
+  } catch { toast("Could not generate report"); }
 }
 
 async function addStudy(patientId) {
-  const modality = prompt("Modality (xray, ct, mri, fundus):", "xray");
-  if (!modality) return;
+  const modality = prompt("Modality (xray, ct, mri, fundus):", "xray"); if (!modality) return;
   const study = await api("/api/studies", {
-    method: "POST",
-    body: { patient_id: Number(patientId), modality, body_part: "", description: "new study" },
-  });
-  // Upload an image.
+    method: "POST", body: { patient_id: Number(patientId), modality, body_part: "", description: "new study" } });
   const input = document.createElement("input");
   input.type = "file"; input.accept = "image/*";
   input.onchange = async () => {
     if (input.files[0]) {
-      const fd = new FormData();
-      fd.append("file", input.files[0]);
+      const fd = new FormData(); fd.append("file", input.files[0]);
       await api(`/api/studies/${study.id}/image`, { method: "POST", form: fd });
     }
     openPatient(patientId);
@@ -210,10 +229,34 @@ async function addStudy(patientId) {
   input.click();
 }
 
+// ---- AI models modal -----------------------------------------------------
+async function showModels() {
+  const e = await api("/api/engines");
+  const icons = { cxr: "🫁", retinal: "👁", segmentation: "🧩", report: "📝", correlation: "🧠" };
+  $("modal-root").innerHTML = `
+    <div class="modal-bg" id="modal-bg"><div class="modal">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <h3>AI Models & Capabilities</h3>
+        <span class="mode-pill">mode: ${esc(e.engine_mode)}</span>
+      </div>
+      <p class="hint" style="margin-top:4px">Supported modalities: ${e.supported_modalities.join(", ")}</p>
+      ${e.capabilities.map((c) => `<div class="model-row">
+        <div class="mi">${icons[c.engine] || "⚙️"}</div>
+        <div><div class="mt">${esc(c.engine)} · <span class="hint">${esc(c.modality)}</span></div>
+          <div class="md">${esc(c.description)}</div></div></div>`).join("")}
+      <p class="hint" style="margin-top:14px">Enable real chest X-ray inference (TorchXRayVision) with
+        <code>AI_ENGINE_MODE=real</code>. Real adapters for MedSAM / RETFound plug in behind the same contract.</p>
+      <div style="text-align:right;margin-top:12px"><button class="btn sm" id="modal-close">Close</button></div>
+    </div></div>`;
+  const close = () => ($("modal-root").innerHTML = "");
+  $("modal-close").addEventListener("click", close);
+  $("modal-bg").addEventListener("click", (ev) => { if (ev.target.id === "modal-bg") close(); });
+}
+
 // ---- wire up -------------------------------------------------------------
 $("login-btn").addEventListener("click", login);
 $("logout-btn").addEventListener("click", logout);
 $("new-patient-btn").addEventListener("click", newPatient);
+$("models-btn").addEventListener("click", showModels);
 $("password").addEventListener("keydown", (e) => e.key === "Enter" && login());
-
 if (token) boot().catch(() => logout());

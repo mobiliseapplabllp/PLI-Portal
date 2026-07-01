@@ -16,6 +16,7 @@ from sqlmodel import Session, select
 
 from .database import engine
 from .models import Correlation, DiagnosticResult, Organization, Patient, Report, Study
+from .report_render import render_patient_report
 from .sample_scenarios import slugify
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
@@ -111,10 +112,36 @@ def export() -> list[str]:
                 "non-clinical model) and are NOT validated for clinical use._",
             ]
 
-            out = os.path.join(OUT_DIR, f"{slugify(patient.full_name)}.md")
+            slug = slugify(patient.full_name)
+            out = os.path.join(OUT_DIR, f"{slug}.md")
             with open(out, "w") as fh:
                 fh.write("\n".join(lines))
             written.append(out)
+
+            # Also emit the formal, print-ready HTML report artifact.
+            items = []
+            for st in studies:
+                diag = session.exec(
+                    select(DiagnosticResult).where(DiagnosticResult.study_id == st.id)
+                    .order_by(DiagnosticResult.id.desc())
+                ).first()
+                rep = session.exec(
+                    select(Report).where(Report.study_id == st.id).order_by(Report.id.desc())
+                ).first()
+                items.append({
+                    "study": st,
+                    "diagnostic": ({**diag.model_dump(), "findings": json.loads(diag.findings_json)}
+                                   if diag else None),
+                    "report": rep,
+                })
+            html = render_patient_report(
+                org=org, patient=patient, studies=items, correlation=corr,
+                report_id=f"MID-{patient.org_id:02d}-{patient.id:04d}",
+            )
+            html_out = os.path.join(OUT_DIR, f"{slug}.html")
+            with open(html_out, "w") as fh:
+                fh.write(html)
+            written.append(html_out)
     return written
 
 

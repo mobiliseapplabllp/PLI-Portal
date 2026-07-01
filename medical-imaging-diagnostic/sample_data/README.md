@@ -19,8 +19,10 @@ Regenerate:  `cd backend && python -m app.generate_samples`
 | ... | | |
 
 ## `reports/`  — pre-generated per-patient reports
-Markdown reports containing demographics, each study's AI findings, the AI-draft
-radiology report, and the cross-study AI correlation.
+Two formats per patient:
+- **`<name>.html`** — the formal, print-ready medical report artifact (open in a
+  browser, then "Print / Save as PDF"). Same as the **Medical Report** button in the app.
+- **`<name>.md`** — a plain-text version (findings + AI-draft report + correlation).
 
 Regenerate (after seeding):  `cd backend && python -m app.export_reports`
 
