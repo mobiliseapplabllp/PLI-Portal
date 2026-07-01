@@ -1,6 +1,6 @@
 from .base import DiagnosticEngine, EngineResult, Finding
 from .correlation import build_correlation
-from .registry import get_engine, supported_modalities
+from .registry import describe_active, get_engine, supported_modalities
 from .reporting import draft_report
 
 __all__ = [
@@ -10,5 +10,6 @@ __all__ = [
     "build_correlation",
     "get_engine",
     "supported_modalities",
+    "describe_active",
     "draft_report",
 ]

@@ -56,9 +56,11 @@ def upload_image(
     session: Session = Depends(get_session),
 ) -> ImageAsset:
     study = _get_owned_study(session, study_id, user.org_id)
+    # Sanitize the client-supplied filename to prevent path traversal.
+    safe_name = os.path.basename(file.filename or "image.png") or "image.png"
     dest_dir = os.path.join(settings.upload_dir, f"org{user.org_id}", f"study{study.id}")
     os.makedirs(dest_dir, exist_ok=True)
-    dest = os.path.join(dest_dir, file.filename or "image.png")
+    dest = os.path.join(dest_dir, safe_name)
     with open(dest, "wb") as out:
         shutil.copyfileobj(file.file, out)
 

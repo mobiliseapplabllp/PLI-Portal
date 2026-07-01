@@ -50,3 +50,13 @@ def get_engine(modality: str) -> DiagnosticEngine | None:
 
 def supported_modalities() -> list[str]:
     return sorted(_MOCK_BY_MODALITY.keys())
+
+
+def describe_active() -> str:
+    """Human-readable summary of the active engine configuration (for startup log)."""
+    settings = get_settings()
+    if settings.ai_engine_mode == "real":
+        xray = get_engine("xray")
+        src = xray.model_source if xray else "unavailable"
+        return f"AI_ENGINE_MODE=real → chest X-ray uses {src}; other modalities use mock."
+    return "AI_ENGINE_MODE=mock → all modalities use deterministic mock engines."

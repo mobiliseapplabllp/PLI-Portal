@@ -21,7 +21,9 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # prototype; lock down per-tenant origins in prod
-    allow_credentials=True,
+    # Auth is via Bearer tokens (not cookies), so credentials are not needed.
+    # "*" origin + credentials is also rejected by browsers, so keep this False.
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -35,8 +37,19 @@ app.include_router(reports.router)
 
 @app.on_event("startup")
 def _startup() -> None:
+    import logging
+
+    from .ai import describe_active
+
     os.makedirs(settings.upload_dir, exist_ok=True)
     init_db()
+    log = logging.getLogger("uvicorn")
+    if settings.secret_key in ("dev-secret-change-me", "change-me-to-a-long-random-string"):
+        log.warning(
+            "⚠️  SECRET_KEY is the built-in default — JWTs can be forged. "
+            "Set a strong random SECRET_KEY in .env before any non-local use."
+        )
+    log.info("🩺 %s ready — %s", settings.app_name, describe_active())
 
 
 # Serve the static frontend (built at ../../frontend relative to this file).

@@ -1,5 +1,8 @@
-# Scalable deployment: API + Postgres. Scale the stateless API horizontally
-# behind a load balancer:  docker compose up --scale api=3
+# Deployment: stateless API + Postgres.
+# The API is stateless and designed to scale horizontally behind a load
+# balancer. To actually run multiple replicas, remove the fixed `ports:` host
+# binding below (a single host port can't map to N containers) and put a
+# reverse proxy (nginx/traefik) in front, then:  docker compose up --scale api=3
 services:
   db:
     image: postgres:16-alpine

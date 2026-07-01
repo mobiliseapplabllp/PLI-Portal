@@ -23,6 +23,17 @@ class UserCreate(BaseModel):
     specialty: str | None = None
 
 
+class UserRead(BaseModel):
+    """Public view of a user — never exposes hashed_password."""
+    id: int
+    org_id: int
+    email: EmailStr
+    full_name: str
+    role: Role
+    specialty: str | None = None
+    is_active: bool
+
+
 class Token(BaseModel):
     access_token: str
     token_type: str = "bearer"

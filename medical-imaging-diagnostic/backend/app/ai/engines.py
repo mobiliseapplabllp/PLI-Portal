@@ -6,12 +6,16 @@ Every engine ships in two flavours:
   * a documented hook for the **real** pretrained model (torchxrayvision, MedSAM,
     RETFound ...) that plugs in behind the exact same `analyze()` contract.
 
-The mock is seeded from the image bytes so results are stable per image but vary
-across images — good enough to exercise the full patient/correlation pipeline.
+Demo coherence: a mock engine will honour a "scenario plan" — a sidecar JSON file
+`<image>.plan.json` mapping {label: probability}. This lets the seed script craft
+clinically consistent sample patients (a CHF case, a pneumonia case, ...) while
+still exercising the real engine pipeline. Without a plan, the mock is seeded from
+the image bytes so results are stable per image but vary across images.
 """
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import random
 
@@ -28,6 +32,7 @@ RETINAL_LABELS = [
     "No DR", "Mild DR", "Moderate DR", "Severe DR", "Proliferative DR",
     "Glaucoma", "AMD",
 ]
+SEGMENTATION_LABELS = ["Lesion", "Nodule", "Mass", "Effusion region", "Ground-glass opacity"]
 
 
 def _seed_from_image(image_path: str) -> random.Random:
@@ -37,6 +42,28 @@ def _seed_from_image(image_path: str) -> random.Random:
     except OSError:
         digest = hashlib.sha256(image_path.encode()).hexdigest()
     return random.Random(int(digest[:16], 16))
+
+
+def _load_plan(image_path: str) -> dict | None:
+    """Optional scenario plan: {label: probability} in `<image>.plan.json`."""
+    plan_path = image_path + ".plan.json"
+    if os.path.exists(plan_path):
+        try:
+            with open(plan_path) as fh:
+                return json.load(fh)
+        except Exception:
+            return None
+    return None
+
+
+def _findings_from_plan(labels: list[str], plan: dict, rng: random.Random) -> list[Finding]:
+    findings = []
+    for label in labels:
+        if label in plan:
+            findings.append(Finding(label, float(plan[label])))
+        else:
+            findings.append(Finding(label, rng.uniform(0.0, 0.10)))
+    return findings
 
 
 def _maybe_heatmap(image_path: str, heatmap_out: str | None, rng: random.Random) -> str | None:
@@ -63,7 +90,7 @@ def _maybe_heatmap(image_path: str, heatmap_out: str | None, rng: random.Random)
     heat[..., 1] = blob * 0.4
     arr = np.asarray(base, dtype=np.float32) / 255.0
     out = np.clip(arr * (1 - 0.5 * blob[..., None]) + heat * 0.5, 0, 1)
-    os.makedirs(os.path.dirname(heatmap_out), exist_ok=True)
+    os.makedirs(os.path.dirname(heatmap_out) or ".", exist_ok=True)
     Image.fromarray((out * 255).astype("uint8")).save(heatmap_out)
     return heatmap_out
 
@@ -75,14 +102,18 @@ class MockCXREngine(DiagnosticEngine):
 
     def analyze(self, image_path: str, *, heatmap_out: str | None = None) -> EngineResult:
         rng = _seed_from_image(image_path)
-        # Most images: mostly-normal with 0-3 elevated pathologies.
-        findings = []
-        n_hot = rng.choices([0, 1, 2, 3], weights=[3, 4, 3, 1])[0]
-        hot = set(rng.sample(range(len(CXR_LABELS)), n_hot))
-        for i, label in enumerate(CXR_LABELS):
-            p = rng.uniform(0.55, 0.95) if i in hot else rng.uniform(0.0, 0.14)
-            findings.append(Finding(label, p))
-        heatmap = _maybe_heatmap(image_path, heatmap_out, rng) if hot else None
+        plan = _load_plan(image_path)
+        if plan is not None:
+            findings = _findings_from_plan(CXR_LABELS, plan, rng)
+        else:
+            findings = []
+            n_hot = rng.choices([0, 1, 2, 3], weights=[3, 4, 3, 1])[0]
+            hot = set(rng.sample(range(len(CXR_LABELS)), n_hot))
+            for i, label in enumerate(CXR_LABELS):
+                p = rng.uniform(0.55, 0.95) if i in hot else rng.uniform(0.0, 0.14)
+                findings.append(Finding(label, p))
+        has_pos = any(f.severity != "normal" for f in findings)
+        heatmap = _maybe_heatmap(image_path, heatmap_out, rng) if has_pos else None
         return EngineResult(self.name, self.modality, self.model_source, findings, heatmap)
 
 
@@ -93,27 +124,35 @@ class MockRetinalEngine(DiagnosticEngine):
 
     def analyze(self, image_path: str, *, heatmap_out: str | None = None) -> EngineResult:
         rng = _seed_from_image(image_path)
-        grade = rng.choices(range(5), weights=[5, 3, 3, 2, 1])[0]  # DR severity 0-4
-        findings = []
-        for i, label in enumerate(RETINAL_LABELS[:5]):
-            p = rng.uniform(0.7, 0.95) if i == grade else rng.uniform(0.0, 0.2)
-            findings.append(Finding(label, p))
-        findings.append(Finding("Glaucoma", rng.uniform(0.0, 0.5)))
-        findings.append(Finding("AMD", rng.uniform(0.0, 0.4)))
-        heatmap = _maybe_heatmap(image_path, heatmap_out, rng) if grade else None
+        plan = _load_plan(image_path)
+        if plan is not None:
+            findings = _findings_from_plan(RETINAL_LABELS, plan, rng)
+        else:
+            grade = rng.choices(range(5), weights=[5, 3, 3, 2, 1])[0]  # DR severity 0-4
+            findings = []
+            for i, label in enumerate(RETINAL_LABELS[:5]):
+                p = rng.uniform(0.7, 0.95) if i == grade else rng.uniform(0.0, 0.2)
+                findings.append(Finding(label, p))
+            findings.append(Finding("Glaucoma", rng.uniform(0.0, 0.5)))
+            findings.append(Finding("AMD", rng.uniform(0.0, 0.4)))
+        has_pos = any(f.severity != "normal" and not f.label.endswith("No DR") for f in findings)
+        heatmap = _maybe_heatmap(image_path, heatmap_out, rng) if has_pos else None
         return EngineResult(self.name, self.modality, self.model_source, findings, heatmap)
 
 
 class MockSegmentationEngine(DiagnosticEngine):
-    """Stand-in for MedSAM / SAM-Med2D. Reports region areas as 'findings'."""
+    """Stand-in for MedSAM / SAM-Med2D. Reports region confidences as findings."""
     name = "segmentation"
     modality = "ct"
     model_source = "MockEngine(medsam-sim)"
 
     def analyze(self, image_path: str, *, heatmap_out: str | None = None) -> EngineResult:
         rng = _seed_from_image(image_path)
-        regions = ["Lesion", "Nodule", "Effusion region"]
-        findings = [Finding(r, rng.uniform(0.1, 0.9)) for r in regions]
+        plan = _load_plan(image_path)
+        if plan is not None:
+            findings = _findings_from_plan(SEGMENTATION_LABELS, plan, rng)
+        else:
+            findings = [Finding(r, rng.uniform(0.1, 0.9)) for r in SEGMENTATION_LABELS[:3]]
         heatmap = _maybe_heatmap(image_path, heatmap_out, rng)
         return EngineResult(self.name, self.modality, self.model_source, findings, heatmap)
 
@@ -123,34 +162,73 @@ class MockSegmentationEngine(DiagnosticEngine):
 class TorchXRayVisionEngine(DiagnosticEngine):
     """Real 18-pathology chest X-ray classifier.
 
-    Activated only when AI_ENGINE_MODE=real and torchxrayvision is installed.
-    Kept import-lazy so the base prototype never needs torch."""
+    Activated when AI_ENGINE_MODE=real and torchxrayvision is installed. Kept
+    import-lazy so the base prototype never needs torch. Produces a real
+    Grad-CAM-style overlay from the model's own gradients when a heatmap path
+    is requested."""
     name = "cxr"
     modality = "xray"
     model_source = "torchxrayvision:densenet121-res224-all"
 
     def __init__(self) -> None:
-        import torchxrayvision as xrv  # noqa: F401  (validated at construction)
+        import torchxrayvision as xrv  # validated at construction
         self._xrv = xrv
         self._model = xrv.models.DenseNet(weights="densenet121-res224-all")
         self._model.eval()
 
-    def analyze(self, image_path: str, *, heatmap_out: str | None = None) -> EngineResult:
+    def _preprocess(self, image_path: str):
         import numpy as np
-        import torch
         from PIL import Image
 
         xrv = self._xrv
         img = np.asarray(Image.open(image_path).convert("L"), dtype=np.float32)
-        img = xrv.datasets.normalize(img, 255)
-        img = img[None, ...]
-        img = xrv.datasets.XRayCenterCrop()({"img": img})["img"]
-        img = xrv.datasets.XRayResizer(224)({"img": img})["img"]
-        with torch.no_grad():
-            out = self._model(torch.from_numpy(img)[None, ...]).squeeze().tolist()
+        img = xrv.datasets.normalize(img, 255)          # -> [-1024, 1024]
+        img = img[None, ...]                             # add channel dim -> (1, H, W)
+        img = xrv.datasets.XRayCenterCrop()(img)
+        img = xrv.datasets.XRayResizer(224)(img)
+        return img
+
+    def analyze(self, image_path: str, *, heatmap_out: str | None = None) -> EngineResult:
+        import numpy as np
+        import torch
+
+        img = self._preprocess(image_path)
+        tensor = torch.from_numpy(img)[None, ...].float()
+        tensor.requires_grad_(True)
+        out = self._model(tensor)
+        probs = out.detach().squeeze().tolist()
         findings = [
             Finding(label, p)
-            for label, p in zip(self._model.pathologies, out)
+            for label, p in zip(self._model.pathologies, probs)
             if label
         ]
-        return EngineResult(self.name, self.modality, self.model_source, findings, None)
+
+        heatmap = None
+        if heatmap_out and findings:
+            heatmap = self._gradcam(tensor, out, image_path, heatmap_out)
+        return EngineResult(self.name, self.modality, self.model_source, findings, heatmap)
+
+    def _gradcam(self, tensor, out, image_path: str, heatmap_out: str):
+        """Saliency overlay from the gradient of the top class w.r.t. the input."""
+        try:
+            import numpy as np
+            import torch
+            from PIL import Image
+
+            top = int(torch.argmax(out))
+            self._model.zero_grad()
+            out[0, top].backward()
+            sal = tensor.grad.detach().abs().squeeze().numpy()
+            sal = (sal - sal.min()) / (np.ptp(sal) + 1e-8)
+
+            base = Image.open(image_path).convert("RGB").resize((sal.shape[1], sal.shape[0]))
+            arr = np.asarray(base, dtype=np.float32) / 255.0
+            heat = np.zeros_like(arr)
+            heat[..., 0] = sal
+            heat[..., 1] = sal * 0.3
+            blended = np.clip(arr * (1 - 0.5 * sal[..., None]) + heat * 0.5, 0, 1)
+            os.makedirs(os.path.dirname(heatmap_out) or ".", exist_ok=True)
+            Image.fromarray((blended * 255).astype("uint8")).save(heatmap_out)
+            return heatmap_out
+        except Exception:
+            return None

@@ -6,7 +6,7 @@ from sqlmodel import Session, select
 from ..database import get_session
 from ..deps import get_current_user, require_admin
 from ..models import Organization, Role, User
-from ..schemas import OrgSignup, Token, UserCreate
+from ..schemas import OrgSignup, Token, UserCreate, UserRead
 from ..security import create_access_token, hash_password, verify_password
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -52,12 +52,12 @@ def login(
     return Token(access_token=token, user_id=user.id, org_id=user.org_id, role=user.role.value)
 
 
-@router.get("/me", response_model=User)
+@router.get("/me", response_model=UserRead)
 def me(user: User = Depends(get_current_user)) -> User:
     return user
 
 
-@router.post("/users", response_model=User, status_code=201)
+@router.post("/users", response_model=UserRead, status_code=201)
 def create_user(
     payload: UserCreate,
     admin: User = Depends(require_admin),
@@ -80,7 +80,7 @@ def create_user(
     return user
 
 
-@router.get("/users", response_model=list[User])
+@router.get("/users", response_model=list[UserRead])
 def list_users(
     user: User = Depends(get_current_user),
     session: Session = Depends(get_session),

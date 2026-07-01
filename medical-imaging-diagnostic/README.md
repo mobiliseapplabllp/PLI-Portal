@@ -8,7 +8,10 @@ decision-support view.
 > Built as a working prototype to explore the 2026 state of the art in medical
 > imaging AI (foundation models, VLM report generation, segmentation, and
 > cross-modal clinical reasoning). Runs on a laptop with zero GPU; swaps in real
-> pretrained models with one env flag.
+> pretrained models (TorchXRayVision) with one env flag.
+>
+> **New to this?** Start with **[SOLUTION.md](./SOLUTION.md)** — the complete
+> local runbook with sample patients, sample X-ray/CT images, and reports.
 
 ---
 
@@ -48,24 +51,26 @@ documented **real-model adapter**. Flip `AI_ENGINE_MODE=real` (after installing
 ## Quick start
 
 ```bash
-# 1. One command: venv + deps + sample data + server
-bash scripts/run_dev.sh
+# One command: venv + deps + sample images + 7 sample patients + reports + server
+make demo
+#   Windows:  run_dev.bat
 
-# 2. Open http://localhost:8000
-#    Login:  admin@city-general.demo  /  demo1234
-#       or:  radiology@sunrise-dx.demo /  demo1234
+# Open http://localhost:8000
+#   Login:  admin@city-general.demo  /  demo1234   (5 patients)
+#      or:  admin@sunrise-dx.demo    /  demo1234   (2 patients)
 ```
 
-Or manually:
+Manual steps and the full runbook (real model, Docker, tests, Windows) are in
+**[SOLUTION.md](./SOLUTION.md)**.
 
-```bash
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env
-cd backend
-python -m app.seed                       # sample orgs, doctors, patients, scans
-uvicorn app.main:app --reload            # http://localhost:8000
-```
+### Sample patients
+
+7 realistic scenarios are seeded, each with images and an AI correlation — e.g.
+**Robert Chen** (cardiomegaly + effusion → *congestive heart failure*),
+**James Okoro** (CXR nodule + CT mass → *suspicious neoplasm*),
+**Maria Gomez** (fundus → *severe diabetic retinopathy*),
+**David Smith** (*pneumothorax*). Sample images live in `sample_data/images/`
+(upload them via the UI) and pre-generated reports in `sample_data/reports/`.
 
 ### Docker (scalable deployment)
 
