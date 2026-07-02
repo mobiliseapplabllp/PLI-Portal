@@ -129,6 +129,8 @@ class Report(SQLModel, table=True):
     is_ai_draft: bool = True
     impression: str = ""                       # short conclusion
     body: str = ""                             # full narrative
+    structured_json: str = "{}"               # machine-readable structured report
+    assessment_category: str | None = None     # e.g. "Lung-RADS 4B", "ICDR Grade 3"
     signed: bool = False
     created_at: datetime = Field(default_factory=utcnow)
 

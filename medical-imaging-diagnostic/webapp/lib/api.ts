@@ -92,6 +92,13 @@ export interface Diagnostic {
 }
 export interface ReportRow {
   id: number; impression: string; body: string; is_ai_draft: boolean; signed: boolean;
+  structured_json?: string; assessment_category?: string | null;
+}
+export interface StructuredReport {
+  impression: string[];
+  recommendations: string[];
+  assessment: { category: string; system: string; meaning: string; onco_flag: boolean } | null;
+  findings: { id: number; label: string; system: string; anatomy: string; oncologic: boolean }[];
 }
 export interface Correlation {
   id: number; summary: string; differential_json: string;

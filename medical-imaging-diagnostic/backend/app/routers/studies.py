@@ -4,7 +4,7 @@ import os
 import shutil
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from sqlmodel import Session, select
 
 from .. import services
@@ -14,6 +14,7 @@ from ..deps import get_current_user
 from ..dicom_ingest import convert_dicom, is_dicom
 from ..models import DiagnosticResult, ImageAsset, Patient, Report, Study, User
 from ..schemas import StudyCreate
+from ..structured_report import render_structured_html, to_fhir
 
 router = APIRouter(prefix="/api/studies", tags=["studies"])
 settings = get_settings()
@@ -141,6 +142,40 @@ def get_study_detail(
         ],
         "reports": reports,
     }
+
+
+@router.get("/{study_id}/report.json")
+def study_structured_report_json(
+    study_id: int,
+    fhir: bool = False,
+    user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+) -> dict:
+    """Machine-readable structured report for a study (optionally as FHIR)."""
+    _get_owned_study(session, study_id, user.org_id)
+    report = session.exec(
+        select(Report).where(Report.study_id == study_id).order_by(Report.id.desc())
+    ).first()
+    if report is None or report.structured_json in ("", "{}"):
+        raise HTTPException(404, "No structured report yet — run analysis first")
+    structured = json.loads(report.structured_json)
+    return to_fhir(structured) if fhir else structured
+
+
+@router.get("/{study_id}/report.html", response_class=HTMLResponse)
+def study_structured_report_html(
+    study_id: int,
+    user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+) -> HTMLResponse:
+    """Self-contained structured-report HTML artifact for a single study."""
+    _get_owned_study(session, study_id, user.org_id)
+    report = session.exec(
+        select(Report).where(Report.study_id == study_id).order_by(Report.id.desc())
+    ).first()
+    if report is None or report.structured_json in ("", "{}"):
+        raise HTTPException(404, "No structured report yet — run analysis first")
+    return HTMLResponse(content=render_structured_html(json.loads(report.structured_json)))
 
 
 @router.get("/{study_id}/image-file")

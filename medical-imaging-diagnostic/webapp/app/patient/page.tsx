@@ -3,14 +3,27 @@
 import { Suspense, useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import {
-  ClipboardList, Download, FileText, Loader2, Play, Plus, RefreshCw, Upload,
+  ClipboardList, Download, FileJson, FileText, Loader2, Play, Plus, RefreshCw,
+  ShieldAlert, Upload,
 } from "lucide-react";
 import Shell, { SeverityBadge } from "@/components/shell";
 import AuthImage from "@/components/auth-image";
 import {
   ageFrom, api, apiBlob, avatarColor, Correlation, Diagnostic, initials,
-  Patient, ReportRow, Study,
+  Patient, ReportRow, Study, StructuredReport,
 } from "@/lib/api";
+
+async function openBlob(path: string) {
+  const blob = await apiBlob(path);
+  window.open(URL.createObjectURL(blob), "_blank");
+}
+async function downloadBlob(path: string, filename: string) {
+  const blob = await apiBlob(path);
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+}
 
 interface Profile { patient: Patient; studies: Study[]; correlation: Correlation | null }
 interface StudyDetail { study: Study; images: unknown[]; diagnostics: Diagnostic[]; reports: ReportRow[] }
@@ -116,17 +129,62 @@ function StudyCard({ study, onChanged }: { study: Study; onChanged: () => void }
           <p className="mt-2 text-[11px] text-slate-400">
             Model: <code className="rounded bg-slate-100 px-1 dark:bg-slate-800">{diag.model_source}</code>
           </p>
-          {report && (
-            <details className="mt-2">
-              <summary className="cursor-pointer text-xs font-semibold text-teal-700 dark:text-teal-400">
-                AI-draft report
-              </summary>
-              <pre className="mt-2 whitespace-pre-wrap rounded-lg bg-slate-50 p-3 text-[11px] dark:bg-slate-800/60">
-                {report.body}
-              </pre>
-            </details>
-          )}
+          {report && <StructuredReportBlock studyId={study.id} report={report} />}
         </>
+      )}
+    </div>
+  );
+}
+
+function StructuredReportBlock({ studyId, report }: { studyId: number; report: ReportRow }) {
+  let sr: StructuredReport | null = null;
+  try {
+    sr = report.structured_json ? JSON.parse(report.structured_json) : null;
+  } catch {
+    sr = null;
+  }
+  const assess = sr?.assessment;
+
+  return (
+    <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50/60 p-3 dark:border-slate-800 dark:bg-slate-800/40">
+      <div className="mb-1.5 flex items-center justify-between">
+        <span className="text-xs font-bold uppercase tracking-wide text-slate-500">
+          Structured report
+        </span>
+        <div className="flex gap-1.5">
+          <button title="Open structured report" onClick={() => openBlob(`/api/studies/${studyId}/report.html`)}
+            className="rounded-md border border-slate-300 p-1.5 text-slate-600 hover:bg-white dark:border-slate-600 dark:hover:bg-slate-700">
+            <FileText size={13} />
+          </button>
+          <button title="Download JSON (FHIR)" onClick={() => downloadBlob(`/api/studies/${studyId}/report.json?fhir=true`, `study-${studyId}-fhir.json`)}
+            className="rounded-md border border-slate-300 p-1.5 text-slate-600 hover:bg-white dark:border-slate-600 dark:hover:bg-slate-700">
+            <FileJson size={13} />
+          </button>
+        </div>
+      </div>
+
+      {assess && (
+        <div className={`mb-2 flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-xs ${
+          assess.onco_flag
+            ? "border-red-300 bg-red-50 dark:border-red-900 dark:bg-red-950/40"
+            : "border-teal-300 bg-teal-50 dark:border-teal-900 dark:bg-teal-950/40"
+        }`}>
+          {assess.onco_flag && <ShieldAlert size={14} className="flex-none text-red-600" />}
+          <span className={`font-bold ${assess.onco_flag ? "text-red-700 dark:text-red-400" : "text-teal-700 dark:text-teal-400"}`}>
+            {assess.category}
+          </span>
+          <span className="text-slate-500">· {assess.meaning}</span>
+        </div>
+      )}
+
+      {sr?.impression?.length ? (
+        <ol className="ml-4 list-decimal space-y-0.5 text-[12.5px] text-slate-700 dark:text-slate-300">
+          {sr.impression.map((s, i) => (
+            <li key={i}>{s}</li>
+          ))}
+        </ol>
+      ) : (
+        <pre className="whitespace-pre-wrap text-[11px] text-slate-600">{report.body}</pre>
       )}
     </div>
   );

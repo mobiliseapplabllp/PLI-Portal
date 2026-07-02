@@ -17,10 +17,12 @@ from .models import (
     Correlation,
     DiagnosticResult,
     ImageAsset,
+    Patient,
     Report,
     Severity,
     Study,
 )
+from .structured_report import build_structured_report, narrative_from_structured
 
 settings = get_settings()
 
@@ -59,13 +61,27 @@ def run_analysis(session: Session, study: Study) -> DiagnosticResult | None:
     )
     session.add(diag)
 
-    draft = ai.draft_report(study.modality.value, payload["findings"])
+    # Build a STRUCTURED report (sections, itemized findings, assessment category,
+    # numbered impression) rather than a flat paragraph.
+    patient = session.get(Patient, study.patient_id)
+    structured = build_structured_report(
+        modality=study.modality.value,
+        findings=payload["findings"],
+        patient=patient,
+        study=study,
+        ai_meta={"engine": result.engine, "model_source": result.model_source,
+                 "engine_version": "prototype"},
+        report_id=f"MID-{study.org_id:02d}-P{study.patient_id:04d}-S{study.id:04d}",
+    )
+    impression_text, body_text = narrative_from_structured(structured)
     session.add(Report(
         org_id=study.org_id,
         study_id=study.id,
         is_ai_draft=True,
-        impression=draft["impression"],
-        body=draft["body"],
+        impression=impression_text,
+        body=body_text,
+        structured_json=json.dumps(structured),
+        assessment_category=(structured["assessment"] or {}).get("category"),
     ))
 
     study.status = "analyzed"

@@ -195,3 +195,34 @@ def test_dicom_upload_converts_to_png(tmp_path):
 def json_loads(s):
     import json
     return json.loads(s)
+
+
+def test_structured_report_json_html_fhir(tmp_path):
+    tok = _signup("iota")["access_token"]
+    h = _auth(tok)
+    pid = client.post("/api/patients", json={"mrn": "S1", "full_name": "Struct P",
+                      "notes": "smoker"}, headers=h).json()["id"]
+    sid = client.post("/api/studies", json={"patient_id": pid, "modality": "ct",
+                      "body_part": "Chest"}, headers=h).json()["id"]
+    # image with a planted oncologic scenario via sidecar plan
+    import json as _json
+    import numpy as np
+    from PIL import Image
+    img = tmp_path / "ct.png"
+    Image.fromarray((np.random.rand(128, 128) * 255).astype("uint8")).save(img)
+    client.post(f"/api/studies/{sid}/image",
+                files={"file": ("ct.png", img.read_bytes(), "image/png")}, headers=h)
+    client.post(f"/api/studies/{sid}/analyze", headers=h)
+
+    sr = client.get(f"/api/studies/{sid}/report.json", headers=h)
+    assert sr.status_code == 200
+    body = sr.json()
+    assert body["schema"] == "mid.structured-report/v1"
+    assert isinstance(body["impression"], list)
+    assert "findings" in body and "recommendations" in body
+
+    fhir = client.get(f"/api/studies/{sid}/report.json?fhir=true", headers=h).json()
+    assert fhir["resourceType"] == "DiagnosticReport"
+
+    html = client.get(f"/api/studies/{sid}/report.html", headers=h)
+    assert html.status_code == 200 and "Structured Report" in html.text

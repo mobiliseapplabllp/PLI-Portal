@@ -67,6 +67,7 @@ npm run build      # regenerate webapp/out for the Python server to serve
 | **Patients** | Searchable list; open a unified profile |
 | **Patient profile** | Studies with Original ↔ AI-attention viewer, findings, AI correlation |
 | **📄 Report / PDF** | Formal medical report as HTML (print) or downloadable **PDF** |
+| **Structured report** | Per study: sectioned report (findings by anatomy/system, RADS/ICDR assessment, numbered impression, recommendations) — open as HTML or download **FHIR JSON** |
 | **Analytics** | Case volumes, severity distribution, top findings, modality mix, model usage |
 | **Admin** | Manage doctors: roles, activate/deactivate, add users (admin only) |
 | **AI Models** | Active engines, modalities, how to enable real models |
