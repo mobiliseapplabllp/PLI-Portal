@@ -1,7 +1,7 @@
 # Diagnostic Report — David Smith
 
 - **Organization:** Sunrise Diagnostics
-- **MRN:** SUN-1005
+- **MRN:** SUN-1007
 - **Sex / DOB:** M / 1990-11-05
 - **Clinical notes:** Sudden right-sided chest pain and breathlessness after exertion.
 
@@ -19,14 +19,22 @@ _Erect chest — sudden dyspnoea_
 **AI-draft report:**
 
 ```
-Chest Radiograph examination with automated diagnostic analysis.
+Chest Radiograph — Chest
+
+CLINICAL INFORMATION: Sudden right-sided chest pain and breathlessness after exertion.
+TECHNIQUE: Digital radiography, PA projection. Automated analysis by a deep-learning classifier.
+COMPARISON: No prior studies available for comparison.
 
 FINDINGS:
-- Pneumothorax: probability 81% (high)
-- Atelectasis: probability 20% (low)
+  1. Pneumothorax identified in the pleural space (81% confidence, high concern). [Pleura]
+  2. Atelectasis identified in the lung (20% confidence, low concern). [Respiratory]
 
 IMPRESSION:
-Pneumothorax identified (high). 2 finding(s) flagged — clinical correlation advised.
+  1. Pneumothorax (81%, high).
+  2. Atelectasis (20%, low).
+
+RECOMMENDATIONS:
+  - Clinical correlation and specialist review required.
 ```
 
 ---

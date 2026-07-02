@@ -61,9 +61,43 @@ class MonaiLabelEngine(DiagnosticEngine):
             timeout=self.timeout,
         )
         resp.raise_for_status()
-        findings = self._findings_from_mask(resp.content)
-        heatmap = self._mask_overlay(resp.content, image_path, heatmap_out)
+        ctype = resp.headers.get("content-type", "")
+
+        # Detection models (e.g. lung_nodule_ct_detection) return JSON boxes+scores,
+        # not a mask. Handle both output shapes behind the one contract.
+        if "json" in ctype:
+            findings = self._findings_from_detection(resp.json())
+            heatmap = None
+        else:
+            findings = self._findings_from_mask(resp.content)
+            heatmap = self._mask_overlay(resp.content, image_path, heatmap_out)
         return EngineResult(self.name, self.modality, self.model_source, findings, heatmap)
+
+    def _findings_from_detection(self, payload: dict) -> list[Finding]:
+        """Convert a detection response (boxes + scores) into findings.
+
+        MONAI detection bundles report boxes with per-box `label`/`score`. We
+        collapse to one finding per class, keeping the max score, and label the
+        target (e.g. 'Pulmonary nodule') as oncologic downstream."""
+        boxes = (payload.get("box") or payload.get("boxes")
+                 or payload.get("detections") or [])
+        scores = payload.get("score") or payload.get("scores") or []
+        labels = payload.get("label") or payload.get("labels") or []
+
+        best: dict[str, float] = {}
+        if boxes and isinstance(boxes[0], dict):
+            for b in boxes:
+                name = self.labels.get(int(b.get("label", 1)), b.get("label_name", "Detection"))
+                best[str(name)] = max(best.get(str(name), 0.0), float(b.get("score", 0.0)))
+        else:
+            for i, s in enumerate(scores):
+                idx = int(labels[i]) if i < len(labels) else 1
+                name = self.labels.get(idx, "Detection")
+                best[str(name)] = max(best.get(str(name), 0.0), float(s))
+
+        if not best:
+            return [Finding(next(iter(self.labels.values()), "Detection"), 0.0)]
+        return [Finding(name, p) for name, p in best.items()]
 
     def _findings_from_mask(self, mask_bytes: bytes) -> list[Finding]:
         """Convert the returned mask into per-label findings.

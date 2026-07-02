@@ -18,7 +18,20 @@ _No significant findings._
 **AI-draft report:**
 
 ```
-Chest Radiograph examination. The study is within normal limits on automated analysis. No focal consolidation, effusion, or other acute finding.
+Chest Radiograph — Chest
+
+CLINICAL INFORMATION: Routine pre-employment health check, asymptomatic.
+TECHNIQUE: Digital radiography, PA projection. Automated analysis by a deep-learning classifier.
+COMPARISON: No prior studies available for comparison.
+
+FINDINGS:
+  No significant findings on automated analysis.
+
+IMPRESSION:
+  1. No acute abnormality detected on automated analysis.
+
+RECOMMENDATIONS:
+  - Routine clinical follow-up as indicated.
 ```
 
 ---

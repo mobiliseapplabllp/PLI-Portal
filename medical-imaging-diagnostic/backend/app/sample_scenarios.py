@@ -90,6 +90,29 @@ SCENARIOS = [
         "expected": "No significant findings",
     },
     {
+        "org": "city-general",
+        "patient": {"name": "Grace Miller", "sex": "F", "dob": "1969-05-30",
+                    "notes": "Changing pigmented lesion on the back — asymmetry, irregular border."},
+        "studies": [
+            {"modality": Modality.dermoscopy, "body_part": "Skin (back)", "kind": "dermoscopy",
+             "description": "Dermoscopy — suspicious naevus",
+             "plan": {"Melanoma": 0.88, "Melanocytic nevus": 0.15, "Basal cell carcinoma": 0.1}},
+        ],
+        "expected": "Cutaneous malignancy (melanoma)",
+    },
+    {
+        "org": "city-general",
+        "patient": {"name": "Tom Bradley", "sex": "M", "dob": "1974-02-08",
+                    "notes": "New-onset seizures and morning headaches; focal neurological signs."},
+        "studies": [
+            {"modality": Modality.mri, "body_part": "Brain", "kind": "brain",
+             "description": "MRI brain with contrast — mass lesion",
+             "plan": {"Glioma": 0.84, "Enhancing tumor": 0.72, "Peritumoral edema": 0.55,
+                      "Necrotic core": 0.4}},
+        ],
+        "expected": "Intracranial neoplasm (brain tumour)",
+    },
+    {
         "org": "sunrise-dx",
         "patient": {"name": "David Smith", "sex": "M", "dob": "1990-11-05",
                     "notes": "Sudden right-sided chest pain and breathlessness after exertion."},
@@ -133,6 +156,36 @@ def make_synthetic_image(path: str, seed: int, kind: str = "xray") -> None:
     rng = np.random.default_rng(seed)
     size = 512
     yy, xx = np.mgrid[0:size, 0:size].astype(float)
+
+    if kind == "dermoscopy":
+        # skin-tone background with an irregular pigmented lesion
+        r = np.full((size, size), 0.80); g = np.full((size, size), 0.62); b = np.full((size, size), 0.52)
+        cx, cy = size * 0.5, size * 0.5
+        base_r = size * 0.28
+        for _ in range(6):
+            ang = rng.uniform(0, 2 * np.pi); off = rng.uniform(0, base_r * 0.5)
+            lx, ly = cx + off * np.cos(ang), cy + off * np.sin(ang)
+            rad = rng.uniform(base_r * 0.5, base_r)
+            lesion = np.exp(-(((xx - lx) ** 2 + (yy - ly) ** 2) / (2 * rad ** 2)))
+            r = r - 0.55 * lesion; g = g - 0.45 * lesion; b = b - 0.30 * lesion
+        r += rng.normal(0, 0.02, r.shape)
+        img = (np.clip(np.stack([r, g, b], axis=-1), 0, 1) * 255).astype("uint8")
+        Image.fromarray(img, "RGB").save(path)
+        return
+
+    if kind in ("mri", "brain"):
+        # grayscale axial head with a bright enhancing tumour + dark edema halo
+        cx = cy = size / 2
+        skull = np.exp(-((np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2) - size * 0.4) ** 2) / 120)
+        brain = (np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2) < size * 0.36).astype(float)
+        base = 0.25 * brain + 0.5 * skull + rng.normal(0, 0.02, (size, size))
+        tx, ty = cx + size * 0.12, cy - size * 0.08
+        tumor = np.exp(-(((xx - tx) ** 2 + (yy - ty) ** 2) / (2 * (size * 0.08) ** 2)))
+        edema = np.exp(-(((xx - tx) ** 2 + (yy - ty) ** 2) / (2 * (size * 0.15) ** 2)))
+        base += 0.55 * tumor - 0.15 * (edema - tumor)
+        img = np.clip(base, 0, 1)
+        Image.fromarray((img * 255).astype("uint8")).save(path)
+        return
 
     if kind == "fundus":
         cx = cy = size / 2

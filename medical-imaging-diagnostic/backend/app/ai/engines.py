@@ -34,6 +34,14 @@ RETINAL_LABELS = [
 ]
 SEGMENTATION_LABELS = ["Lesion", "Nodule", "Mass", "Effusion region", "Ground-glass opacity"]
 
+# ISIC / HAM10000-style skin lesion classes (dermoscopy). Malignant: Melanoma, BCC, AKIEC.
+SKIN_LABELS = [
+    "Melanoma", "Basal cell carcinoma", "Actinic keratosis",
+    "Melanocytic nevus", "Benign keratosis", "Dermatofibroma", "Vascular lesion",
+]
+# BraTS-style brain tumour sub-regions (MRI).
+BRAIN_LABELS = ["Glioma", "Enhancing tumor", "Peritumoral edema", "Necrotic core", "Metastasis"]
+
 
 def _seed_from_image(image_path: str) -> random.Random:
     try:
@@ -157,7 +165,94 @@ class MockSegmentationEngine(DiagnosticEngine):
         return EngineResult(self.name, self.modality, self.model_source, findings, heatmap)
 
 
-# ---- real model adapter (optional) ----------------------------------------
+class MockSkinCancerEngine(DiagnosticEngine):
+    """Dermoscopy skin-lesion classifier (ISIC/HAM10000 classes). Oncology.
+
+    Stand-in for an EfficientNet/ViT trained on ISIC. Malignant classes
+    (Melanoma, BCC, Actinic keratosis) drive the melanoma assessment."""
+    name = "skin"
+    modality = "dermoscopy"
+    model_source = "MockEngine(isic-derm-sim)"
+
+    def analyze(self, image_path: str, *, heatmap_out: str | None = None) -> EngineResult:
+        rng = _seed_from_image(image_path)
+        plan = _load_plan(image_path)
+        if plan is not None:
+            findings = _findings_from_plan(SKIN_LABELS, plan, rng)
+        else:
+            # single dominant class + low noise on the rest
+            top = rng.choices(range(len(SKIN_LABELS)),
+                              weights=[2, 1, 1, 4, 2, 1, 1])[0]
+            findings = []
+            for i, label in enumerate(SKIN_LABELS):
+                p = rng.uniform(0.6, 0.93) if i == top else rng.uniform(0.0, 0.15)
+                findings.append(Finding(label, p))
+        malignant = any(f.label in ("Melanoma", "Basal cell carcinoma", "Actinic keratosis")
+                        and f.severity != "normal" for f in findings)
+        heatmap = _maybe_heatmap(image_path, heatmap_out, rng) if malignant else None
+        return EngineResult(self.name, self.modality, self.model_source, findings, heatmap)
+
+
+class MockBrainTumorEngine(DiagnosticEngine):
+    """Brain MRI tumour segmentation (BraTS-style). Oncology."""
+    name = "brain"
+    modality = "mri"
+    model_source = "MockEngine(brats-sim)"
+
+    def analyze(self, image_path: str, *, heatmap_out: str | None = None) -> EngineResult:
+        rng = _seed_from_image(image_path)
+        plan = _load_plan(image_path)
+        if plan is not None:
+            findings = _findings_from_plan(BRAIN_LABELS, plan, rng)
+        else:
+            findings = [Finding(BRAIN_LABELS[0], rng.uniform(0.1, 0.85))]
+            findings += [Finding(l, rng.uniform(0.0, 0.5)) for l in BRAIN_LABELS[1:4]]
+        has_pos = any(f.severity != "normal" for f in findings)
+        heatmap = _maybe_heatmap(image_path, heatmap_out, rng) if has_pos else None
+        return EngineResult(self.name, self.modality, self.model_source, findings, heatmap)
+
+
+# ---- real model adapters (optional) ----------------------------------------
+
+class TorchSkinCancerEngine(DiagnosticEngine):
+    """Real dermoscopy classifier via `timm` (e.g. an ISIC-fine-tuned model).
+
+    Activated when AI_ENGINE_MODE in (real, monai) and timm+torch are installed
+    with SKIN_MODEL_WEIGHTS pointing at ISIC weights. Import-lazy so the base
+    prototype never needs torch. Falls back to the mock if weights are absent."""
+    name = "skin"
+    modality = "dermoscopy"
+    model_source = "timm:isic-efficientnet"
+
+    def __init__(self) -> None:
+        import os as _os
+
+        weights = _os.environ.get("SKIN_MODEL_WEIGHTS")
+        if not weights or not _os.path.exists(weights):
+            raise RuntimeError("SKIN_MODEL_WEIGHTS not set / not found")
+        import timm  # noqa: F401
+        import torch
+
+        arch = _os.environ.get("SKIN_MODEL_ARCH", "efficientnet_b0")
+        self._torch = torch
+        self._model = timm.create_model(arch, num_classes=len(SKIN_LABELS))
+        self._model.load_state_dict(torch.load(weights, map_location="cpu"))
+        self._model.eval()
+
+    def analyze(self, image_path: str, *, heatmap_out: str | None = None) -> EngineResult:
+        import numpy as np
+        import torch
+        from PIL import Image
+
+        img = Image.open(image_path).convert("RGB").resize((224, 224))
+        x = np.asarray(img, dtype=np.float32) / 255.0
+        x = (x - 0.5) / 0.5
+        t = torch.from_numpy(x.transpose(2, 0, 1))[None, ...].float()
+        with torch.no_grad():
+            probs = torch.softmax(self._model(t).squeeze(), dim=0).tolist()
+        findings = [Finding(lbl, p) for lbl, p in zip(SKIN_LABELS, probs)]
+        return EngineResult(self.name, self.modality, self.model_source, findings, None)
+
 
 class TorchXRayVisionEngine(DiagnosticEngine):
     """Real 18-pathology chest X-ray classifier.

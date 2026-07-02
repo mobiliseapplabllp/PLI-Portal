@@ -45,6 +45,21 @@ PATTERN_RULES = [
         "any_of": [["Moderate DR"], ["Severe DR"], ["Proliferative DR"]],
         "recommendation": "Ophthalmology referral; optimise glycaemic control; consider anti-VEGF.",
     },
+    {
+        "condition": "Cutaneous malignancy (melanoma / skin cancer)",
+        "any_of": [["Melanoma"], ["Basal cell carcinoma"], ["Actinic keratosis"]],
+        "recommendation": "Dermatology referral; dermoscopy correlation; excisional biopsy.",
+    },
+    {
+        "condition": "Intracranial neoplasm (brain tumour)",
+        "any_of": [["Glioma"], ["Enhancing tumor"], ["Metastasis"], ["Necrotic core"]],
+        "recommendation": "Neuro-oncology referral; contrast MRI; consider stereotactic biopsy.",
+    },
+    {
+        "condition": "Pancreatic neoplasm",
+        "any_of": [["Pancreatic tumor"]],
+        "recommendation": "Pancreatic-protocol imaging; CA 19-9; hepatobiliary MDT.",
+    },
 ]
 
 

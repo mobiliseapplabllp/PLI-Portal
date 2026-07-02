@@ -8,9 +8,11 @@ from __future__ import annotations
 from ..config import get_settings
 from .base import DiagnosticEngine
 from .engines import (
+    MockBrainTumorEngine,
     MockCXREngine,
     MockRetinalEngine,
     MockSegmentationEngine,
+    MockSkinCancerEngine,
     TorchXRayVisionEngine,
 )
 
@@ -19,7 +21,8 @@ _MOCK_BY_MODALITY: dict[str, type[DiagnosticEngine]] = {
     "xray": MockCXREngine,
     "fundus": MockRetinalEngine,
     "ct": MockSegmentationEngine,
-    "mri": MockSegmentationEngine,
+    "mri": MockBrainTumorEngine,        # brain tumour (BraTS-style) oncology
+    "dermoscopy": MockSkinCancerEngine,  # skin cancer / melanoma oncology
 }
 
 _cache: dict[str, DiagnosticEngine] = {}
@@ -38,6 +41,12 @@ def get_engine(modality: str) -> DiagnosticEngine | None:
             engine = TorchXRayVisionEngine()
         except Exception:
             engine = None  # torch not installed -> fall back to mock below
+    if settings.ai_engine_mode in ("real", "monai") and modality == "dermoscopy" and engine is None:
+        try:
+            from .engines import TorchSkinCancerEngine
+            engine = TorchSkinCancerEngine()
+        except Exception:
+            engine = None  # no ISIC weights -> fall back to mock below
     if settings.ai_engine_mode == "monai" and modality in ("ct", "mri") and engine is None:
         try:
             from .monai_engine import MonaiLabelEngine

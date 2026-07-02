@@ -21,16 +21,26 @@ _PA chest — worsening breathlessness_
 **AI-draft report:**
 
 ```
-Chest Radiograph examination with automated diagnostic analysis.
+Chest Radiograph — Chest
+
+CLINICAL INFORMATION: Exertional dyspnoea, orthopnoea, bilateral ankle oedema.
+TECHNIQUE: Digital radiography, PA projection. Automated analysis by a deep-learning classifier.
+COMPARISON: No prior studies available for comparison.
 
 FINDINGS:
-- Cardiomegaly: probability 90% (critical)
-- Effusion: probability 78% (high)
-- Edema: probability 63% (high)
-- Atelectasis: probability 22% (low)
+  1. Cardiomegaly identified in the cardiac silhouette (90% confidence, critical concern). [Cardiovascular]
+  2. Effusion identified in the pleural space (78% confidence, high concern). [Pleura]
+  3. Edema identified in the lung interstitium (63% confidence, high concern). [Cardiopulmonary]
+  4. Atelectasis identified in the lung (22% confidence, low concern). [Respiratory]
 
 IMPRESSION:
-Cardiomegaly identified (critical). 4 finding(s) flagged — clinical correlation advised.
+  1. Cardiomegaly (90%, critical).
+  2. Effusion (78%, high).
+  3. Edema (63%, high).
+  4. Atelectasis (22%, low).
+
+RECOMMENDATIONS:
+  - Clinical correlation and specialist review required.
 ```
 
 ---

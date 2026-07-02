@@ -1,0 +1,6 @@
+{
+  "Glioma": 0.84,
+  "Enhancing tumor": 0.72,
+  "Peritumoral edema": 0.55,
+  "Necrotic core": 0.4
+}

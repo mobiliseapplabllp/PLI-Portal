@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Report MID-01-0004 — James Okoro</title>
+<title>Report MID-01-0007 — Tom Bradley</title>
 <style>
   :root { --ink:#0f172a; --muted:#64748b; --line:#e2e8f0; --brand:#0f766e; }
   * { box-sizing:border-box; }
@@ -72,7 +72,7 @@
     <header class="letter">
       <div class="org">City General Hospital<small>Department of Diagnostic Imaging · AI-Assisted Reporting</small></div>
       <div class="doc-meta">
-        <div><b>Report ID:</b> MID-01-0004</div>
+        <div><b>Report ID:</b> MID-01-0007</div>
         <div><b>Generated:</b> 02 Jul 2026, 06:15</div>
         <div><b>Status:</b> Preliminary (AI draft)</div>
       </div>
@@ -80,52 +80,38 @@
 
     <h1>Patient</h1>
     <div class="pt">
-      <div><div class="lbl">Name</div><div class="val">James Okoro</div></div>
-      <div><div class="lbl">MRN</div><div class="val">CIT-1003</div></div>
+      <div><div class="lbl">Name</div><div class="val">Tom Bradley</div></div>
+      <div><div class="lbl">MRN</div><div class="val">CIT-1006</div></div>
       <div><div class="lbl">Sex</div><div class="val">M</div></div>
-      <div><div class="lbl">DOB / Age</div><div class="val">1958-06-27 (68 y)</div></div>
+      <div><div class="lbl">DOB / Age</div><div class="val">1974-02-08 (52 y)</div></div>
     </div>
 
-    <p class="indication"><strong>Clinical indication:</strong> 40 pack-year smoker, incidental opacity on prior imaging.</p>
+    <p class="indication"><strong>Clinical indication:</strong> New-onset seizures and morning headaches; focal neurological signs.</p>
 
     <h1>Imaging & Findings</h1>
     
         <section class="study">
           <div class="study-head">
-            <h3>Chest Radiograph — Chest</h3>
+            <h3>MRI — Brain</h3>
             <span class="muted">02 Jul 2026</span>
           </div>
-          <p class="tech"><strong>Technique:</strong> Digital radiography, PA projection.
-             &nbsp;·&nbsp; <strong>Indication:</strong> PA chest — nodule follow-up</p>
+          <p class="tech"><strong>Technique:</strong> Multiplanar multisequence MRI.
+             &nbsp;·&nbsp; <strong>Indication:</strong> MRI brain with contrast — mass lesion</p>
           <table class="findings">
             <thead><tr><th>Finding</th><th>Probability</th><th>Severity</th></tr></thead>
-            <tbody><tr><td>Nodule</td><td class="prob"><div class="bar"><span style="width:66%;background:#c2410c"></span></div>66%</td><td><span class="sev" style="color:#c2410c;background:#ffedd5">high</span></td></tr><tr><td>Lung Opacity</td><td class="prob"><div class="bar"><span style="width:62%;background:#c2410c"></span></div>62%</td><td><span class="sev" style="color:#c2410c;background:#ffedd5">high</span></td></tr><tr><td>Mass</td><td class="prob"><div class="bar"><span style="width:58%;background:#a16207"></span></div>58%</td><td><span class="sev" style="color:#a16207;background:#fef9c3">moderate</span></td></tr></tbody>
+            <tbody><tr><td>Glioma</td><td class="prob"><div class="bar"><span style="width:84%;background:#c2410c"></span></div>84%</td><td><span class="sev" style="color:#c2410c;background:#ffedd5">high</span></td></tr><tr><td>Enhancing tumor</td><td class="prob"><div class="bar"><span style="width:72%;background:#c2410c"></span></div>72%</td><td><span class="sev" style="color:#c2410c;background:#ffedd5">high</span></td></tr><tr><td>Peritumoral edema</td><td class="prob"><div class="bar"><span style="width:55%;background:#a16207"></span></div>55%</td><td><span class="sev" style="color:#a16207;background:#fef9c3">moderate</span></td></tr><tr><td>Necrotic core</td><td class="prob"><div class="bar"><span style="width:40%;background:#a16207"></span></div>40%</td><td><span class="sev" style="color:#a16207;background:#fef9c3">moderate</span></td></tr></tbody>
           </table>
-          <p class="impression"><strong>Impression:</strong> 1. Nodule (66%, high). 2. Lung Opacity (62%, high). 3. Mass (58%, moderate). 4. Assessment: Lung-RADS 4B — Very suspicious — malignancy probability ≥15%. Tissue sampling / PET-CT.</p>
-          <p class="model">Automated analysis: <code>MockEngine(cxr-densenet-sim)</code></p>
-        </section>
-        <section class="study">
-          <div class="study-head">
-            <h3>CT — Chest</h3>
-            <span class="muted">02 Jul 2026</span>
-          </div>
-          <p class="tech"><strong>Technique:</strong> Multidetector CT, axial acquisition with reconstructions.
-             &nbsp;·&nbsp; <strong>Indication:</strong> CT chest with contrast — characterise nodule</p>
-          <table class="findings">
-            <thead><tr><th>Finding</th><th>Probability</th><th>Severity</th></tr></thead>
-            <tbody><tr><td>Nodule</td><td class="prob"><div class="bar"><span style="width:82%;background:#c2410c"></span></div>82%</td><td><span class="sev" style="color:#c2410c;background:#ffedd5">high</span></td></tr><tr><td>Mass</td><td class="prob"><div class="bar"><span style="width:71%;background:#c2410c"></span></div>71%</td><td><span class="sev" style="color:#c2410c;background:#ffedd5">high</span></td></tr><tr><td>Lesion</td><td class="prob"><div class="bar"><span style="width:60%;background:#c2410c"></span></div>60%</td><td><span class="sev" style="color:#c2410c;background:#ffedd5">high</span></td></tr><tr><td>Ground-glass opacity</td><td class="prob"><div class="bar"><span style="width:55%;background:#a16207"></span></div>55%</td><td><span class="sev" style="color:#a16207;background:#fef9c3">moderate</span></td></tr></tbody>
-          </table>
-          <p class="impression"><strong>Impression:</strong> 1. Nodule (82%, high). 2. Mass (71%, high). 3. Lesion (60%, high). 4. Ground-glass opacity (55%, moderate). 5. Assessment: Lung-RADS 4B — Very suspicious — malignancy probability ≥15%. Tissue sampling / PET-CT.</p>
-          <p class="model">Automated analysis: <code>MockEngine(medsam-sim)</code></p>
+          <p class="impression"><strong>Impression:</strong> 1. Glioma (84%, high). 2. Enhancing tumor (72%, high). 3. Peritumoral edema (55%, moderate). 4. Necrotic core (40%, moderate). 5. Assessment: Brain tumour suspected (Glioma) — Neuro-oncology referral; contrast-enhanced MRI; consider stereotactic biopsy / MDT review.</p>
+          <p class="model">Automated analysis: <code>MockEngine(brats-sim)</code></p>
         </section>
 
     
         <section class="corr">
           <div class="corr-head"><h3>Integrated AI Correlation</h3> <span class="sev" style="color:#c2410c;background:#ffedd5">high</span></div>
-          <p class="summary">Findings across 2 study(ies) — Ground-glass opacity, Lesion, Lung Opacity, Mass, Nodule. Pattern most consistent with suspicious pulmonary neoplasm. 1 candidate condition(s) flagged for review.</p>
+          <p class="summary">Findings across 1 study(ies) — Enhancing tumor, Glioma, Necrotic core, Peritumoral edema. Pattern most consistent with intracranial neoplasm (brain tumour). 1 candidate condition(s) flagged for review.</p>
           <div class="corr-grid">
-            <div><h4>Differential considerations</h4><ul class="diff"><li><span class="cond">Suspicious pulmonary neoplasm</span><span class="conf">71%</span><span class="support muted">supporting: Mass</span></li></ul></div>
-            <div><h4>Recommendations</h4><ul class="recs"><li>Recommend contrast CT chest and pulmonology referral.</li></ul></div>
+            <div><h4>Differential considerations</h4><ul class="diff"><li><span class="cond">Intracranial neoplasm (brain tumour)</span><span class="conf">84%</span><span class="support muted">supporting: Glioma</span></li></ul></div>
+            <div><h4>Recommendations</h4><ul class="recs"><li>Neuro-oncology referral; contrast MRI; consider stereotactic biopsy.</li></ul></div>
           </div>
         </section>
 

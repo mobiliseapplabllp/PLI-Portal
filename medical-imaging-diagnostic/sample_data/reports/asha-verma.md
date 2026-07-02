@@ -21,16 +21,26 @@ _PA chest — suspected pneumonia_
 **AI-draft report:**
 
 ```
-Chest Radiograph examination with automated diagnostic analysis.
+Chest Radiograph — Chest
+
+CLINICAL INFORMATION: Fever, productive cough, right-sided pleuritic pain.
+TECHNIQUE: Digital radiography, PA projection. Automated analysis by a deep-learning classifier.
+COMPARISON: No prior studies available for comparison.
 
 FINDINGS:
-- Consolidation: probability 83% (high)
-- Pneumonia: probability 75% (high)
-- Infiltration: probability 67% (high)
-- Effusion: probability 28% (low)
+  1. Consolidation identified in the lung parenchyma (83% confidence, high concern). [Respiratory]
+  2. Pneumonia identified in the lung parenchyma (75% confidence, high concern). [Respiratory]
+  3. Infiltration identified in the lung parenchyma (67% confidence, high concern). [Respiratory]
+  4. Effusion identified in the pleural space (28% confidence, low concern). [Pleura]
 
 IMPRESSION:
-Consolidation identified (high). 4 finding(s) flagged — clinical correlation advised.
+  1. Consolidation (83%, high).
+  2. Pneumonia (75%, high).
+  3. Infiltration (67%, high).
+  4. Effusion (28%, low).
+
+RECOMMENDATIONS:
+  - Clinical correlation and specialist review required.
 ```
 
 ---

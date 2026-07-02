@@ -5,11 +5,12 @@ import { Boxes, Cpu } from "lucide-react";
 import Shell from "@/components/shell";
 import { api } from "@/lib/api";
 
-interface Capability { engine: string; modality: string; description: string }
+interface Capability { engine: string; modality: string; description: string; oncology?: boolean }
 interface Engines { engine_mode: string; supported_modalities: string[]; capabilities: Capability[] }
 
 const ICON: Record<string, string> = {
-  cxr: "🫁", retinal: "👁", segmentation: "🧩", report: "📝", correlation: "🧠",
+  cxr: "🫁", retinal: "👁", segmentation: "🧩", brain: "🧠", skin: "🩹",
+  report: "📝", correlation: "🔗",
 };
 
 export default function ModelsPage() {
@@ -43,8 +44,13 @@ export default function ModelsPage() {
                     {ICON[c.engine] || "⚙️"}
                   </div>
                   <div>
-                    <div className="font-semibold">
+                    <div className="flex items-center gap-2 font-semibold">
                       {c.engine} <span className="text-xs font-normal text-slate-400">· {c.modality}</span>
+                      {c.oncology && (
+                        <span className="rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-red-700 dark:bg-red-950 dark:text-red-300">
+                          Oncology
+                        </span>
+                      )}
                     </div>
                     <div className="text-sm text-slate-500">{c.description}</div>
                   </div>

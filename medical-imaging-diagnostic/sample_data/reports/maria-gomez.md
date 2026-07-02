@@ -19,14 +19,26 @@ _Fundus photograph — diabetic screening_
 **AI-draft report:**
 
 ```
-Fundus Photography examination with automated diagnostic analysis.
+Fundus Photography — Retina (OD)
+
+CLINICAL INFORMATION: Type 2 diabetes 12y, annual retinal screening, blurred vision.
+TECHNIQUE: Colour fundus photography. Automated retinal analysis.
+COMPARISON: No prior studies available for comparison.
 
 FINDINGS:
-- Severe DR: probability 86% (critical)
-- Moderate DR: probability 30% (low)
+  1. Severe DR identified in the retina (86% confidence, critical concern). [Ophthalmic]
+  2. Moderate DR identified in the retina (30% confidence, low concern). [Ophthalmic]
+
+ASSESSMENT: ICDR Grade 3 (Intl. Clinical DR Severity) — Severe non-proliferative DR — refer within weeks.
 
 IMPRESSION:
-Severe DR identified (critical). 2 finding(s) flagged — clinical correlation advised.
+  1. Severe DR (86%, critical).
+  2. Moderate DR (30%, low).
+  3. Assessment: ICDR Grade 3 — Severe non-proliferative DR — refer within weeks.
+
+RECOMMENDATIONS:
+  - Severe non-proliferative DR — refer within weeks.
+  - Clinical correlation and specialist review required.
 ```
 
 ---
@@ -42,7 +54,20 @@ _No significant findings._
 **AI-draft report:**
 
 ```
-Chest Radiograph examination. The study is within normal limits on automated analysis. No focal consolidation, effusion, or other acute finding.
+Chest Radiograph — Chest
+
+CLINICAL INFORMATION: Type 2 diabetes 12y, annual retinal screening, blurred vision.
+TECHNIQUE: Digital radiography, PA projection. Automated analysis by a deep-learning classifier.
+COMPARISON: No prior studies available for comparison.
+
+FINDINGS:
+  No significant findings on automated analysis.
+
+IMPRESSION:
+  1. No acute abnormality detected on automated analysis.
+
+RECOMMENDATIONS:
+  - Routine clinical follow-up as indicated.
 ```
 
 ---

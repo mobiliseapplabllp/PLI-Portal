@@ -60,6 +60,24 @@ ANATOMY: dict[str, dict] = {
     "Hernia": {"system": "Gastrointestinal", "anatomy": "Diaphragm"},
     "Ground-glass opacity": {"system": "Respiratory", "anatomy": "Lung parenchyma", "onco": True},
     "Lesion": {"system": "General", "anatomy": "Soft tissue", "onco": True},
+    # oncology — from MONAI detection (lowercase) + specialty engines
+    "nodule": {"system": "Respiratory", "anatomy": "Lung", "onco": True},
+    "Pulmonary nodule": {"system": "Respiratory", "anatomy": "Lung", "onco": True},
+    "Pancreatic tumor": {"system": "Gastrointestinal", "anatomy": "Pancreas", "onco": True},
+    # skin (dermoscopy)
+    "Melanoma": {"system": "Dermatologic", "anatomy": "Skin", "onco": True},
+    "Basal cell carcinoma": {"system": "Dermatologic", "anatomy": "Skin", "onco": True},
+    "Actinic keratosis": {"system": "Dermatologic", "anatomy": "Skin", "onco": True},
+    "Melanocytic nevus": {"system": "Dermatologic", "anatomy": "Skin"},
+    "Benign keratosis": {"system": "Dermatologic", "anatomy": "Skin"},
+    "Dermatofibroma": {"system": "Dermatologic", "anatomy": "Skin"},
+    "Vascular lesion": {"system": "Dermatologic", "anatomy": "Skin"},
+    # brain (MRI)
+    "Glioma": {"system": "Neurologic", "anatomy": "Brain", "onco": True},
+    "Enhancing tumor": {"system": "Neurologic", "anatomy": "Brain", "onco": True},
+    "Necrotic core": {"system": "Neurologic", "anatomy": "Brain", "onco": True},
+    "Metastasis": {"system": "Neurologic", "anatomy": "Brain", "onco": True},
+    "Peritumoral edema": {"system": "Neurologic", "anatomy": "Brain"},
     # retinal
     "Mild DR": {"system": "Ophthalmic", "anatomy": "Retina"},
     "Moderate DR": {"system": "Ophthalmic", "anatomy": "Retina"},
@@ -93,8 +111,39 @@ def _assessment(modality: str, positives: list[dict]) -> dict | None:
     """Standardized category from the strongest relevant finding (heuristic)."""
     labels = {f["label"]: f["probability"] for f in positives}
 
+    # Skin cancer (dermoscopy) → malignancy suspicion
+    SKIN_MALIGNANT = {
+        "Melanoma": "Melanoma", "Basal cell carcinoma": "Basal cell carcinoma",
+        "Actinic keratosis": "Actinic keratosis (pre-malignant)",
+    }
+    skin_hits = [(SKIN_MALIGNANT[l], labels[l]) for l in SKIN_MALIGNANT if l in labels]
+    if modality == "dermoscopy" and skin_hits:
+        name, p = max(skin_hits, key=lambda x: x[1])
+        if p >= 0.6:
+            mean = f"Suspicious for {name.lower()} — dermatology referral & excisional biopsy."
+        else:
+            mean = f"Possible {name.lower()} — dermoscopic review / short-interval follow-up."
+        return {"category": f"Skin: {name} suspected", "system": "ISIC lesion classification",
+                "meaning": mean, "onco_flag": True}
+
+    # Brain tumour (MRI) → neuro-oncology
+    brain_onco = [l for l in labels if l in ("Glioma", "Enhancing tumor", "Metastasis", "Necrotic core")]
+    if modality == "mri" and brain_onco:
+        top = max(brain_onco, key=lambda l: labels[l])
+        return {"category": f"Brain tumour suspected ({top})",
+                "system": "Neuro-oncology (BraTS-style)",
+                "meaning": "Neuro-oncology referral; contrast-enhanced MRI; consider "
+                           "stereotactic biopsy / MDT review.", "onco_flag": True}
+
+    # Pancreatic tumour (CT)
+    if modality == "ct" and "Pancreatic tumor" in labels:
+        return {"category": "Pancreatic mass — suspicious", "system": "Pancreatic oncology",
+                "meaning": "Pancreatic-protocol CT/MRI; CA 19-9; HPB MDT referral.",
+                "onco_flag": True}
+
     # Lung nodule / mass → Lung-RADS-style (heuristic, probability-driven)
-    onco = [(l, p) for l, p in labels.items() if _anatomy(l).get("onco")]
+    onco = [(l, p) for l, p in labels.items() if _anatomy(l).get("onco")
+            and _anatomy(l)["system"] == "Respiratory"]
     if onco and modality in ("xray", "ct"):
         top_p = max(p for _, p in onco)
         has_mass = any(l in ("Mass",) for l, _ in onco)

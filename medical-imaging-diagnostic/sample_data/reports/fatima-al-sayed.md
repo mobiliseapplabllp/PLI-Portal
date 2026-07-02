@@ -1,7 +1,7 @@
 # Diagnostic Report — Fatima Al-Sayed
 
 - **Organization:** Sunrise Diagnostics
-- **MRN:** SUN-1006
+- **MRN:** SUN-1008
 - **Sex / DOB:** F / 1951-08-19
 - **Clinical notes:** Known ischaemic heart disease, increasing fatigue.
 
@@ -20,15 +20,24 @@ _PA chest — cardiac assessment_
 **AI-draft report:**
 
 ```
-Chest Radiograph examination with automated diagnostic analysis.
+Chest Radiograph — Chest
+
+CLINICAL INFORMATION: Known ischaemic heart disease, increasing fatigue.
+TECHNIQUE: Digital radiography, PA projection. Automated analysis by a deep-learning classifier.
+COMPARISON: No prior studies available for comparison.
 
 FINDINGS:
-- Cardiomegaly: probability 72% (high)
-- Effusion: probability 60% (high)
-- Edema: probability 40% (moderate)
+  1. Cardiomegaly identified in the cardiac silhouette (72% confidence, high concern). [Cardiovascular]
+  2. Effusion identified in the pleural space (60% confidence, high concern). [Pleura]
+  3. Edema identified in the lung interstitium (40% confidence, moderate concern). [Cardiopulmonary]
 
 IMPRESSION:
-Cardiomegaly identified (high). 3 finding(s) flagged — clinical correlation advised.
+  1. Cardiomegaly (72%, high).
+  2. Effusion (60%, high).
+  3. Edema (40%, moderate).
+
+RECOMMENDATIONS:
+  - Clinical correlation and specialist review required.
 ```
 
 ---

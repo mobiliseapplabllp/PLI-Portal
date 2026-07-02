@@ -1,8 +1,24 @@
-# MONAI Label service — real CT/MRI segmentation
+# MONAI Label service — real CT/MRI + oncology models
 
 This directory wires [MONAI Label](https://github.com/Project-MONAI/MONAILabel)
 (the open-source model server from the MONAI project) into the app as the real
-engine behind CT/MRI studies.
+engine behind CT/MRI studies, including **oncology (cancer) models** from the
+[MONAI Model Zoo](https://monai.io/model-zoo).
+
+## Oncology models loaded
+
+| Bundle | Cancer / task | Output |
+|--------|---------------|--------|
+| `lung_nodule_ct_detection` | **Lung cancer** — pulmonary nodule detection (RetinaNet, LUNA16) | boxes + scores |
+| `pancreas_ct_dints_segmentation` | **Pancreatic tumour** + pancreas | mask |
+| `wholeBody_ct_segmentation` | 104 structures (staging context) | mask |
+| `brats_mri_segmentation` *(add-on)* | **Brain tumour** (glioma, BraTS) | mask |
+| `pathology_tumor_detection` *(add-on)* | **Breast cancer** metastasis (Camelyon WSI) | mask |
+
+Set the active set with `MONAI_MODELS` (comma-separated bundle names). The
+adapter (`backend/app/ai/monai_engine.py`) auto-detects mask vs. detection
+(boxes) output — nodule detection scores flow straight into the Lung-RADS
+assessment in the structured report.
 
 ## Enable it
 
