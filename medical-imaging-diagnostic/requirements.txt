@@ -12,5 +12,6 @@ python-multipart==0.0.20
 numpy==2.2.1
 pillow==11.1.0
 pydicom==3.0.1     # DICOM (.dcm) ingest
+nibabel==5.3.2     # NIfTI (.nii/.nii.gz) volume ingest for 3D models
 fpdf2==2.8.2       # server-side PDF report export
 requests==2.32.3   # MONAI Label REST adapter

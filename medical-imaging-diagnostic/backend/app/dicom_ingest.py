@@ -28,6 +28,37 @@ def is_dicom(filename: str, first_bytes: bytes) -> bool:
     return len(first_bytes) >= 132 and first_bytes[128:132] == b"DICM"
 
 
+def is_nifti(filename: str) -> bool:
+    return filename.lower().endswith((".nii", ".nii.gz"))
+
+
+def convert_nifti(nii_path: str, png_path: str) -> DicomResult:
+    """Read a NIfTI volume, write a mid-slice PNG preview + basic metadata.
+
+    The original .nii/.nii.gz stays as the source that 3D models (e.g. MONAI
+    lung_nodule_ct_detection) consume; the PNG is only for the viewer."""
+    import nibabel as nib
+    import numpy as np
+    from PIL import Image
+
+    vol = nib.load(nii_path)
+    arr = np.asanyarray(vol.dataobj)
+    if arr.ndim == 4:
+        arr = arr[..., 0]
+    # middle axial slice for the preview
+    sl = arr[:, :, arr.shape[2] // 2] if arr.ndim == 3 else arr
+    lo, hi = np.percentile(sl, 1.0), np.percentile(sl, 99.0)
+    if hi <= lo:
+        lo, hi = float(sl.min()), float(sl.max() or 1.0)
+    img = np.clip((sl - lo) / (hi - lo), 0, 1)
+    out = np.rot90((img * 255).astype("uint8"))
+    os.makedirs(os.path.dirname(png_path) or ".", exist_ok=True)
+    Image.fromarray(out).save(png_path)
+    shape = "x".join(str(d) for d in arr.shape)
+    return DicomResult(png_path=png_path, width=out.shape[1], height=out.shape[0],
+                       metadata={"format": "NIfTI", "volume_shape": shape})
+
+
 def _first(value):
     """WindowCenter/Width can be multi-valued."""
     try:

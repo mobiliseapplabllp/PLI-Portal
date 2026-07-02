@@ -11,7 +11,7 @@ from .. import services
 from ..config import get_settings
 from ..database import get_session
 from ..deps import get_current_user
-from ..dicom_ingest import convert_dicom, is_dicom
+from ..dicom_ingest import convert_dicom, convert_nifti, is_dicom, is_nifti
 from ..models import DiagnosticResult, ImageAsset, Patient, Report, Study, User
 from ..schemas import StudyCreate
 from ..structured_report import render_structured_html, to_fhir
@@ -66,7 +66,8 @@ def upload_image(
     with open(dest, "wb") as out:
         shutil.copyfileobj(file.file, out)
 
-    # DICOM support: convert .dcm to a windowed PNG preview for viewing/AI.
+    # DICOM / NIfTI support: keep the original volume as the source, and generate
+    # a 2D PNG preview for the viewer + 2D engines.
     source_path = None
     meta: dict = {}
     with open(dest, "rb") as fh:
@@ -78,6 +79,13 @@ def upload_image(
             source_path, dest, meta = dest, result.png_path, result.metadata
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(400, f"Could not read DICOM file: {exc}")
+    elif is_nifti(safe_name):
+        try:
+            png_dest = os.path.splitext(os.path.splitext(dest)[0])[0] + "_preview.png"
+            result = convert_nifti(dest, png_dest)
+            source_path, dest, meta = dest, result.png_path, result.metadata
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(400, f"Could not read NIfTI file (need nibabel): {exc}")
 
     width = height = None
     try:

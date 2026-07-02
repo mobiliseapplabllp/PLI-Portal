@@ -20,10 +20,27 @@ adapter (`backend/app/ai/monai_engine.py`) auto-detects mask vs. detection
 (boxes) output — nodule detection scores flow straight into the Lung-RADS
 assessment in the structured report.
 
-## Enable it
+## Enable it (macOS, with Docker Desktop)
 
 ```bash
-# 1. Start everything including MONAI (first build downloads ~8GB: torch + models)
+# 0. Start the Docker engine once: open the Docker Desktop app (or `open -a Docker`)
+#    and wait for the whale icon to say "running".
+
+# 1. From the PROJECT ROOT (not backend/), bring up app + Postgres + MONAI.
+#    First build downloads ~8-10GB (torch + models) and takes a while.
+docker compose -f docker-compose.yml -f docker-compose.monai.yml --profile monai up --build
+
+# 2. Get a real chest CT volume (the 3D detector needs one, not a 2D image):
+python scripts/fetch_ct_sample.py         # -> sample_data/ct_volumes/*.nii.gz
+
+# 3. In the app: open a patient → New study (modality: ct) → upload the .nii.gz
+#    → Run AI analysis. CPU inference takes minutes; a GPU is much faster.
+```
+
+<details><summary>Alternative: original quick-start</summary>
+
+```bash
+# Start everything including MONAI (first build downloads ~8GB: torch + models)
 docker compose --profile monai up --build
 
 # 2. Tell the backend to use it (.env or compose environment)
@@ -41,6 +58,7 @@ monailabel start_server --app apps/radiology --studies datasets \
     --conf models segmentation --port 8100
 # backend: AI_ENGINE_MODE=monai MONAI_LABEL_URL=http://localhost:8100
 ```
+</details>
 
 ## What happens
 

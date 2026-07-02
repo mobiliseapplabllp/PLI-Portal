@@ -225,7 +225,7 @@ function PatientView() {
     });
     const input = document.createElement("input");
     input.type = "file";
-    input.accept = "image/*,.dcm,.dicom,application/dicom";
+    input.accept = "image/*,.dcm,.dicom,application/dicom,.nii,.nii.gz";
     input.onchange = async () => {
       if (input.files?.[0]) {
         const fd = new FormData();

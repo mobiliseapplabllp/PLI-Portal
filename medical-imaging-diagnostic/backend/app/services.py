@@ -45,7 +45,13 @@ def run_analysis(session: Session, study: Study) -> DiagnosticResult | None:
 
     heatmap_dir = os.path.join(settings.upload_dir, "heatmaps")
     heatmap_out = os.path.join(heatmap_dir, f"study{study.id}_heatmap.png")
-    result = engine.analyze(image.storage_path, heatmap_out=heatmap_out)
+    # 3D models (MONAI CT/MRI) need the original volume (DICOM/NIfTI), not the
+    # 2D PNG preview; 2D engines use the preview.
+    analysis_path = image.storage_path
+    if settings.ai_engine_mode == "monai" and study.modality.value in ("ct", "mri") \
+            and image.source_path:
+        analysis_path = image.source_path
+    result = engine.analyze(analysis_path, heatmap_out=heatmap_out)
     payload = result.to_dict()
 
     diag = DiagnosticResult(
