@@ -38,6 +38,7 @@ class Modality(str, enum.Enum):
     mri = "mri"
     fundus = "fundus"          # retinal photography
     dermoscopy = "dermoscopy"
+    mammography = "mammography"
     pathology = "pathology"
 
 

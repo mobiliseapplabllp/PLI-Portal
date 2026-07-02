@@ -28,6 +28,8 @@ def engines() -> dict:
              "description": "Brain tumour segmentation — glioma/metastasis (BraTS-style)"},
             {"engine": "skin", "modality": "dermoscopy", "oncology": True,
              "description": "Skin-cancer classification — melanoma, BCC, AK (ISIC/HAM10000)"},
+            {"engine": "mammo", "modality": "mammography", "oncology": True,
+             "description": "Mammography — mass/microcalcifications → BI-RADS assessment"},
             {"engine": "retinal", "modality": "fundus", "oncology": False,
              "description": "Diabetic retinopathy grading, glaucoma & AMD screening"},
             {"engine": "report", "modality": "all", "oncology": False,

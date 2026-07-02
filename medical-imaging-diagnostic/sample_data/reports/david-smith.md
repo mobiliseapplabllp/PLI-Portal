@@ -1,7 +1,7 @@
 # Diagnostic Report — David Smith
 
 - **Organization:** Sunrise Diagnostics
-- **MRN:** SUN-1007
+- **MRN:** SUN-1008
 - **Sex / DOB:** M / 1990-11-05
 - **Clinical notes:** Sudden right-sided chest pain and breathlessness after exertion.
 

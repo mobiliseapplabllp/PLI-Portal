@@ -72,6 +72,13 @@ ANATOMY: dict[str, dict] = {
     "Benign keratosis": {"system": "Dermatologic", "anatomy": "Skin"},
     "Dermatofibroma": {"system": "Dermatologic", "anatomy": "Skin"},
     "Vascular lesion": {"system": "Dermatologic", "anatomy": "Skin"},
+    # breast (mammography)
+    "Breast mass": {"system": "Breast", "anatomy": "Breast", "onco": True},
+    "Suspicious microcalcifications": {"system": "Breast", "anatomy": "Breast", "onco": True},
+    "Architectural distortion": {"system": "Breast", "anatomy": "Breast", "onco": True},
+    "Focal asymmetry": {"system": "Breast", "anatomy": "Breast", "onco": True},
+    "Benign calcification": {"system": "Breast", "anatomy": "Breast"},
+    "Skin thickening": {"system": "Breast", "anatomy": "Breast skin"},
     # brain (MRI)
     "Glioma": {"system": "Neurologic", "anatomy": "Brain", "onco": True},
     "Enhancing tumor": {"system": "Neurologic", "anatomy": "Brain", "onco": True},
@@ -125,6 +132,29 @@ def _assessment(modality: str, positives: list[dict]) -> dict | None:
             mean = f"Possible {name.lower()} — dermoscopic review / short-interval follow-up."
         return {"category": f"Skin: {name} suspected", "system": "ISIC lesion classification",
                 "meaning": mean, "onco_flag": True}
+
+    # Breast (mammography) → BI-RADS-style (heuristic, probability-driven)
+    MAMMO_SUSPICIOUS = ("Breast mass", "Suspicious microcalcifications",
+                        "Architectural distortion", "Focal asymmetry")
+    mammo_hits = [(l, labels[l]) for l in MAMMO_SUSPICIOUS if l in labels]
+    if modality == "mammography":
+        if not mammo_hits:
+            return {"category": "BI-RADS 2", "system": "BI-RADS 5th ed. (heuristic)",
+                    "meaning": "Benign. Routine screening interval.", "onco_flag": False}
+        top_l, top_p = max(mammo_hits, key=lambda x: x[1])
+        multi = len(mammo_hits) >= 2
+        if top_p >= 0.85 or (multi and top_p >= 0.75):
+            cat, mean = "5", "Highly suggestive of malignancy (≥95%). Biopsy required."
+        elif top_p >= 0.7:
+            cat, mean = "4B", "Moderate suspicion (10–50%). Tissue diagnosis advised."
+        elif top_p >= 0.5:
+            cat, mean = "4A", "Low suspicion (2–10%). Tissue diagnosis advised."
+        elif top_p >= 0.35:
+            cat, mean = "3", "Probably benign (≤2%). 6-month follow-up mammography."
+        else:
+            cat, mean = "2", "Benign. Routine screening interval."
+        return {"category": f"BI-RADS {cat}", "system": "BI-RADS 5th ed. (heuristic)",
+                "meaning": mean, "onco_flag": cat.startswith(("4", "5"))}
 
     # Brain tumour (MRI) → neuro-oncology
     brain_onco = [l for l in labels if l in ("Glioma", "Enhancing tumor", "Metastasis", "Necrotic core")]

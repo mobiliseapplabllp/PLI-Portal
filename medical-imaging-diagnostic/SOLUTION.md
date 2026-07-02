@@ -80,7 +80,16 @@ npm run build      # regenerate webapp/out for the Python server to serve
 | Modality | Real engine | Enable |
 |----------|-------------|--------|
 | Chest X-ray | TorchXRayVision (18 pathologies) | `pip install -r requirements-ml.txt` + `AI_ENGINE_MODE=real` |
-| CT / MRI | MONAI Label (Model Zoo segmentation) | `docker compose --profile monai up` + `AI_ENGINE_MODE=monai` — see `monai/README.md` |
+| CT / MRI | MONAI Label (incl. **lung-nodule detection**, pancreas, brain tumour) | see one-command below |
+| Skin (dermoscopy) | ISIC/HAM10000 classifier (`timm`) | `AI_ENGINE_MODE=real` + `SKIN_MODEL_WEIGHTS=…` |
+
+**Oncology models** (lung, breast BI-RADS, skin melanoma, brain tumour, pancreas)
+run as mocks by default. To run the **real lung-nodule detector** end-to-end:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.monai.yml \
+  --profile monai up --build      # AI_ENGINE_MODE=monai, lung_nodule_ct_detection
+```
 
 Both degrade gracefully to the mock engine if unavailable, and the startup log
 prints which engine is active. Real models need real scans — use

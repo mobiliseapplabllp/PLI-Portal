@@ -1,0 +1,16 @@
+# Override: run with REAL oncology models by default.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.monai.yml \
+#     --profile monai up --build
+#
+# Switches the app to AI_ENGINE_MODE=monai and points CT analysis at the
+# real lung-nodule detector (boxes+scores → Lung-RADS in structured reports).
+services:
+  app:
+    environment:
+      AI_ENGINE_MODE: monai
+      MONAI_LABEL_URL: http://monailabel:8000
+      MONAI_LABEL_MODEL: lung_nodule_ct_detection
+    depends_on:
+      monailabel:
+        condition: service_started

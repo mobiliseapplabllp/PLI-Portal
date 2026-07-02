@@ -113,6 +113,18 @@ SCENARIOS = [
         "expected": "Intracranial neoplasm (brain tumour)",
     },
     {
+        "org": "city-general",
+        "patient": {"name": "Linda Park", "sex": "F", "dob": "1971-10-12",
+                    "notes": "Screening mammogram; palpable lump upper-outer right breast."},
+        "studies": [
+            {"modality": Modality.mammography, "body_part": "Breast (right)", "kind": "mammo",
+             "description": "Diagnostic mammography — palpable abnormality",
+             "plan": {"Breast mass": 0.78, "Suspicious microcalcifications": 0.7,
+                      "Focal asymmetry": 0.3}},
+        ],
+        "expected": "Breast malignancy suspected (BI-RADS 4/5)",
+    },
+    {
         "org": "sunrise-dx",
         "patient": {"name": "David Smith", "sex": "M", "dob": "1990-11-05",
                     "notes": "Sudden right-sided chest pain and breathlessness after exertion."},
@@ -183,6 +195,29 @@ def make_synthetic_image(path: str, seed: int, kind: str = "xray") -> None:
         tumor = np.exp(-(((xx - tx) ** 2 + (yy - ty) ** 2) / (2 * (size * 0.08) ** 2)))
         edema = np.exp(-(((xx - tx) ** 2 + (yy - ty) ** 2) / (2 * (size * 0.15) ** 2)))
         base += 0.55 * tumor - 0.15 * (edema - tumor)
+        img = np.clip(base, 0, 1)
+        Image.fromarray((img * 255).astype("uint8")).save(path)
+        return
+
+    if kind == "mammo":
+        # mammographic breast profile with a dense mass + microcalcification specks
+        base = np.full((size, size), 0.04)
+        cx, cy = size * 0.15, size * 0.5
+        breast = np.exp(-(((xx - cx) ** 2 / (size * 0.55) ** 2 +
+                           (yy - cy) ** 2 / (size * 0.42) ** 2)))
+        base += 0.55 * breast
+        # fibroglandular texture
+        base += 0.08 * np.sin(xx / 14.0 + rng.uniform(0, 6)) * np.cos(yy / 17.0) * breast
+        # dense mass
+        mx, my = size * 0.38, size * 0.42
+        mass = np.exp(-(((xx - mx) ** 2 + (yy - my) ** 2) / (2 * (size * 0.05) ** 2)))
+        base += 0.35 * mass
+        # microcalcifications (bright specks near the mass)
+        for _ in range(18):
+            px = int(mx + rng.normal(0, size * 0.06)); py = int(my + rng.normal(0, size * 0.06))
+            if 1 < px < size - 2 and 1 < py < size - 2:
+                base[py - 1:py + 1, px - 1:px + 1] += 0.5
+        base += rng.normal(0, 0.015, base.shape)
         img = np.clip(base, 0, 1)
         Image.fromarray((img * 255).astype("uint8")).save(path)
         return

@@ -41,6 +41,11 @@ SKIN_LABELS = [
 ]
 # BraTS-style brain tumour sub-regions (MRI).
 BRAIN_LABELS = ["Glioma", "Enhancing tumor", "Peritumoral edema", "Necrotic core", "Metastasis"]
+# Mammography findings (CBIS-DDSM-style). Suspicious: mass, microcalcifications, distortion.
+MAMMO_LABELS = [
+    "Breast mass", "Suspicious microcalcifications", "Architectural distortion",
+    "Focal asymmetry", "Benign calcification", "Skin thickening",
+]
 
 
 def _seed_from_image(image_path: str) -> random.Random:
@@ -207,6 +212,32 @@ class MockBrainTumorEngine(DiagnosticEngine):
         else:
             findings = [Finding(BRAIN_LABELS[0], rng.uniform(0.1, 0.85))]
             findings += [Finding(l, rng.uniform(0.0, 0.5)) for l in BRAIN_LABELS[1:4]]
+        has_pos = any(f.severity != "normal" for f in findings)
+        heatmap = _maybe_heatmap(image_path, heatmap_out, rng) if has_pos else None
+        return EngineResult(self.name, self.modality, self.model_source, findings, heatmap)
+
+
+class MockMammographyEngine(DiagnosticEngine):
+    """Mammography analysis (CBIS-DDSM-style findings). Oncology → BI-RADS.
+
+    Stand-in for a mammography CAD model; the real path is a classifier/detector
+    fine-tuned on CBIS-DDSM / VinDr-Mammo behind this same contract."""
+    name = "mammo"
+    modality = "mammography"
+    model_source = "MockEngine(cbis-ddsm-sim)"
+
+    def analyze(self, image_path: str, *, heatmap_out: str | None = None) -> EngineResult:
+        rng = _seed_from_image(image_path)
+        plan = _load_plan(image_path)
+        if plan is not None:
+            findings = _findings_from_plan(MAMMO_LABELS, plan, rng)
+        else:
+            n_hot = rng.choices([0, 1, 2], weights=[4, 4, 2])[0]
+            hot = set(rng.sample(range(4), n_hot))  # suspicious ones only
+            findings = []
+            for i, label in enumerate(MAMMO_LABELS):
+                p = rng.uniform(0.55, 0.9) if i in hot else rng.uniform(0.0, 0.14)
+                findings.append(Finding(label, p))
         has_pos = any(f.severity != "normal" for f in findings)
         heatmap = _maybe_heatmap(image_path, heatmap_out, rng) if has_pos else None
         return EngineResult(self.name, self.modality, self.model_source, findings, heatmap)

@@ -217,7 +217,7 @@ function PatientView() {
     load();
   };
   const addStudy = async () => {
-    const modality = prompt("Modality (xray, ct, mri, fundus):", "xray");
+    const modality = prompt("Modality (xray, ct, mri, fundus, dermoscopy, mammography):", "xray");
     if (!modality) return;
     const study = await api<Study>("/api/studies", {
       method: "POST",

@@ -60,6 +60,13 @@ PATTERN_RULES = [
         "any_of": [["Pancreatic tumor"]],
         "recommendation": "Pancreatic-protocol imaging; CA 19-9; hepatobiliary MDT.",
     },
+    {
+        "condition": "Breast malignancy suspected",
+        "any_of": [["Breast mass"], ["Suspicious microcalcifications"],
+                   ["Architectural distortion"],
+                   ["Focal asymmetry", "Suspicious microcalcifications"]],
+        "recommendation": "Diagnostic mammography ± ultrasound; image-guided core biopsy; breast MDT.",
+    },
 ]
 
 

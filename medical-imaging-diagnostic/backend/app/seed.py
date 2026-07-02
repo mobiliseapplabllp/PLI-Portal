@@ -100,8 +100,8 @@ def seed() -> None:
         print(f"  Organizations : {len(orgs)}")
         print(f"  Patients      : {len(SCENARIOS)}")
         print("\nLogin (password: demo1234):")
-        print("  admin@city-general.demo   — 7 patients (CHF, pneumonia, DR, lung nodule,")
-        print("                              normal, melanoma, brain tumour)")
+        print("  admin@city-general.demo   — 8 patients (CHF, pneumonia, DR, lung nodule,")
+        print("                              normal, melanoma, brain tumour, breast/BI-RADS)")
         print("  admin@sunrise-dx.demo     — 2 patients (pneumothorax, CHF)")
 
 

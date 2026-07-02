@@ -10,6 +10,7 @@ from .base import DiagnosticEngine
 from .engines import (
     MockBrainTumorEngine,
     MockCXREngine,
+    MockMammographyEngine,
     MockRetinalEngine,
     MockSegmentationEngine,
     MockSkinCancerEngine,
@@ -21,8 +22,9 @@ _MOCK_BY_MODALITY: dict[str, type[DiagnosticEngine]] = {
     "xray": MockCXREngine,
     "fundus": MockRetinalEngine,
     "ct": MockSegmentationEngine,
-    "mri": MockBrainTumorEngine,        # brain tumour (BraTS-style) oncology
-    "dermoscopy": MockSkinCancerEngine,  # skin cancer / melanoma oncology
+    "mri": MockBrainTumorEngine,          # brain tumour (BraTS-style) oncology
+    "dermoscopy": MockSkinCancerEngine,    # skin cancer / melanoma oncology
+    "mammography": MockMammographyEngine,  # breast cancer → BI-RADS oncology
 }
 
 _cache: dict[str, DiagnosticEngine] = {}
