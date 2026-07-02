@@ -1,8 +1,8 @@
-# Deployment: stateless API + Postgres.
-# The API is stateless and designed to scale horizontally behind a load
-# balancer. To actually run multiple replicas, remove the fixed `ports:` host
-# binding below (a single host port can't map to N containers) and put a
-# reverse proxy (nginx/traefik) in front, then:  docker compose up --scale api=3
+# One-command full stack: Postgres + app (API + built UI). MONAI Label is an
+# optional profile (heavy) for real CT/MRI segmentation.
+#
+#   docker compose up --build                    # app + postgres
+#   docker compose --profile monai up --build    # + real MONAI Label engine
 services:
   db:
     image: postgres:16-alpine
@@ -17,12 +17,13 @@ services:
       interval: 5s
       retries: 10
 
-  api:
+  app:
     build: .
     environment:
       DATABASE_URL: postgresql+psycopg://mid:mid@db:5432/mid
       SECRET_KEY: change-me-in-production
-      AI_ENGINE_MODE: mock
+      AI_ENGINE_MODE: ${AI_ENGINE_MODE:-mock}   # mock | real | monai
+      MONAI_LABEL_URL: http://monailabel:8000
       UPLOAD_DIR: /data/uploads
     volumes:
       - uploads:/data/uploads
@@ -32,6 +33,21 @@ services:
     ports:
       - "8000:8000"
 
+  # Real CT/MRI segmentation model server (opt-in; large image).
+  monailabel:
+    build: ./monai
+    profiles: ["monai"]
+    volumes:
+      - monai_models:/models
+      - monai_studies:/studies
+    # Uncomment to use a GPU (requires the NVIDIA container toolkit):
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices: [{ capabilities: ["gpu"] }]
+
 volumes:
   db_data:
   uploads:
+  monai_models:
+  monai_studies:

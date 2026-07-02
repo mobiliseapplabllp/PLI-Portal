@@ -1,0 +1,6 @@
+node_modules/
+.next/
+next-env.d.ts
+.turbo/
+# NOTE: `out/` (the built static export) IS committed on purpose so the app
+# runs with just Python — no Node required. Rebuild with `npm run build`.

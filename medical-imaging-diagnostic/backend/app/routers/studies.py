@@ -11,6 +11,7 @@ from .. import services
 from ..config import get_settings
 from ..database import get_session
 from ..deps import get_current_user
+from ..dicom_ingest import convert_dicom, is_dicom
 from ..models import DiagnosticResult, ImageAsset, Patient, Report, Study, User
 from ..schemas import StudyCreate
 
@@ -64,6 +65,19 @@ def upload_image(
     with open(dest, "wb") as out:
         shutil.copyfileobj(file.file, out)
 
+    # DICOM support: convert .dcm to a windowed PNG preview for viewing/AI.
+    source_path = None
+    meta: dict = {}
+    with open(dest, "rb") as fh:
+        head = fh.read(132)
+    if is_dicom(safe_name, head):
+        try:
+            png_dest = os.path.splitext(dest)[0] + ".png"
+            result = convert_dicom(dest, png_dest)
+            source_path, dest, meta = dest, result.png_path, result.metadata
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(400, f"Could not read DICOM file: {exc}")
+
     width = height = None
     try:
         from PIL import Image
@@ -76,8 +90,10 @@ def upload_image(
         org_id=user.org_id,
         study_id=study.id,
         filename=file.filename or "image.png",
-        content_type=file.content_type or "image/png",
+        content_type="application/dicom" if source_path else (file.content_type or "image/png"),
         storage_path=dest,
+        source_path=source_path,
+        meta_json=json.dumps(meta),
         width=width,
         height=height,
     )

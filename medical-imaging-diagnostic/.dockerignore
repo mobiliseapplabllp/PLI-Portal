@@ -1,0 +1,10 @@
+**/.venv
+**/node_modules
+**/__pycache__
+**/*.pyc
+**/.next
+**/mid.db
+**/uploads
+**/.env
+.git
+webapp/out

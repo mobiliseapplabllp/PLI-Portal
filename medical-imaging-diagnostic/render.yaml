@@ -1,0 +1,31 @@
+# Render.com blueprint — one-click deploy of the app + a managed Postgres.
+# Push this repo to GitHub, then in Render: New > Blueprint > pick the repo.
+# https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: mid-app
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: standard          # 'starter' works for mock mode; real models need more RAM
+    healthCheckPath: /api/health
+    envVars:
+      - key: SECRET_KEY
+        generateValue: true          # Render generates a strong secret
+      - key: AI_ENGINE_MODE
+        value: mock                  # set 'real' after adding torch (bigger plan)
+      - key: UPLOAD_DIR
+        value: /data/uploads
+      - key: DATABASE_URL
+        fromDatabase:
+          name: mid-db
+          property: connectionString
+    disk:
+      name: uploads
+      mountPath: /data
+      sizeGB: 5
+
+databases:
+  - name: mid-db
+    plan: basic-256mb
+    databaseName: mid
+    user: mid

@@ -34,6 +34,14 @@ class UserRead(BaseModel):
     is_active: bool
 
 
+class UserUpdate(BaseModel):
+    """Admin-editable user fields."""
+    role: Role | None = None
+    specialty: str | None = None
+    is_active: bool | None = None
+    full_name: str | None = None
+
+
 class Token(BaseModel):
     access_token: str
     token_type: str = "bearer"

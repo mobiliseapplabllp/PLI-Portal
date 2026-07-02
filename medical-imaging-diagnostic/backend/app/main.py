@@ -7,7 +7,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import get_settings
 from .database import init_db
-from .routers import auth, meta, patients, reports, studies
+from .routers import analytics, auth, meta, patients, reports, studies
 
 settings = get_settings()
 
@@ -29,6 +29,7 @@ app.add_middleware(
 )
 
 app.include_router(meta.router)
+app.include_router(analytics.router)
 app.include_router(auth.router)
 app.include_router(patients.router)
 app.include_router(studies.router)
@@ -52,7 +53,15 @@ def _startup() -> None:
     log.info("🩺 %s ready — %s", settings.app_name, describe_active())
 
 
-# Serve the static frontend (built at ../../frontend relative to this file).
-_frontend = os.path.join(os.path.dirname(__file__), "..", "..", "frontend")
-if os.path.isdir(_frontend):
-    app.mount("/", StaticFiles(directory=_frontend, html=True), name="frontend")
+# Serve the frontend. Prefer the built Next.js app (webapp/out); fall back to the
+# legacy static frontend/ during development if the app hasn't been built.
+_here = os.path.dirname(__file__)
+_candidates = [
+    os.path.join(_here, "..", "..", "webapp", "out"),   # Next.js production export
+    os.path.join(_here, "..", "static"),                # baked into the Docker image
+    os.path.join(_here, "..", "..", "frontend"),        # legacy fallback
+]
+for _dir in _candidates:
+    if os.path.isdir(_dir):
+        app.mount("/", StaticFiles(directory=_dir, html=True), name="frontend")
+        break

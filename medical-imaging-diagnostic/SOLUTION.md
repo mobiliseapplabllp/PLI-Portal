@@ -1,171 +1,129 @@
-# 🚀 Solution & Local Runbook
+# 🚀 Solution & Runbook (v2 — full stack)
 
-This is the complete, self-contained solution for running the **AI Medical
-Imaging Diagnostic Assistant** on your local machine, with sample patients,
-sample X-ray / CT images, sample reports, and the real **TorchXRayVision** model.
+A complete, state-of-the-art AI medical imaging platform:
 
-Destination repo: **`mobiliseapplabllp/ai-for-medical-assistance`**
-(see [Getting this into your repo](#getting-this-into-your-repo)).
+- **Frontend** — Next.js 14 + TypeScript + Tailwind (dark mode, charts, static export)
+- **Backend** — FastAPI + SQLModel, multi-tenant, JWT/roles
+- **AI** — TorchXRayVision (real chest X-ray) + MONAI Label (real CT/MRI segmentation)
+  + smart mock engines (zero-install default)
+- **Features** — DICOM upload, PDF + HTML report artifacts, analytics dashboard,
+  admin/user management
+- **Delivery** — one-command Docker Compose *and* cloud deploy (Render / Fly.io)
 
----
-
-## 1. What you get
-
-- **7 sample patients** across 2 organizations, each a realistic scenario:
-  | Patient | Org | Scenario | AI correlation |
-  |---------|-----|----------|----------------|
-  | Robert Chen | City General | Cardiomegaly + effusion + edema | **Congestive heart failure (84%)** |
-  | Asha Verma | City General | Consolidation + infiltration | **Pneumonia** |
-  | Maria Gomez | City General | Fundus severe DR + normal CXR | **Diabetic retinopathy** |
-  | James Okoro | City General | CXR nodule + CT mass | **Suspicious neoplasm** |
-  | Emily Nguyen | City General | Normal screening | No significant findings |
-  | David Smith | Sunrise Dx | Pneumothorax | **Pneumothorax** |
-  | Fatima Al-Sayed | Sunrise Dx | Cardiomegaly + effusion | **Congestive heart failure** |
-- **Sample images** (`sample_data/images/`) — synthetic X-ray, CT and fundus you can upload via the UI.
-- **Sample reports** (`sample_data/reports/*.md`) — pre-generated per-patient reports (findings + AI-draft radiology report + cross-study correlation).
-- **Real model** — chest X-ray via `torchxrayvision` (18 pathologies) with a gradient saliency heatmap.
+Destination repo: **`mobiliseapplabllp/ai-for-medical-assistance`**.
 
 ---
 
-## 2. Fastest path (one command)
+## Fastest path — Docker (recommended)
+
+Install Docker Desktop, then:
 
 ```bash
-cd medical-imaging-diagnostic
-make demo
+docker compose up --build
+# open http://localhost:8000   (login: admin@city-general.demo / demo1234)
 ```
 
-`make demo` creates the venv, installs deps, generates sample images, seeds the
-database with the 7 patients, exports sample reports, and starts the server.
+That builds the UI, starts Postgres + the app, and seeds sample data. To add the
+real CT/MRI model server (large download):
 
-Then open **http://localhost:8000** and sign in:
-
-| Login | Password | Sees |
-|-------|----------|------|
-| `admin@city-general.demo` | `demo1234` | 5 patients |
-| `admin@sunrise-dx.demo` | `demo1234` | 2 patients |
-
-> No `make`? Use the manual steps below. On **Windows**, use `run_dev.bat` or the
-> manual commands in PowerShell.
+```bash
+AI_ENGINE_MODE=monai docker compose --profile monai up --build
+```
 
 ---
 
-## 3. Manual steps
+## Run locally without Docker
+
+The built UI is committed (`webapp/out`), so you only need **Python 3.11+** —
+no Node required to run.
 
 ```bash
-cd medical-imaging-diagnostic
-python3 -m venv .venv
-source .venv/bin/activate           # Windows: .venv\Scripts\activate
+# from the project root
+python3.11 -m venv .venv && source .venv/bin/activate     # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-cp .env.example .env                 # Windows: copy .env.example .env
-
+cp .env.example .env                                       # Windows: copy .env.example .env
 cd backend
-python -m app.generate_samples       # -> sample_data/images/*.png
-python -m app.seed                   # -> creates mid.db with 7 patients
-python -m app.export_reports         # -> sample_data/reports/*.md
-uvicorn app.main:app --reload --port 8000
+python -m app.generate_samples && python -m app.seed && python -m app.export_reports
+uvicorn app.main:app --host 127.0.0.1 --port 8000
+# open http://localhost:8000
 ```
 
-Interactive API docs: **http://localhost:8000/docs**
-
----
-
-## 4. Try it — X-ray, CT, and reports
-
-1. **Sign in** → pick **James Okoro** → you'll see two studies (Chest X-ray +
-   CT), each with findings, a heatmap, and an AI-draft report, plus the
-   patient-level **AI correlation** ("Suspicious pulmonary neoplasm").
-2. **Generate a full medical report**: click **📄 Medical Report** on a patient
-   to open a formal, print-ready radiology report (with **Print / Save as PDF**).
-3. **See the models**: click **AI Models** in the top bar for the active engines,
-   modalities, and how to enable the real TorchXRayVision model.
-4. **Create a new study**: on any patient click **+ New study**, choose a
-   modality (`xray`, `ct`, `mri`, `fundus`), and upload an image from
-   `sample_data/images/` → click **Run AI analysis**.
-5. **Read sample reports** without the app: open any `sample_data/reports/*.html`
-   (formatted report) or `*.md` (plain text).
-
----
-
-## 5. Enable the REAL chest X-ray model
-
-The default engines are simulated so the app runs anywhere. To use the real
-[TorchXRayVision](https://github.com/mlmed/torchxrayvision) DenseNet-121:
+### Modifying the UI (needs Node 20+)
 
 ```bash
-# from the project root, venv active
-make real                # installs torch (CPU) + torchxrayvision
-# or manually:
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-pip install torchxrayvision
-
-# then set in .env:
-AI_ENGINE_MODE=real
-```
-
-Get real radiographs to test with (synthetic images give meaningless real
-predictions):
-
-```bash
-python scripts/fetch_real_samples.py   # -> sample_data/real_images/
-```
-
-Restart the server; the startup log prints
-`AI_ENGINE_MODE=real → chest X-ray uses torchxrayvision:densenet121-res224-all`.
-Upload a real chest X-ray and the model returns genuine 18-pathology
-probabilities with a Grad-CAM saliency heatmap. Other modalities keep using the
-mock engine until their real adapters (MedSAM, RETFound) are wired.
-
----
-
-## 6. Docker (production-like)
-
-```bash
-docker compose up --build          # API + Postgres on :8000
-```
-
-The API is stateless and built to scale horizontally. To run multiple replicas,
-remove the fixed `ports:` binding in `docker-compose.yml` and put a reverse proxy
-(nginx/traefik) in front, then `docker compose up --scale api=3`.
-
-Seed inside the container once it's up:
-
-```bash
-docker compose exec api python -m app.seed
+cd webapp
+npm install
+npm run dev        # http://localhost:3000, talks to the API on :8000
+#   set NEXT_PUBLIC_API_URL=http://localhost:8000 in webapp/.env.local
+npm run build      # regenerate webapp/out for the Python server to serve
 ```
 
 ---
 
-## 7. Tests
+## What you can do in the app
+
+| Page | What it does |
+|------|--------------|
+| **Patients** | Searchable list; open a unified profile |
+| **Patient profile** | Studies with Original ↔ AI-attention viewer, findings, AI correlation |
+| **📄 Report / PDF** | Formal medical report as HTML (print) or downloadable **PDF** |
+| **Analytics** | Case volumes, severity distribution, top findings, modality mix, model usage |
+| **Admin** | Manage doctors: roles, activate/deactivate, add users (admin only) |
+| **AI Models** | Active engines, modalities, how to enable real models |
+| **New study** | Upload **PNG/JPG or DICOM (.dcm)** → Run AI analysis |
+
+---
+
+## Real AI models
+
+| Modality | Real engine | Enable |
+|----------|-------------|--------|
+| Chest X-ray | TorchXRayVision (18 pathologies) | `pip install -r requirements-ml.txt` + `AI_ENGINE_MODE=real` |
+| CT / MRI | MONAI Label (Model Zoo segmentation) | `docker compose --profile monai up` + `AI_ENGINE_MODE=monai` — see `monai/README.md` |
+
+Both degrade gracefully to the mock engine if unavailable, and the startup log
+prints which engine is active. Real models need real scans — use
+`python scripts/fetch_real_samples.py` for public-domain chest X-rays.
+
+---
+
+## Cloud deploy (public URL)
+
+- **Render**: push to GitHub → New ▸ Blueprint → select repo (`render.yaml` provisions
+  the web service + managed Postgres). `SECRET_KEY` is auto-generated.
+- **Fly.io**: `fly launch --no-deploy` → `fly postgres create` + `fly postgres attach` →
+  `fly volumes create mid_data --size 5` → `fly secrets set SECRET_KEY=$(openssl rand -hex 32)` →
+  `fly deploy` (`fly.toml` included).
+
+Start on the mock engine (cheap); scale RAM up for `real`/`monai`.
+
+---
+
+## Tests
 
 ```bash
-cd backend && python -m pytest -q   # auth, AI pipeline, correlation, tenant isolation
+cd backend && python -m pytest -q     # auth, pipeline, correlation, tenancy,
+                                      # analytics, PDF, admin, DICOM  (9 tests)
 ```
 
 ---
 
 ## Getting this into your repo
 
-This code was developed in a session whose GitHub access is **locked to
-`PLI-Portal`**, so it could not be pushed to `ai-for-medical-assistance`
-directly. To publish it:
+This session's GitHub access is scoped to `PLI-Portal`, so use the delivered
+bundle:
 
 ```bash
-# You received a bundle: mid-ai-medical.bundle  (or a tar of this folder)
-git clone mid-ai-medical.bundle ai-for-medical-assistance
+git clone ai-for-medical-assistance.bundle ai-for-medical-assistance
 cd ai-for-medical-assistance
 git remote set-url origin https://github.com/mobiliseapplabllp/ai-for-medical-assistance.git
-git push -u origin main
+git push -u origin main            # add --force if the repo already has a commit
 ```
-
-Or, to let Claude push directly next time, add
-`mobiliseapplabllp/ai-for-medical-assistance` to the session's **allowed
-repositories** in your Claude Code on the web environment settings
-(https://code.claude.com/docs/en/claude-code-on-the-web).
 
 ---
 
 ## ⚠️ Not for clinical use
 
-Research/education prototype. Default findings are **simulated**; even with the
-real model enabled, nothing here is validated or regulatory-cleared (FDA/CE). Do
-not use for real patient care.
+Research/education prototype. Findings are simulated (or from non-clinical
+models) and are **not validated or regulatory-cleared**. A qualified physician
+must review all imaging.

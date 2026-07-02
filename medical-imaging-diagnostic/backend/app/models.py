@@ -97,7 +97,9 @@ class ImageAsset(SQLModel, table=True):
     study_id: int = Field(foreign_key="study.id", index=True)
     filename: str
     content_type: str = "image/png"
-    storage_path: str                          # local path (prototype) / object key (prod)
+    storage_path: str                          # displayable PNG (local path / object key)
+    source_path: str | None = None             # original upload when it differs (e.g. .dcm)
+    meta_json: str = "{}"                      # extracted metadata (DICOM tags etc.)
     width: int | None = None
     height: int | None = None
     created_at: datetime = Field(default_factory=utcnow)

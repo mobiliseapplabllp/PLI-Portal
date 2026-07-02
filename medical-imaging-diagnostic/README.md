@@ -48,20 +48,33 @@ documented **real-model adapter**. Flip `AI_ENGINE_MODE=real` (after installing
 
 ---
 
+## Stack
+
+- **Frontend** — Next.js 14 + TypeScript + Tailwind (dark mode, Recharts analytics)
+- **Backend** — FastAPI + SQLModel, multi-tenant, JWT + roles
+- **AI** — TorchXRayVision (real X-ray) + MONAI Label (real CT/MRI) + smart mocks
+- **Features** — DICOM upload, PDF & HTML report artifacts, analytics, admin UI
+- **Deploy** — Docker Compose + cloud configs (Render, Fly.io)
+
 ## Quick start
 
 ```bash
-# One command: venv + deps + sample images + 7 sample patients + reports + server
-make demo
-#   Windows:  run_dev.bat
-
-# Open http://localhost:8000
-#   Login:  admin@city-general.demo  /  demo1234   (5 patients)
-#      or:  admin@sunrise-dx.demo    /  demo1234   (2 patients)
+# Docker (recommended) — builds UI, starts Postgres + app, seeds data
+docker compose up --build
+# → http://localhost:8000   (login: admin@city-general.demo / demo1234)
 ```
 
-Manual steps and the full runbook (real model, Docker, tests, Windows) are in
-**[SOLUTION.md](./SOLUTION.md)**.
+No Docker? The built UI is committed, so you only need **Python 3.11+**:
+
+```bash
+python3.11 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt && cp .env.example .env
+cd backend
+python -m app.generate_samples && python -m app.seed && python -m app.export_reports
+uvicorn app.main:app --port 8000
+```
+
+Full runbook (real models, cloud deploy, UI dev, tests) → **[SOLUTION.md](./SOLUTION.md)**.
 
 ### Sample patients
 

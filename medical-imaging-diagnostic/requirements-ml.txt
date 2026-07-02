@@ -8,5 +8,7 @@
 torch>=2.2
 torchvision>=0.17
 torchxrayvision>=1.2.1   # 18-pathology chest X-ray classifier (real pretrained weights)
+nibabel>=5.2             # parse NIfTI masks returned by MONAI Label
 # segment-anything                # MedSAM / SAM-Med2D segmentation backbone
 # monai>=1.3                       # Project-MONAI toolkit for CT/MRI
+# For the MONAI Label SERVER itself, see monai/README.md (runs as its own service)

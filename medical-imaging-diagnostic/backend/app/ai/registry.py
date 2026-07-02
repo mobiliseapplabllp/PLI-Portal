@@ -33,11 +33,17 @@ def get_engine(modality: str) -> DiagnosticEngine | None:
         return _cache[key]
 
     engine: DiagnosticEngine | None = None
-    if settings.ai_engine_mode == "real" and modality == "xray":
+    if settings.ai_engine_mode in ("real", "monai") and modality == "xray":
         try:
             engine = TorchXRayVisionEngine()
         except Exception:
             engine = None  # torch not installed -> fall back to mock below
+    if settings.ai_engine_mode == "monai" and modality in ("ct", "mri") and engine is None:
+        try:
+            from .monai_engine import MonaiLabelEngine
+            engine = MonaiLabelEngine()
+        except Exception:
+            engine = None  # MONAI Label unreachable -> fall back to mock below
 
     if engine is None:
         cls = _MOCK_BY_MODALITY.get(modality)
@@ -55,8 +61,12 @@ def supported_modalities() -> list[str]:
 def describe_active() -> str:
     """Human-readable summary of the active engine configuration (for startup log)."""
     settings = get_settings()
-    if settings.ai_engine_mode == "real":
+    mode = settings.ai_engine_mode
+    if mode in ("real", "monai"):
         xray = get_engine("xray")
-        src = xray.model_source if xray else "unavailable"
-        return f"AI_ENGINE_MODE=real → chest X-ray uses {src}; other modalities use mock."
+        parts = [f"chest X-ray → {xray.model_source if xray else 'mock (torch missing)'}"]
+        if mode == "monai":
+            ct = get_engine("ct")
+            parts.append(f"CT/MRI → {ct.model_source if ct else 'mock (MONAI Label unreachable)'}")
+        return f"AI_ENGINE_MODE={mode}: " + "; ".join(parts) + "; rest mock."
     return "AI_ENGINE_MODE=mock → all modalities use deterministic mock engines."

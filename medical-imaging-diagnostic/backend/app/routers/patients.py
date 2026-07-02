@@ -1,7 +1,7 @@
 """Patient records — always scoped to the caller's organization."""
 import json
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import HTMLResponse
 from sqlmodel import Session, select
 
@@ -82,19 +82,12 @@ def correlate_patient(
     return services.regenerate_correlation(session, patient_id, user.org_id)
 
 
-@router.get("/{patient_id}/report.html", response_class=HTMLResponse)
-def patient_report_artifact(
-    patient_id: int,
-    user: User = Depends(get_current_user),
-    session: Session = Depends(get_session),
-) -> HTMLResponse:
-    """Formal, print-ready medical report as a self-contained HTML artifact."""
-    patient = _get_owned_patient(session, patient_id, user.org_id)
+def _collect_report_data(session: Session, patient: Patient) -> dict:
+    """Everything the report renderers (HTML + PDF) need for one patient."""
     org = session.get(Organization, patient.org_id)
     studies = session.exec(
-        select(Study).where(Study.patient_id == patient_id).order_by(Study.id)
+        select(Study).where(Study.patient_id == patient.id).order_by(Study.id)
     ).all()
-
     items = []
     for st in studies:
         diag = session.exec(
@@ -110,13 +103,40 @@ def patient_report_artifact(
                            if diag else None),
             "report": report,
         })
-
     correlation = session.exec(
-        select(Correlation).where(Correlation.patient_id == patient_id)
+        select(Correlation).where(Correlation.patient_id == patient.id)
     ).first()
+    return {
+        "org": org, "patient": patient, "studies": items, "correlation": correlation,
+        "report_id": f"MID-{patient.org_id:02d}-{patient.id:04d}",
+    }
 
-    html = render_patient_report(
-        org=org, patient=patient, studies=items, correlation=correlation,
-        report_id=f"MID-{patient.org_id:02d}-{patient.id:04d}",
+
+@router.get("/{patient_id}/report.html", response_class=HTMLResponse)
+def patient_report_artifact(
+    patient_id: int,
+    user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+) -> HTMLResponse:
+    """Formal, print-ready medical report as a self-contained HTML artifact."""
+    patient = _get_owned_patient(session, patient_id, user.org_id)
+    return HTMLResponse(content=render_patient_report(**_collect_report_data(session, patient)))
+
+
+@router.get("/{patient_id}/report.pdf")
+def patient_report_pdf(
+    patient_id: int,
+    user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+) -> Response:
+    """Server-side PDF export of the medical report (downloadable artifact)."""
+    from ..pdf_render import render_patient_pdf
+
+    patient = _get_owned_patient(session, patient_id, user.org_id)
+    pdf_bytes = render_patient_pdf(**_collect_report_data(session, patient))
+    fname = f"report_{patient.mrn.replace('/', '-')}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
     )
-    return HTMLResponse(content=html)

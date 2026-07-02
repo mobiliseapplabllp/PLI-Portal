@@ -6,7 +6,7 @@ from sqlmodel import Session, select
 from ..database import get_session
 from ..deps import get_current_user, require_admin
 from ..models import Organization, Role, User
-from ..schemas import OrgSignup, Token, UserCreate, UserRead
+from ..schemas import OrgSignup, Token, UserCreate, UserRead, UserUpdate
 from ..security import create_access_token, hash_password, verify_password
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -86,3 +86,24 @@ def list_users(
     session: Session = Depends(get_session),
 ) -> list[User]:
     return session.exec(select(User).where(User.org_id == user.org_id)).all()
+
+
+@router.patch("/users/{user_id}", response_model=UserRead)
+def update_user(
+    user_id: int,
+    payload: UserUpdate,
+    admin: User = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> User:
+    """Admin updates a user in their own org: role, specialty, active status."""
+    target = session.get(User, user_id)
+    if target is None or target.org_id != admin.org_id:
+        raise HTTPException(404, "User not found")
+    if target.id == admin.id and payload.is_active is False:
+        raise HTTPException(400, "You cannot deactivate your own account")
+    for key, value in payload.model_dump(exclude_unset=True).items():
+        setattr(target, key, value)
+    session.add(target)
+    session.commit()
+    session.refresh(target)
+    return target
