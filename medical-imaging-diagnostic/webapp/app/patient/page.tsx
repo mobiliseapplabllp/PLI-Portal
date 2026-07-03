@@ -7,7 +7,7 @@ import {
   Image as ImageIcon, Loader2, Play, Plus, RefreshCw, Send, ShieldAlert, Sparkles,
   Square, Trash2, Upload, Clock,
 } from "lucide-react";
-import Shell, { SeverityBadge } from "@/components/shell";
+import Shell, { SeverityBadge, useMe } from "@/components/shell";
 import AuthImage from "@/components/auth-image";
 import {
   ageFrom, api, apiBlob, API_BASE, avatarColor, Assessment, Correlation, Diagnostic,
@@ -398,12 +398,25 @@ function ReportsDocsTab({ profile, docs, patientId, onDocs }: any) {
 
 // ---------------------------------------------------------------- AI Assistant
 function AIAssistantTab({ patientId, assessment, onAssessed }: any) {
+  const me = useMe();
+  const canUseAI = !me || me.role !== "viewer"; // enforced server-side too
   const [busy, setBusy] = useState(false);
   const [msgs, setMsgs] = useState<{ role: "you" | "ai"; text: string }[]>([]);
   const [q, setQ] = useState("");
   const [chatBusy, setChatBusy] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+
+  const exportChat = () => {
+    const md =
+      `# AI Assistant conversation — patient ${patientId}\n\n` +
+      msgs.map((m) => `**${m.role === "you" ? "Clinician" : "AI Assistant"}:**\n${m.text}`).join("\n\n---\n\n") +
+      "\n\n_Research/education prototype — not for clinical use._\n";
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([md], { type: "text/markdown" }));
+    a.download = `chat-patient-${patientId}.md`;
+    a.click();
+  };
 
   // Load persisted conversation.
   useEffect(() => {
@@ -474,8 +487,13 @@ function AIAssistantTab({ patientId, assessment, onAssessed }: any) {
       <div className="card p-5">
         <div className="mb-3 flex items-center justify-between">
           <h2 className="flex items-center gap-2 text-sm font-bold"><BrainCircuit size={16} className="text-teal-600" /> Holistic assessment</h2>
-          <button className="btn" onClick={run} disabled={busy}>{busy ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />} {assessment ? "Re-run" : "Run assessment"}</button>
+          <button className="btn" onClick={run} disabled={busy || !canUseAI} title={canUseAI ? "" : "Your role is read-only"}>{busy ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />} {assessment ? "Re-run" : "Run assessment"}</button>
         </div>
+        {!canUseAI && (
+          <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-300">
+            Read-only role — you can view existing assessments but not run the AI Assistant.
+          </div>
+        )}
         {!assessment ? (
           <p className="py-8 text-center text-sm text-slate-400">Run the assessment — the AI reads the entire profile (all imaging, findings, reports, labs, notes) and returns a holistic view.</p>
         ) : (
@@ -505,7 +523,10 @@ function AIAssistantTab({ patientId, assessment, onAssessed }: any) {
         <div className="mb-3 flex items-center justify-between">
           <h2 className="flex items-center gap-2 text-sm font-bold"><Activity size={16} className="text-teal-600" /> Ask about this patient</h2>
           {msgs.length > 0 && (
-            <button onClick={clearChat} className="flex items-center gap-1 text-xs text-slate-400 hover:text-red-500"><Trash2 size={13} /> Clear</button>
+            <div className="flex items-center gap-3">
+              <button onClick={exportChat} className="flex items-center gap-1 text-xs text-slate-400 hover:text-teal-600"><Download size={13} /> Export</button>
+              <button onClick={clearChat} className="flex items-center gap-1 text-xs text-slate-400 hover:text-red-500"><Trash2 size={13} /> Clear</button>
+            </div>
           )}
         </div>
         <div className="mb-3 flex-1 space-y-2 overflow-y-auto" style={{ maxHeight: 340 }}>
@@ -516,11 +537,11 @@ function AIAssistantTab({ patientId, assessment, onAssessed }: any) {
           <div ref={endRef} />
         </div>
         <div className="flex gap-2">
-          <input className="input" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === "Enter" && ask()} placeholder="Ask a question…" disabled={chatBusy} />
+          <input className="input" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === "Enter" && ask()} placeholder={canUseAI ? "Ask a question…" : "Read-only role"} disabled={chatBusy || !canUseAI} />
           {chatBusy ? (
             <button className="btn-dark" onClick={stop} title="Stop generating"><Square size={14} /> Stop</button>
           ) : (
-            <button className="btn" onClick={ask}><Send size={15} /></button>
+            <button className="btn" onClick={ask} disabled={!canUseAI}><Send size={15} /></button>
           )}
         </div>
       </div>

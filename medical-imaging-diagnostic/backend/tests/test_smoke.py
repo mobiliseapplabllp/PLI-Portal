@@ -255,3 +255,21 @@ def test_documents_and_holistic_assessment(tmp_path, monkeypatch):
     # chat falls back gracefully without a CLI
     c = client.post(f"/api/patients/{pid}/chat", json={"question": "urgent?"}, headers=h)
     assert c.status_code == 200 and c.json()["source"] == "unavailable"
+
+
+def test_ai_assistant_role_gated(tmp_path):
+    signup = _signup("lambda")
+    tok = signup["access_token"]; h = _auth(tok)
+    pid = _seed_patient_with_analysis(tok, tmp_path)
+    # admin (clinician) can assess
+    assert client.post(f"/api/patients/{pid}/assess", headers=h).status_code == 200
+    # create a viewer and confirm they are blocked from the AI Assistant
+    client.post("/api/auth/users", json={"email": "viewer@example.com", "full_name": "V",
+                "password": "pw12345", "role": "viewer"}, headers=h)
+    vtok = client.post("/api/auth/login",
+                       data={"username": "viewer@example.com", "password": "pw12345"}).json()["access_token"]
+    vh = _auth(vtok)
+    assert client.post(f"/api/patients/{pid}/assess", headers=vh).status_code == 403
+    assert client.post(f"/api/patients/{pid}/chat", json={"question": "x"}, headers=vh).status_code == 403
+    # but a viewer can still READ the existing assessment + chat history
+    assert client.get(f"/api/patients/{pid}/assessment", headers=vh).status_code == 200

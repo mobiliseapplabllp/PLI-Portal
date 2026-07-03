@@ -23,9 +23,18 @@ from ..models import (
     Patient,
     PatientAssessment,
     Report,
+    Role,
     Study,
     User,
 )
+
+# Roles allowed to run the AI Assistant (assess / chat). Viewers are read-only.
+_AI_ROLES = {Role.admin, Role.doctor, Role.radiologist}
+
+
+def _require_clinician(user: User) -> None:
+    if user.role not in _AI_ROLES:
+        raise HTTPException(403, "Your role cannot run the AI Assistant")
 from ..report_render import render_patient_report
 from ..schemas import PatientCreate
 
@@ -203,6 +212,7 @@ def assess_patient(
     session: Session = Depends(get_session),
 ) -> dict:
     """Run the whole-profile holistic AI assessment and persist it."""
+    _require_clinician(user)
     patient = _get_owned_patient(session, patient_id, user.org_id)
     studies = _gather_studies(session, patient_id)
     documents = session.exec(
@@ -254,6 +264,7 @@ def chat_patient(
     session: Session = Depends(get_session),
 ) -> dict:
     """Ask a free-text question about the patient (Claude CLI over full profile)."""
+    _require_clinician(user)
     patient = _get_owned_patient(session, patient_id, user.org_id)
     question = (body or {}).get("question", "").strip()
     if not question:
@@ -301,6 +312,7 @@ def chat_patient_stream(
 ) -> StreamingResponse:
     """Streaming chat — text chunks as the Claude CLI produces them. Persists both
     the question and the (possibly partial, if stopped) answer."""
+    _require_clinician(user)
     patient = _get_owned_patient(session, patient_id, user.org_id)
     question = (body or {}).get("question", "").strip()
     if not question:
