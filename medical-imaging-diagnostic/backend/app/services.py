@@ -13,6 +13,7 @@ from sqlmodel import Session, select
 
 from . import ai
 from .config import get_settings
+from .database import engine as db_engine
 from .models import (
     Correlation,
     DiagnosticResult,
@@ -95,6 +96,52 @@ def run_analysis(session: Session, study: Study) -> DiagnosticResult | None:
     session.commit()
     session.refresh(diag)
     return diag
+
+
+def run_holistic_assessment(patient_id: int, org_id: int) -> None:
+    """Recompute the whole-profile holistic AI assessment and persist it.
+    Runs with its own session so it can be used as a background task after a
+    study is analyzed. Best-effort — never raises into the caller."""
+    import json as _json
+
+    from . import ai  # noqa: F401  (kept lazy to avoid import cycles)
+    from .ai import holistic
+    from .models import Document, Patient, PatientAssessment
+
+    try:
+        with Session(db_engine) as session:
+            patient = session.get(Patient, patient_id)
+            if patient is None or patient.org_id != org_id:
+                return
+            studies = []
+            for st in session.exec(select(Study).where(Study.patient_id == patient_id)).all():
+                d = session.exec(
+                    select(DiagnosticResult).where(DiagnosticResult.study_id == st.id)
+                    .order_by(DiagnosticResult.id.desc())
+                ).first()
+                r = session.exec(
+                    select(Report).where(Report.study_id == st.id).order_by(Report.id.desc())
+                ).first()
+                studies.append({
+                    "study": st,
+                    "diagnostic": ({**d.model_dump(), "findings": _json.loads(d.findings_json)}
+                                   if d else None),
+                    "report": r,
+                })
+            documents = session.exec(
+                select(Document).where(Document.patient_id == patient_id)
+            ).all()
+            result = holistic.assess_patient(patient=patient, studies=studies, documents=documents)
+            session.add(PatientAssessment(
+                org_id=org_id, patient_id=patient_id, source=result["source"],
+                narrative=result["narrative"], urgent=bool(result["urgent"]),
+                problem_list_json=_json.dumps(result["problem_list"]),
+                differential_json=_json.dumps(result["differential"]),
+                suggestions_json=_json.dumps(result["suggestions"]),
+            ))
+            session.commit()
+    except Exception:
+        pass
 
 
 def regenerate_correlation(session: Session, patient_id: int, org_id: int) -> Correlation:

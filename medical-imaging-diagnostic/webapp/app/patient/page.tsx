@@ -170,13 +170,23 @@ function PatientView() {
   const [assessment, setAssessment] = useState<Assessment | null>(null);
   const [tab, setTab] = useState<TabKey>("overview");
 
+  const refetchAssessment = useCallback(() => {
+    if (id) api<Assessment | null>(`/api/patients/${id}/assessment`).then(setAssessment).catch(() => {});
+  }, [id]);
   const load = useCallback(() => {
     if (!id) return;
     api<Profile>(`/api/patients/${id}`).then(setProfile);
     api<DocRow[]>(`/api/patients/${id}/documents`).then(setDocs).catch(() => {});
-    api<Assessment | null>(`/api/patients/${id}/assessment`).then(setAssessment).catch(() => {});
-  }, [id]);
+    refetchAssessment();
+  }, [id, refetchAssessment]);
   useEffect(load, [load]);
+
+  // After a study is analyzed the holistic assessment is auto-generated in the
+  // background — refetch it shortly after so the AI tab reflects it.
+  const onStudyChanged = useCallback(() => {
+    load();
+    setTimeout(refetchAssessment, 2000);
+  }, [load, refetchAssessment]);
 
   const recompute = async () => { await api(`/api/patients/${id}/correlate`, { method: "POST" }); load(); };
   const addStudy = async () => {
@@ -237,7 +247,7 @@ function PatientView() {
       </div>
 
       {tab === "overview" && <OverviewTab profile={profile} docs={docs} assessment={assessment} onRecompute={recompute} goAI={() => setTab("ai")} />}
-      {tab === "imaging" && <ImagingTab profile={profile} onChanged={load} onAdd={addStudy} />}
+      {tab === "imaging" && <ImagingTab profile={profile} onChanged={onStudyChanged} onAdd={addStudy} />}
       {tab === "reports" && <ReportsDocsTab profile={profile} docs={docs} patientId={id!} onDocs={load} />}
       {tab === "ai" && <AIAssistantTab patientId={id!} assessment={assessment} onAssessed={setAssessment} />}
       {tab === "timeline" && <TimelineTab profile={profile} docs={docs} />}
@@ -385,13 +395,44 @@ function AIAssistantTab({ patientId, assessment, onAssessed }: any) {
     finally { setBusy(false); }
   };
   const ask = async () => {
-    if (!q.trim()) return;
-    const question = q; setQ(""); setMsgs((m) => [...m, { role: "you", text: question }]); setChatBusy(true);
+    if (!q.trim() || chatBusy) return;
+    const question = q; setQ("");
+    setMsgs((m) => [...m, { role: "you", text: question }, { role: "ai", text: "" }]);
+    setChatBusy(true);
+    const scroll = () => endRef.current?.scrollIntoView({ behavior: "smooth" });
     try {
-      const r = await api<{ answer: string }>(`/api/patients/${patientId}/chat`, { method: "POST", body: { question } });
-      setMsgs((m) => [...m, { role: "ai", text: r.answer }]);
-    } catch { setMsgs((m) => [...m, { role: "ai", text: "Error contacting the assistant." }]); }
-    finally { setChatBusy(false); setTimeout(() => endRef.current?.scrollIntoView({ behavior: "smooth" }), 50); }
+      const token = localStorage.getItem("mid_token");
+      const res = await fetch(`/api/patients/${patientId}/chat/stream`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ question }),
+      });
+      if (!res.body) throw new Error();
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      // stream chunks into the last (ai) message
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = dec.decode(value, { stream: true });
+        setMsgs((m) => {
+          const copy = [...m];
+          copy[copy.length - 1] = { role: "ai", text: copy[copy.length - 1].text + chunk };
+          return copy;
+        });
+        scroll();
+      }
+    } catch {
+      setMsgs((m) => {
+        const copy = [...m];
+        copy[copy.length - 1] = { role: "ai", text: "Error contacting the assistant." };
+        return copy;
+      });
+    } finally {
+      setChatBusy(false);
+      setTimeout(scroll, 50);
+    }
   };
 
   return (

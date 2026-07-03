@@ -4,7 +4,7 @@ import os
 import shutil
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from sqlmodel import Session, select
 
 from .. import services
@@ -257,6 +257,27 @@ def chat_patient(
         select(Document).where(Document.patient_id == patient_id)
     ).all()
     return holistic.chat(patient=patient, studies=studies, documents=documents, question=question)
+
+
+@router.post("/{patient_id}/chat/stream")
+def chat_patient_stream(
+    patient_id: int,
+    body: dict,
+    user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+) -> StreamingResponse:
+    """Streaming version of chat — text chunks as the Claude CLI produces them."""
+    patient = _get_owned_patient(session, patient_id, user.org_id)
+    question = (body or {}).get("question", "").strip()
+    if not question:
+        raise HTTPException(400, "question is required")
+    studies = _gather_studies(session, patient_id)
+    documents = session.exec(
+        select(Document).where(Document.patient_id == patient_id)
+    ).all()
+    gen = holistic.chat_stream(patient=patient, studies=studies,
+                               documents=documents, question=question)
+    return StreamingResponse(gen, media_type="text/plain")
 
 
 @router.get("/{patient_id}/report.html", response_class=HTMLResponse)

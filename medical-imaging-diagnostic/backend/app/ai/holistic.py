@@ -157,6 +157,36 @@ def assess_patient(*, patient, studies: list[dict], documents: list) -> dict:
     return result
 
 
+def chat_stream(*, patient, studies: list[dict], documents: list, question: str):
+    """Generator yielding the answer in chunks as the Claude CLI produces them.
+
+    Falls back to yielding a single canned message if the CLI is unavailable."""
+    context = build_context(patient=patient, studies=studies, documents=documents)
+    prompt = (
+        f"{context}\n\nA clinician asks: \"{question}\"\n\n"
+        "Answer concisely based only on the profile above. This is a "
+        "research/education prototype; note findings require physician review."
+    )
+    cmd = os.environ.get("CLAUDE_CLI_CMD", "claude")
+    if not shutil.which(cmd):
+        yield ("The Claude CLI is not available on this server, so live Q&A is "
+               "disabled. Set CLAUDE_CLI_CMD to your `claude` binary to enable it.")
+        return
+    try:
+        proc = subprocess.Popen(
+            [cmd, "-p", "--output-format", "text"],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            text=True, bufsize=1,
+        )
+        proc.stdin.write(prompt)
+        proc.stdin.close()
+        for line in proc.stdout:          # stream stdout as it arrives
+            yield line
+        proc.wait(timeout=180)
+    except Exception:
+        yield "\n[error contacting the assistant]"
+
+
 def chat(*, patient, studies: list[dict], documents: list, question: str) -> dict:
     """Answer a free-text question about the patient using the Claude CLI.
     Falls back to a canned message if the CLI is unavailable."""

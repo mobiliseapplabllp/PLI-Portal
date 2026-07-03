@@ -14,6 +14,9 @@ os.environ["DATABASE_URL"] = f"sqlite:///{_tmp}/test.db"
 os.environ["UPLOAD_DIR"] = f"{_tmp}/uploads"
 os.environ["AI_ENGINE_MODE"] = "mock"
 os.environ["SECRET_KEY"] = "test-secret"
+# Force the holistic-AI rules fallback in tests (don't invoke a real Claude CLI,
+# which the background auto-assessment would otherwise call).
+os.environ["CLAUDE_CLI_CMD"] = "claude-not-installed"
 
 from fastapi.testclient import TestClient  # noqa: E402
 

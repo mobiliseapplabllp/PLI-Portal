@@ -3,7 +3,7 @@ import json
 import os
 import shutil
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
 from sqlmodel import Session, select
 
@@ -115,10 +115,12 @@ def upload_image(
 @router.post("/{study_id}/analyze")
 def analyze_study(
     study_id: int,
+    background: BackgroundTasks,
     user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ) -> dict:
-    """Run the AI engine, then refresh the patient-level correlation."""
+    """Run the AI engine, refresh the patient-level correlation, and kick off a
+    fresh whole-profile holistic assessment in the background."""
     study = _get_owned_study(session, study_id, user.org_id)
     diag = services.run_analysis(session, study)
     if diag is None:
@@ -127,6 +129,8 @@ def analyze_study(
     diag_payload = {**diag.model_dump(), "findings": json.loads(diag.findings_json)}
     patient_id = study.patient_id
     correlation = services.regenerate_correlation(session, patient_id, user.org_id)
+    # Auto-run the holistic AI so the AI Assistant stays current after each study.
+    background.add_task(services.run_holistic_assessment, patient_id, user.org_id)
     return {"diagnostic": diag_payload, "correlation": correlation}
 
 
