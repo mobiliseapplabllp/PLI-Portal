@@ -43,6 +43,29 @@ def create_patient(
     return patient
 
 
+@router.get("/search")
+def search_patients(
+    q: str = "",
+    user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+) -> list[dict]:
+    """Global search: patients by name or MRN within the caller's org.
+    Returns lightweight hits for the command palette."""
+    term = q.strip().lower()
+    if not term:
+        return []
+    rows = session.exec(select(Patient).where(Patient.org_id == user.org_id)).all()
+    hits = [
+        p for p in rows
+        if term in p.full_name.lower() or term in (p.mrn or "").lower()
+    ]
+    return [
+        {"id": p.id, "full_name": p.full_name, "mrn": p.mrn,
+         "sex": p.sex, "date_of_birth": p.date_of_birth}
+        for p in hits[:20]
+    ]
+
+
 @router.get("", response_model=list[Patient])
 def list_patients(
     user: User = Depends(get_current_user),
