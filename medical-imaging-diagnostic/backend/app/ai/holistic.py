@@ -17,6 +17,7 @@ import json
 import os
 import shutil
 import subprocess
+import threading
 
 
 # --------------------------------------------------------------- context build
@@ -180,12 +181,18 @@ def chat_stream(*, context: str, question: str):
                "disabled. Set CLAUDE_CLI_CMD to your `claude` binary to enable it.")
         return
     proc = None
+    watchdog = None
     try:
         proc = subprocess.Popen(
             [cmd, "-p", "--output-format", "text"],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             text=True, bufsize=1,
         )
+        # Hard upper bound so a hung/paused CLI can't leak even if the blocking
+        # read never returns (the finally below handles the normal stop case).
+        watchdog = threading.Timer(180, lambda: proc.poll() is None and proc.kill())
+        watchdog.daemon = True
+        watchdog.start()
         proc.stdin.write(prompt)
         proc.stdin.close()
         for line in proc.stdout:          # stream stdout as it arrives
@@ -193,6 +200,8 @@ def chat_stream(*, context: str, question: str):
     except Exception:
         yield "\n[error contacting the assistant]"
     finally:
+        if watchdog is not None:
+            watchdog.cancel()
         if proc is not None and proc.poll() is None:
             proc.terminate()
             try:

@@ -10,8 +10,8 @@ import {
 import Shell, { SeverityBadge } from "@/components/shell";
 import AuthImage from "@/components/auth-image";
 import {
-  ageFrom, api, apiBlob, avatarColor, Assessment, Correlation, Diagnostic, DocRow,
-  initials, Patient, ReportRow, Study, StructuredReport,
+  ageFrom, api, apiBlob, API_BASE, avatarColor, Assessment, Correlation, Diagnostic,
+  DocRow, getToken, initials, Patient, ReportRow, setToken, Study, StructuredReport,
 } from "@/lib/api";
 
 interface Profile { patient: Patient; studies: Study[]; correlation: Correlation | null }
@@ -170,6 +170,9 @@ function PatientView() {
   const [assessment, setAssessment] = useState<Assessment | null>(null);
   const [tab, setTab] = useState<TabKey>("overview");
 
+  const assessIdRef = useRef<number | undefined>(undefined);
+  useEffect(() => { assessIdRef.current = assessment?.id; }, [assessment]);
+
   const refetchAssessment = useCallback(() => {
     if (id) api<Assessment | null>(`/api/patients/${id}/assessment`).then(setAssessment).catch(() => {});
   }, [id]);
@@ -182,11 +185,23 @@ function PatientView() {
   useEffect(load, [load]);
 
   // After a study is analyzed the holistic assessment is auto-generated in the
-  // background — refetch it shortly after so the AI tab reflects it.
+  // background (the Claude CLI can take a while). Poll until a NEW assessment
+  // (id advanced past the pre-analysis one) lands, rather than a single guess.
   const onStudyChanged = useCallback(() => {
     load();
-    setTimeout(refetchAssessment, 2000);
-  }, [load, refetchAssessment]);
+    const prevId = assessIdRef.current;
+    let tries = 0;
+    const poll = () => {
+      if (!id) return;
+      api<Assessment | null>(`/api/patients/${id}/assessment`)
+        .then((a) => {
+          if (a && a.id !== prevId) setAssessment(a);
+          else if (++tries < 12) setTimeout(poll, 3000);
+        })
+        .catch(() => { if (++tries < 12) setTimeout(poll, 3000); });
+    };
+    setTimeout(poll, 2000);
+  }, [id, load]);
 
   const recompute = async () => { await api(`/api/patients/${id}/correlate`, { method: "POST" }); load(); };
   const addStudy = async () => {
@@ -404,9 +419,19 @@ function AIAssistantTab({ patientId, assessment, onAssessed }: any) {
   };
   const stop = () => abortRef.current?.abort();
   const clearChat = async () => {
+    abortRef.current?.abort();       // stop any in-flight stream before wiping state
     await api(`/api/patients/${patientId}/chat`, { method: "DELETE" }).catch(() => {});
     setMsgs([]);
   };
+  // Update only the trailing AI placeholder; no-op if the list changed under us
+  // (e.g. Clear pressed mid-stream) so we never index a missing element.
+  const appendToAI = (fn: (prev: string) => string) =>
+    setMsgs((m) => {
+      if (!m.length || m[m.length - 1].role !== "ai") return m;
+      const copy = [...m];
+      copy[copy.length - 1] = { role: "ai", text: fn(copy[copy.length - 1].text) };
+      return copy;
+    });
   const ask = async () => {
     if (!q.trim() || chatBusy) return;
     const question = q; setQ("");
@@ -416,14 +441,14 @@ function AIAssistantTab({ patientId, assessment, onAssessed }: any) {
     abortRef.current = controller;
     const scroll = () => endRef.current?.scrollIntoView({ behavior: "smooth" });
     try {
-      const token = localStorage.getItem("mid_token");
-      const res = await fetch(`/api/patients/${patientId}/chat/stream`, {
+      const res = await fetch(`${API_BASE}/api/patients/${patientId}/chat/stream`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${getToken()}` },
         body: JSON.stringify({ question }),
         signal: controller.signal,
       });
-      if (!res.body) throw new Error();
+      if (res.status === 401) { setToken(null); window.location.href = "/login/"; return; }
+      if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
       const reader = res.body.getReader();
       const dec = new TextDecoder();
       // eslint-disable-next-line no-constant-condition
@@ -431,21 +456,12 @@ function AIAssistantTab({ patientId, assessment, onAssessed }: any) {
         const { done, value } = await reader.read();
         if (done) break;
         const chunk = dec.decode(value, { stream: true });
-        setMsgs((m) => {
-          const copy = [...m];
-          copy[copy.length - 1] = { role: "ai", text: copy[copy.length - 1].text + chunk };
-          return copy;
-        });
+        appendToAI((prev) => prev + chunk);
         scroll();
       }
     } catch (e) {
       const stopped = e instanceof DOMException && e.name === "AbortError";
-      setMsgs((m) => {
-        const copy = [...m];
-        const cur = copy[copy.length - 1].text;
-        copy[copy.length - 1] = { role: "ai", text: stopped ? cur + " ⏹" : "Error contacting the assistant." };
-        return copy;
-      });
+      appendToAI((prev) => (stopped ? prev + " ⏹" : "Error contacting the assistant."));
     } finally {
       abortRef.current = null;
       setChatBusy(false);

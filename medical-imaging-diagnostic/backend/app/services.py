@@ -141,7 +141,9 @@ def run_holistic_assessment(patient_id: int, org_id: int) -> None:
             ))
             session.commit()
     except Exception:
-        pass
+        import logging
+        logging.getLogger("uvicorn.error").exception(
+            "Background holistic assessment failed for patient %s", patient_id)
 
 
 def regenerate_correlation(session: Session, patient_id: int, org_id: int) -> Correlation:

@@ -1,6 +1,7 @@
 """Patient records — always scoped to the caller's organization."""
 import json
 import os
+import secrets
 import shutil
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
@@ -177,10 +178,13 @@ def add_document(
     _get_owned_patient(session, patient_id, user.org_id)
     storage_path = None
     if file is not None and file.filename:
-        safe = os.path.basename(file.filename)
+        # Sanitize: strip path + control/NUL chars; make the stored name unique
+        # so same-patient uploads with the same filename don't overwrite.
+        safe = os.path.basename(file.filename).replace("\x00", "").strip() or "document"
+        safe = "".join(ch for ch in safe if ch >= " ")
         dest_dir = os.path.join(settings.upload_dir, f"org{user.org_id}", "documents")
         os.makedirs(dest_dir, exist_ok=True)
-        storage_path = os.path.join(dest_dir, f"p{patient_id}_{safe}")
+        storage_path = os.path.join(dest_dir, f"p{patient_id}_{secrets.token_hex(4)}_{safe}")
         with open(storage_path, "wb") as out:
             shutil.copyfileobj(file.file, out)
     doc = Document(org_id=user.org_id, patient_id=patient_id, kind=kind,
