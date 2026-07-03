@@ -7,7 +7,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import get_settings
 from .database import init_db
-from .routers import analytics, auth, meta, patients, reports, studies
+from .routers import analytics, auth, meta, oncology, patients, reports, studies
 
 settings = get_settings()
 
@@ -30,6 +30,7 @@ app.add_middleware(
 
 app.include_router(meta.router)
 app.include_router(analytics.router)
+app.include_router(oncology.router)
 app.include_router(auth.router)
 app.include_router(patients.router)
 app.include_router(studies.router)
