@@ -157,11 +157,18 @@ def assess_patient(*, patient, studies: list[dict], documents: list) -> dict:
     return result
 
 
-def chat_stream(*, patient, studies: list[dict], documents: list, question: str):
+def cli_available() -> bool:
+    return bool(shutil.which(os.environ.get("CLAUDE_CLI_CMD", "claude")))
+
+
+def chat_stream(*, context: str, question: str):
     """Generator yielding the answer in chunks as the Claude CLI produces them.
 
-    Falls back to yielding a single canned message if the CLI is unavailable."""
-    context = build_context(patient=patient, studies=studies, documents=documents)
+    Takes a pre-built `context` STRING (not ORM objects) because it runs after
+    the request's DB session has closed — the caller must assemble the context
+    while the session is still open. Falls back to a single canned message if the
+    CLI is unavailable. The CLI subprocess is terminated if the consumer stops
+    early (client disconnect / 'stop generating'), via the finally block."""
     prompt = (
         f"{context}\n\nA clinician asks: \"{question}\"\n\n"
         "Answer concisely based only on the profile above. This is a "
@@ -172,6 +179,7 @@ def chat_stream(*, patient, studies: list[dict], documents: list, question: str)
         yield ("The Claude CLI is not available on this server, so live Q&A is "
                "disabled. Set CLAUDE_CLI_CMD to your `claude` binary to enable it.")
         return
+    proc = None
     try:
         proc = subprocess.Popen(
             [cmd, "-p", "--output-format", "text"],
@@ -182,9 +190,15 @@ def chat_stream(*, patient, studies: list[dict], documents: list, question: str)
         proc.stdin.close()
         for line in proc.stdout:          # stream stdout as it arrives
             yield line
-        proc.wait(timeout=180)
     except Exception:
         yield "\n[error contacting the assistant]"
+    finally:
+        if proc is not None and proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except Exception:
+                proc.kill()
 
 
 def chat(*, patient, studies: list[dict], documents: list, question: str) -> dict:

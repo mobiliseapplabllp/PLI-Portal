@@ -163,6 +163,18 @@ class PatientAssessment(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utcnow)
 
 
+class ChatMessage(SQLModel, table=True):
+    """Persisted AI-Assistant conversation, per patient."""
+    id: int | None = Field(default=None, primary_key=True)
+    org_id: int = Field(foreign_key="organization.id", index=True)
+    patient_id: int = Field(foreign_key="patient.id", index=True)
+    role: str                                  # "user" | "assistant"
+    content: str
+    author_id: int | None = Field(default=None, foreign_key="user.id")
+    source: str | None = None                  # "claude-cli" | "unavailable" (assistant only)
+    created_at: datetime = Field(default_factory=utcnow)
+
+
 class Correlation(SQLModel, table=True):
     """Cross-study, cross-modality synthesis for one patient — the assistant's
     'second opinion' that ties multiple diagnostics into one clinical picture."""

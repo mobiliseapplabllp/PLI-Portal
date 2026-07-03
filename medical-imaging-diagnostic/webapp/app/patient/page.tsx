@@ -5,7 +5,7 @@ import { useSearchParams } from "next/navigation";
 import {
   Activity, BrainCircuit, ClipboardList, Download, FileJson, FileText, FlaskConical,
   Image as ImageIcon, Loader2, Play, Plus, RefreshCw, Send, ShieldAlert, Sparkles,
-  Upload, Clock,
+  Square, Trash2, Upload, Clock,
 } from "lucide-react";
 import Shell, { SeverityBadge } from "@/components/shell";
 import AuthImage from "@/components/auth-image";
@@ -388,17 +388,32 @@ function AIAssistantTab({ patientId, assessment, onAssessed }: any) {
   const [q, setQ] = useState("");
   const [chatBusy, setChatBusy] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
+  const abortRef = useRef<AbortController | null>(null);
+
+  // Load persisted conversation.
+  useEffect(() => {
+    api<{ role: string; content: string }[]>(`/api/patients/${patientId}/chat`)
+      .then((h) => setMsgs(h.map((m) => ({ role: m.role === "user" ? "you" : "ai", text: m.content }))))
+      .catch(() => {});
+  }, [patientId]);
 
   const run = async () => {
     setBusy(true);
     try { onAssessed(await api<Assessment>(`/api/patients/${patientId}/assess`, { method: "POST" })); }
     finally { setBusy(false); }
   };
+  const stop = () => abortRef.current?.abort();
+  const clearChat = async () => {
+    await api(`/api/patients/${patientId}/chat`, { method: "DELETE" }).catch(() => {});
+    setMsgs([]);
+  };
   const ask = async () => {
     if (!q.trim() || chatBusy) return;
     const question = q; setQ("");
     setMsgs((m) => [...m, { role: "you", text: question }, { role: "ai", text: "" }]);
     setChatBusy(true);
+    const controller = new AbortController();
+    abortRef.current = controller;
     const scroll = () => endRef.current?.scrollIntoView({ behavior: "smooth" });
     try {
       const token = localStorage.getItem("mid_token");
@@ -406,11 +421,11 @@ function AIAssistantTab({ patientId, assessment, onAssessed }: any) {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({ question }),
+        signal: controller.signal,
       });
       if (!res.body) throw new Error();
       const reader = res.body.getReader();
       const dec = new TextDecoder();
-      // stream chunks into the last (ai) message
       // eslint-disable-next-line no-constant-condition
       while (true) {
         const { done, value } = await reader.read();
@@ -423,13 +438,16 @@ function AIAssistantTab({ patientId, assessment, onAssessed }: any) {
         });
         scroll();
       }
-    } catch {
+    } catch (e) {
+      const stopped = e instanceof DOMException && e.name === "AbortError";
       setMsgs((m) => {
         const copy = [...m];
-        copy[copy.length - 1] = { role: "ai", text: "Error contacting the assistant." };
+        const cur = copy[copy.length - 1].text;
+        copy[copy.length - 1] = { role: "ai", text: stopped ? cur + " ⏹" : "Error contacting the assistant." };
         return copy;
       });
     } finally {
+      abortRef.current = null;
       setChatBusy(false);
       setTimeout(scroll, 50);
     }
@@ -468,18 +486,26 @@ function AIAssistantTab({ patientId, assessment, onAssessed }: any) {
       </div>
 
       <div className="card flex flex-col p-5">
-        <h2 className="mb-3 flex items-center gap-2 text-sm font-bold"><Activity size={16} className="text-teal-600" /> Ask about this patient</h2>
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="flex items-center gap-2 text-sm font-bold"><Activity size={16} className="text-teal-600" /> Ask about this patient</h2>
+          {msgs.length > 0 && (
+            <button onClick={clearChat} className="flex items-center gap-1 text-xs text-slate-400 hover:text-red-500"><Trash2 size={13} /> Clear</button>
+          )}
+        </div>
         <div className="mb-3 flex-1 space-y-2 overflow-y-auto" style={{ maxHeight: 340 }}>
-          {msgs.length === 0 && <p className="py-8 text-center text-sm text-slate-400">Ask anything — e.g. “What’s the most urgent issue?”, “Do the labs support the imaging?”. Answers use the Claude CLI over the full profile.</p>}
+          {msgs.length === 0 && <p className="py-8 text-center text-sm text-slate-400">Ask anything — e.g. “What’s the most urgent issue?”, “Do the labs support the imaging?”. Answers use the Claude CLI over the full profile, and are saved.</p>}
           {msgs.map((m, i) => (
-            <div key={i} className={`max-w-[85%] rounded-2xl px-3 py-2 text-sm ${m.role === "you" ? "ml-auto bg-teal-600 text-white" : "bg-slate-100 dark:bg-slate-800"}`}>{m.text}</div>
+            <div key={i} className={`max-w-[85%] whitespace-pre-wrap rounded-2xl px-3 py-2 text-sm ${m.role === "you" ? "ml-auto bg-teal-600 text-white" : "bg-slate-100 dark:bg-slate-800"}`}>{m.text || <Loader2 size={14} className="animate-spin" />}</div>
           ))}
-          {chatBusy && <div className="rounded-2xl bg-slate-100 px-3 py-2 text-sm dark:bg-slate-800"><Loader2 size={14} className="animate-spin" /></div>}
           <div ref={endRef} />
         </div>
         <div className="flex gap-2">
-          <input className="input" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === "Enter" && ask()} placeholder="Ask a question…" />
-          <button className="btn" onClick={ask} disabled={chatBusy}><Send size={15} /></button>
+          <input className="input" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === "Enter" && ask()} placeholder="Ask a question…" disabled={chatBusy} />
+          {chatBusy ? (
+            <button className="btn-dark" onClick={stop} title="Stop generating"><Square size={14} /> Stop</button>
+          ) : (
+            <button className="btn" onClick={ask}><Send size={15} /></button>
+          )}
         </div>
       </div>
     </div>

@@ -10,9 +10,11 @@ from sqlmodel import Session, select
 from .. import services
 from ..ai import holistic
 from ..config import get_settings
+from ..database import engine as db_engine
 from ..database import get_session
 from ..deps import get_current_user
 from ..models import (
+    ChatMessage,
     Correlation,
     DiagnosticResult,
     Document,
@@ -259,6 +261,33 @@ def chat_patient(
     return holistic.chat(patient=patient, studies=studies, documents=documents, question=question)
 
 
+@router.get("/{patient_id}/chat", response_model=list[ChatMessage])
+def chat_history(
+    patient_id: int,
+    user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+) -> list[ChatMessage]:
+    """Persisted AI-Assistant conversation for this patient."""
+    _get_owned_patient(session, patient_id, user.org_id)
+    return session.exec(
+        select(ChatMessage).where(ChatMessage.patient_id == patient_id)
+        .order_by(ChatMessage.id)
+    ).all()
+
+
+@router.delete("/{patient_id}/chat", status_code=204)
+def clear_chat(
+    patient_id: int,
+    user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+) -> None:
+    """Clear the conversation history for this patient."""
+    _get_owned_patient(session, patient_id, user.org_id)
+    for m in session.exec(select(ChatMessage).where(ChatMessage.patient_id == patient_id)).all():
+        session.delete(m)
+    session.commit()
+
+
 @router.post("/{patient_id}/chat/stream")
 def chat_patient_stream(
     patient_id: int,
@@ -266,7 +295,8 @@ def chat_patient_stream(
     user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ) -> StreamingResponse:
-    """Streaming version of chat — text chunks as the Claude CLI produces them."""
+    """Streaming chat — text chunks as the Claude CLI produces them. Persists both
+    the question and the (possibly partial, if stopped) answer."""
     patient = _get_owned_patient(session, patient_id, user.org_id)
     question = (body or {}).get("question", "").strip()
     if not question:
@@ -275,9 +305,37 @@ def chat_patient_stream(
     documents = session.exec(
         select(Document).where(Document.patient_id == patient_id)
     ).all()
-    gen = holistic.chat_stream(patient=patient, studies=studies,
-                               documents=documents, question=question)
-    return StreamingResponse(gen, media_type="text/plain")
+
+    # Persist the user's question immediately.
+    session.add(ChatMessage(org_id=user.org_id, patient_id=patient_id, role="user",
+                            content=question, author_id=user.id))
+    session.commit()
+
+    org_id = user.org_id
+    source = "claude-cli" if holistic.cli_available() else "unavailable"
+    # Build the context STRING now, while the session is open — the streaming
+    # generator runs after the session closes (ORM objects would be detached).
+    context = holistic.build_context(patient=patient, studies=studies, documents=documents)
+
+    def stream():
+        buf: list[str] = []
+        try:
+            for chunk in holistic.chat_stream(context=context, question=question):
+                buf.append(chunk)
+                yield chunk
+        finally:
+            # Persist whatever was produced (full answer, or partial if stopped),
+            # using a fresh session since the request session is closed by now.
+            text = "".join(buf).strip() or "(no response)"
+            try:
+                with Session(db_engine) as s2:
+                    s2.add(ChatMessage(org_id=org_id, patient_id=patient_id,
+                                       role="assistant", content=text, source=source))
+                    s2.commit()
+            except Exception:
+                pass
+
+    return StreamingResponse(stream(), media_type="text/plain")
 
 
 @router.get("/{patient_id}/report.html", response_class=HTMLResponse)
