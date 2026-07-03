@@ -226,3 +226,29 @@ def test_structured_report_json_html_fhir(tmp_path):
 
     html = client.get(f"/api/studies/{sid}/report.html", headers=h)
     assert html.status_code == 200 and "Structured Report" in html.text
+
+
+def test_documents_and_holistic_assessment(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CLI_CMD", "claude-not-installed")  # force rules fallback
+    tok = _signup("kappa")["access_token"]
+    h = _auth(tok)
+    pid = _seed_patient_with_analysis(tok, tmp_path, modality="ct")
+
+    # add a lab document
+    fd = {"kind": (None, "lab"), "title": (None, "CA 19-9"), "value": (None, "250 U/mL")}
+    r = client.post(f"/api/patients/{pid}/documents", files=fd, headers=h)
+    assert r.status_code == 201 and r.json()["value"] == "250 U/mL"
+    assert len(client.get(f"/api/patients/{pid}/documents", headers=h).json()) == 1
+
+    # holistic assessment (rules fallback)
+    a = client.post(f"/api/patients/{pid}/assess", headers=h)
+    assert a.status_code == 200
+    body = a.json()
+    assert body["source"] == "rules"
+    assert "narrative" in body and isinstance(body["problem_list"], list)
+    # latest assessment persisted
+    assert client.get(f"/api/patients/{pid}/assessment", headers=h).json()["narrative"]
+
+    # chat falls back gracefully without a CLI
+    c = client.post(f"/api/patients/{pid}/chat", json={"question": "urgent?"}, headers=h)
+    assert c.status_code == 200 and c.json()["source"] == "unavailable"

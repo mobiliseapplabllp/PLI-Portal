@@ -136,6 +136,33 @@ class Report(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utcnow)
 
 
+class Document(SQLModel, table=True):
+    """Non-imaging patient data: lab results and uploaded documents (PDF, notes).
+    Factored into the holistic AI assessment alongside imaging."""
+    id: int | None = Field(default=None, primary_key=True)
+    org_id: int = Field(foreign_key="organization.id", index=True)
+    patient_id: int = Field(foreign_key="patient.id", index=True)
+    kind: str = "lab"                          # "lab" | "document" | "note"
+    title: str
+    value: str | None = None                   # lab value/text, e.g. "CA 19-9: 250 U/mL"
+    storage_path: str | None = None            # uploaded file, if any
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class PatientAssessment(SQLModel, table=True):
+    """Holistic, whole-profile AI assessment (Claude CLI or rules fallback)."""
+    id: int | None = Field(default=None, primary_key=True)
+    org_id: int = Field(foreign_key="organization.id", index=True)
+    patient_id: int = Field(foreign_key="patient.id", index=True)
+    source: str = "rules"                      # "claude-cli" | "rules"
+    narrative: str = ""
+    problem_list_json: str = "[]"
+    differential_json: str = "[]"
+    suggestions_json: str = "[]"
+    urgent: bool = False
+    created_at: datetime = Field(default_factory=utcnow)
+
+
 class Correlation(SQLModel, table=True):
     """Cross-study, cross-modality synthesis for one patient — the assistant's
     'second opinion' that ties multiple diagnostics into one clinical picture."""

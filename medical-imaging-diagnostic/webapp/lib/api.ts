@@ -109,6 +109,16 @@ export interface UserRow {
   specialty?: string | null; is_active: boolean;
 }
 export interface Me extends UserRow { org_id: number }
+export interface DocRow {
+  id: number; kind: string; title: string; value?: string | null;
+  storage_path?: string | null; created_at: string;
+}
+export interface Assessment {
+  id?: number; source: string; narrative: string; urgent: boolean;
+  problem_list: string[];
+  differential: { condition: string; rationale: string }[];
+  suggestions: string[]; created_at?: string;
+}
 
 export function ageFrom(dob?: string | null): string {
   if (!dob) return "—";
