@@ -9,7 +9,7 @@ import {
   HiOutlineRefresh,
 } from 'react-icons/hi';
 import { getDeptQuarterlyStatusApi } from '../../api/finalApprover.api';
-import { getCurrentFinancialYear, KPI_STATUS_COLORS, KPI_STATUS_LABELS, QUARTER_MONTHS, MONTHS } from '../../utils/constants';
+import { getCurrentFinancialYear, QUARTER_MONTHS, MONTHS } from '../../utils/constants';
 import StatCard from '../../components/common/StatCard';
 import StatusBadge from '../../components/common/StatusBadge';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
@@ -44,11 +44,23 @@ export default function FinalApproverDashboard() {
   const qMonths = QUARTER_MONTHS[quarter] || [];
   const monthName = (m) => MONTHS.find((x) => x.value === m)?.label?.slice(0, 3) || m;
 
-  const readyCount = employees.filter((e) => e.allMonthsReviewed && !e.quarterlyApprovalExists).length;
-  const approvedCount = employees.filter((e) => e.quarterlyApprovalExists).length;
-  const lockedCount = employees.filter((e) =>
-    qMonths.every((m) => e.monthStatuses?.[m] === 'locked')
-  ).length;
+  // Support both old (flat) and new (nested) employee shape
+  const getEmpId = (e) => e.employee?.id || e.id;
+  const getEmpName = (e) => e.employee?.name || e.name;
+  const getEmpCode = (e) => e.employee?.employeeCode || e.employeeCode;
+  const getMonthStatus = (e, m) => {
+    if (e.months) return e.months.find((mx) => mx.month === m)?.status;
+    return e.monthStatuses?.[m];
+  };
+  const isApproved = (e) => e.quarterlyApproval?.status === 'approved' || e.quarterlyApprovalExists;
+  const isReady = (e) => e.allMonthsReviewed && !isApproved(e);
+
+  const totalEmployees = data?.totalEmployees ?? employees.length;
+  const approvedCount = data?.approvedCount ?? employees.filter(isApproved).length;
+  const pendingCount = data?.pendingCount ?? (totalEmployees - approvedCount);
+  const isQuarterComplete = data?.isQuarterComplete ?? (totalEmployees > 0 && approvedCount === totalEmployees);
+  const pct = totalEmployees > 0 ? Math.round((approvedCount / totalEmployees) * 100) : 0;
+  const readyCount = employees.filter(isReady).length;
   const avgScore = data?.deptAvgScore != null ? data.deptAvgScore.toFixed(1) : '—';
 
   return (
@@ -74,6 +86,46 @@ export default function FinalApproverDashboard() {
         </div>
       </div>
 
+      {/* Quarter Completion Progress */}
+      {!loading && totalEmployees > 0 && (
+        <div className={`card border-2 ${isQuarterComplete ? 'border-emerald-400 bg-emerald-50' : 'border-gray-200'}`}>
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <h3 className="font-semibold text-gray-900">
+                Quarter Completion — {quarter} {fy}
+              </h3>
+              <p className="text-sm text-gray-500 mt-0.5">
+                {approvedCount} of {totalEmployees} employees approved
+                {pendingCount > 0 && ` · ${pendingCount} pending`}
+              </p>
+            </div>
+            {isQuarterComplete ? (
+              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-100 text-emerald-700 font-semibold text-sm">
+                <HiOutlineCheckCircle className="w-4 h-4" /> Quarter Complete ✓
+              </span>
+            ) : (
+              <span className="text-sm text-gray-500">{pct}% complete</span>
+            )}
+          </div>
+
+          {/* Progress bar */}
+          <div className="h-3 bg-gray-100 rounded-full overflow-hidden">
+            <div
+              className={`h-full rounded-full transition-all duration-500 ${
+                isQuarterComplete ? 'bg-emerald-500' : pct >= 50 ? 'bg-cyan-500' : 'bg-amber-400'
+              }`}
+              style={{ width: `${pct}%` }}
+            />
+          </div>
+
+          {isQuarterComplete && (
+            <p className="text-xs text-emerald-600 mt-2">
+              All employee quarterly approvals are complete. HR team can now proceed with PLI payout calculation for {quarter} {fy}.
+            </p>
+          )}
+        </div>
+      )}
+
       {/* Stats */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
@@ -93,11 +145,11 @@ export default function FinalApproverDashboard() {
           subtitle={`${quarter} ${fy}`}
         />
         <StatCard
-          title="Locked"
-          value={lockedCount}
+          title="Total Employees"
+          value={totalEmployees}
           icon={HiOutlineLockClosed}
           color="gray"
-          subtitle="Fully locked"
+          subtitle="In your department"
         />
         <StatCard
           title="Avg Quarterly Score"
@@ -114,10 +166,7 @@ export default function FinalApproverDashboard() {
           <h2 className="text-base font-semibold text-gray-900">
             Department Progress — {quarter} {fy}
           </h2>
-          <button
-            onClick={() => navigate('/final-approver/workbench')}
-            className="btn-primary text-xs"
-          >
+          <button onClick={() => navigate('/final-approver/workbench')} className="btn-primary text-xs">
             Open Workbench
           </button>
         </div>
@@ -139,22 +188,23 @@ export default function FinalApproverDashboard() {
                       {monthName(m)}
                     </th>
                   ))}
-                  <th className="text-center px-3 py-3 text-xs font-semibold text-gray-500 uppercase">Readiness</th>
+                  <th className="text-center px-3 py-3 text-xs font-semibold text-gray-500 uppercase">Status</th>
                   <th className="px-3 py-3" />
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {employees.map((emp) => {
-                  const allReviewed = emp.allMonthsReviewed;
-                  const hasApproval = emp.quarterlyApprovalExists;
+                  const empId = getEmpId(emp);
+                  const empApproved = isApproved(emp);
+                  const empReady = isReady(emp);
                   return (
-                    <tr key={emp.id} className={`${allReviewed && !hasApproval ? 'bg-emerald-50/50' : ''}`}>
+                    <tr key={empId} className={`${empReady ? 'bg-emerald-50/50' : ''}`}>
                       <td className="px-4 py-3">
-                        <div className="font-medium text-gray-800">{emp.name}</div>
-                        <div className="text-xs text-gray-400">{emp.employeeCode}</div>
+                        <div className="font-medium text-gray-800">{getEmpName(emp)}</div>
+                        <div className="text-xs text-gray-400">{getEmpCode(emp)}</div>
                       </td>
                       {qMonths.map((m) => {
-                        const status = emp.monthStatuses?.[m];
+                        const status = getMonthStatus(emp, m);
                         return (
                           <td key={m} className="px-3 py-3 text-center">
                             {status ? <StatusBadge status={status} /> : <span className="text-gray-300 text-xs">—</span>}
@@ -162,27 +212,23 @@ export default function FinalApproverDashboard() {
                         );
                       })}
                       <td className="px-3 py-3 text-center">
-                        {hasApproval ? (
-                          <span className="text-xs px-2 py-1 rounded-full bg-emerald-100 text-emerald-700 font-medium">
-                            ✓ Approved
-                          </span>
-                        ) : allReviewed ? (
-                          <span className="text-xs px-2 py-1 rounded-full bg-emerald-50 text-emerald-600 font-medium ring-1 ring-emerald-200 animate-pulse">
-                            Ready
-                          </span>
+                        {empApproved ? (
+                          <span className="text-xs px-2 py-1 rounded-full bg-emerald-100 text-emerald-700 font-medium">✓ Approved</span>
+                        ) : empReady ? (
+                          <span className="text-xs px-2 py-1 rounded-full bg-emerald-50 text-emerald-600 font-medium ring-1 ring-emerald-200 animate-pulse">Ready</span>
                         ) : (
                           <span className="text-xs text-gray-400">
-                            {Object.values(emp.monthStatuses || {}).filter((s) => s === 'manager_reviewed').length}/{qMonths.length} reviewed
+                            {qMonths.filter((m) => ['manager_reviewed', 'final_approved'].includes(getMonthStatus(emp, m))).length}/{qMonths.length} reviewed
                           </span>
                         )}
                       </td>
                       <td className="px-3 py-3 text-right">
-                        {(allReviewed || hasApproval) && (
+                        {(empReady || empApproved) && (
                           <button
-                            onClick={() => navigate(`/final-approver/workbench/${emp.id}/${fy}/${quarter}`)}
+                            onClick={() => navigate(`/final-approver/workbench/${empId}/${fy}/${quarter}`)}
                             className="text-xs text-cyan-700 hover:text-cyan-800 font-medium"
                           >
-                            {hasApproval ? 'View' : 'Review →'}
+                            {empApproved ? 'View' : 'Review →'}
                           </button>
                         )}
                       </td>

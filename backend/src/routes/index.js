@@ -12,6 +12,7 @@ router.use('/dashboard', require('./dashboard.routes'));
 router.use('/reports', require('./report.routes'));
 router.use('/kpi-templates', require('./kpiTemplate.routes'));
 router.use('/pli-rules', require('./pliRule.routes'));
+router.use('/scoring-configs', require('./scoringConfig.routes'));
 router.use('/notifications', require('./notification.routes'));
 router.use('/audit-logs', require('./audit.routes'));
 router.use('/pm', require('./pm/index'));

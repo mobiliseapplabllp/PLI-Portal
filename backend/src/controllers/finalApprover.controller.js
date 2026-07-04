@@ -25,7 +25,7 @@ const createOrUpdateQuarterlyApproval = async (req, res, next) => {
 
 const submitQuarterlyApproval = async (req, res, next) => {
   try {
-    const approval = await svc.submitQuarterlyApproval(req.params.id, req.body.items, req.user);
+    const approval = await svc.submitQuarterlyApproval(req.params.id, req.body, req.user);
     res.json({ success: true, data: approval, message: 'Quarterly approval submitted successfully.' });
   } catch (err) { next(err); }
 };

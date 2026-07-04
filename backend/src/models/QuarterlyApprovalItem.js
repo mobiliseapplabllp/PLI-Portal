@@ -18,6 +18,9 @@ const QuarterlyApprovalItem = sequelize.define(
     // Max quarterly credit this item can earn
     quarterlyWeightage: { type: DataTypes.DECIMAL(10, 2), allowNull: false },
 
+    // KPI head for tab grouping (denormalised from KpiPlanItem)
+    kpiHead: { type: DataTypes.STRING(64), allowNull: true },
+
     // Three month references (month numbers, e.g. 4, 5, 6 for Q1)
     month1: { type: DataTypes.INTEGER, allowNull: false },
     month2: { type: DataTypes.INTEGER, allowNull: false },
@@ -28,20 +31,28 @@ const QuarterlyApprovalItem = sequelize.define(
     month2_managerStatus: { type: DataTypes.ENUM(...KPI_SUBMISSION_VALUES), allowNull: true },
     month3_managerStatus: { type: DataTypes.ENUM(...KPI_SUBMISSION_VALUES), allowNull: true },
 
-    // Numeric values: Exceeds=+1, Meets=0, Below=-1
+    // Legacy numeric values (kept for backward compat): Exceeds=+1, Meets=0, Below=-1
     month1_numeric: { type: DataTypes.TINYINT, allowNull: true },
     month2_numeric: { type: DataTypes.TINYINT, allowNull: true },
     month3_numeric: { type: DataTypes.TINYINT, allowNull: true },
 
-    // Sum of 3 numerics (range: -3 to +3); > 0 triggers auto-calculation
+    // Legacy sum of 3 numerics (kept for backward compat)
     quarterlyNumericSum: { type: DataTypes.TINYINT, allowNull: true },
 
-    // Auto-calculation flag: true if sum > 0 and fields were pre-filled
+    // Auto-calculation flag: true if calculatedQuarterlyActual >= 0
     isAutoCalculated: { type: DataTypes.BOOLEAN, defaultValue: false },
+
+    // Multiplier-based actual contributions per month (system-computed, never edited after creation)
+    month1_actual: { type: DataTypes.DECIMAL(10, 4), allowNull: true },
+    month2_actual: { type: DataTypes.DECIMAL(10, 4), allowNull: true },
+    month3_actual: { type: DataTypes.DECIMAL(10, 4), allowNull: true },
+
+    // Sum of 3 month actuals — preserved for record, never edited after creation
+    calculatedQuarterlyActual: { type: DataTypes.DECIMAL(10, 4), allowNull: true },
 
     // Final Approver's decision per item
     finalStatus: { type: DataTypes.ENUM(...KPI_SUBMISSION_VALUES), allowNull: true },
-    // Credit given: 0 to quarterlyWeightage
+    // FA's final entered value — separate from calculated, no cap, FA has full authority
     quarterlyAchievedWeightage: { type: DataTypes.DECIMAL(10, 2), allowNull: true },
     finalComment: { type: DataTypes.TEXT, allowNull: true },
     approvedAt: { type: DataTypes.DATE, allowNull: true },

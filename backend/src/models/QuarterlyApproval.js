@@ -15,7 +15,9 @@ const QuarterlyApproval = sequelize.define(
     financialYear: { type: DataTypes.STRING(16), allowNull: false },
     quarter: { type: DataTypes.ENUM('Q1', 'Q2', 'Q3', 'Q4'), allowNull: false },
     finalApproverId: { type: DataTypes.UUID, allowNull: true },
-    // quarterlyScore = Σ(item.quarterlyAchievedWeightage) across all items
+    // System-computed reference score from manager statuses (never changes after creation)
+    calculatedQuarterlyScore: { type: DataTypes.DECIMAL(10, 4), allowNull: true },
+    // FA's final score used for PLI payout = Σ(FA values) / Σ(3 × monthlyWt) × 100
     quarterlyScore: { type: DataTypes.DECIMAL(10, 2), allowNull: true },
     status: {
       type: DataTypes.ENUM('draft', 'approved'),

@@ -40,6 +40,7 @@ import FinalReviewWorkbench from '../pages/admin/FinalReviewWorkbench';
 import AdminReviewTable from '../pages/admin/AdminReviewTable';
 import KpiTemplates from '../pages/admin/KpiTemplates';
 import PliRuleConfig from '../pages/admin/PliRuleConfig';
+import ScoringConfigPage from '../pages/admin/ScoringConfigPage';
 import Reports from '../pages/admin/Reports';
 import AuditLogs from '../pages/admin/AuditLogs';
 
@@ -131,6 +132,7 @@ export default function AppRoutes() {
         <Route path="/admin/final-review/:assignmentId" element={<RoleRoute roles={['admin']}><FinalReviewWorkbench /></RoleRoute>} />
         <Route path="/admin/review-table" element={<RoleRoute roles={['admin']}><AdminReviewTable /></RoleRoute>} />
         <Route path="/admin/pli-rules" element={<RoleRoute roles={['admin']}><PliRuleConfig /></RoleRoute>} />
+        <Route path="/admin/scoring-config" element={<RoleRoute roles={['admin']}><ScoringConfigPage /></RoleRoute>} />
         <Route path="/admin/reports" element={<RoleRoute roles={['hr_admin', 'final_approver', 'admin', 'manager', 'senior_manager']}><Reports /></RoleRoute>} />
         <Route path="/admin/audit-logs" element={<RoleRoute roles={['admin']}><AuditLogs /></RoleRoute>} />
 

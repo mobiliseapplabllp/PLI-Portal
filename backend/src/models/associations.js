@@ -1,5 +1,6 @@
 const Department = require('./Department');
 const User = require('./User');
+const ScoringConfig = require('./ScoringConfig');
 const AppraisalCycle = require('./AppraisalCycle');
 const KpiAssignment = require('./KpiAssignment');
 const KpiItem = require('./KpiItem');
@@ -64,6 +65,9 @@ QuarterlyApprovalItem.belongsTo(QuarterlyApproval, {
   as: 'quarterlyApproval',
 });
 QuarterlyApprovalItem.belongsTo(KpiPlanItem, { foreignKey: 'kpiPlanItemId', as: 'planItem' });
+
+// ── ScoringConfig ─────────────────────────────────────────────────────────────
+ScoringConfig.belongsTo(User, { foreignKey: 'createdById', as: 'createdBy' });
 
 // ── PLI ───────────────────────────────────────────────────────────────────────
 PliRule.belongsTo(User, { foreignKey: 'createdById', as: 'createdBy' });

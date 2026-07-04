@@ -113,6 +113,8 @@ const NOTIFICATION_TYPES = {
   PM_PROJECT_ASSIGNED: 'pm_project_assigned',
   PM_MILESTONE_UPDATED: 'pm_milestone_updated',
   PM_DAILY_LOG: 'pm_daily_log',
+  // Scoring config
+  SCORING_CONFIG_UPDATED: 'scoring_config_updated',
 };
 
 // Audit actions
