@@ -1,5 +1,5 @@
-import { useEffect, useState, useMemo } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useEffect, useState, useMemo, useCallback, useRef } from 'react';
+import { useNavigate, useParams, useLocation } from 'react-router-dom';
 import {
   HiOutlineArrowLeft,
   HiOutlineRefresh,
@@ -10,12 +10,14 @@ import {
   HiOutlineSearch,
   HiOutlineUserGroup,
   HiOutlineEye,
+  HiOutlineDownload,
 } from 'react-icons/hi';
 import {
   getDeptQuarterlyStatusApi,
   initQuarterlyApprovalApi,
   getQuarterlyApprovalApi,
   submitQuarterlyApprovalApi,
+  bulkRecalculateQuarterApi,
 } from '../../api/finalApprover.api';
 import { getUsersApi, getTeamApi } from '../../api/users.api';
 import { getAssignmentByIdApi } from '../../api/kpiAssignments.api';
@@ -181,6 +183,7 @@ const FILTER_TABS = [
 
 function WorkbenchList() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [fy, setFy]               = useState(getCurrentFinancialYear());
   const [quarter, setQuarter]     = useState('Q1');
   const [data, setData]           = useState(null);
@@ -193,20 +196,84 @@ function WorkbenchList() {
   const [managers, setManagers]             = useState([]);
   const [teamMemberIds, setTeamMemberIds]   = useState(null); // null = no manager selected, Set = filtered
 
+  const [recalculating, setRecalculating] = useState(false);
+  const [exporting, setExporting]         = useState(false);
+
   // Per-employee FA override state: { [empId]: { score: string, comment: string, submitting: bool, error: string } }
   const [faState, setFaState] = useState({});
 
   // Drill-down: { assignmentId, empName, monthLabel } | null
   const [drillDown, setDrillDown] = useState(null);
 
-  // Load managers once on mount — separate reliable API call (role='manager')
+  // fetchData defined early as useCallback so effects below can depend on it correctly
+  const fetchData = useCallback(async () => {
+    setLoading(true);
+    setFaState({});
+    setSearch('');
+    setFilterManager('');
+    setFilterEmployee('');
+    setTeamMemberIds(null);
+    try {
+      // _t busts browser GET cache — ensures fresh data after scoring config changes
+      const res = await getDeptQuarterlyStatusApi({ financialYear: fy, quarter, _t: Date.now() });
+      const d = res.data.data;
+      setData(d);
+      const initial = {};
+      (d.employees || []).forEach((e) => {
+        const id = e.employee?._id || e.employee?.id || e._id || e.id;
+        const mt = e.monthTotals || {};
+        const months = Object.keys(mt);
+        const calcEarned   = months.reduce((s, m) => s + parseFloat(mt[m]?.earned   || 0), 0);
+        const calcPossible = months.reduce((s, m) => s + parseFloat(mt[m]?.possible || 0), 0);
+        const calcPct      = Math.round(calcPossible) > 0
+          ? Math.round((Math.round(calcEarned) / Math.round(calcPossible)) * 100)
+          : 0;
+        initial[id] = {
+          score:      (calcPct > 0 || e.quarterlyApproval) ? String(Math.round(calcPct)) : '',
+          comment:    '',
+          submitting: false,
+          error:      null,
+        };
+      });
+      setFaState(initial);
+    } catch { /* handled by empty state */ }
+    finally { setLoading(false); }
+  }, [fy, quarter]);
+
+  // Track whether initial mount fetch has run — prevents double-fetch
+  const didMountRef = useRef(false);
+
+  // Load managers once on mount
   useEffect(() => {
     getUsersApi({ role: 'manager', isActive: 'true', limit: 200 })
       .then((r) => setManagers(r.data.data || []))
       .catch(() => setManagers([]));
   }, []);
 
-  useEffect(() => { fetchData(); }, [fy, quarter]);
+  // Fetch when fy or quarter dropdown changes (also fires on initial mount)
+  useEffect(() => {
+    didMountRef.current = true;
+    fetchData();
+  }, [fetchData]);
+
+  // Re-fetch on every navigation to this page (location.key is unique per navigation)
+  // Re-fetch when user navigates to this page via React Router (location.key changes)
+  const prevKeyRef = useRef(location.key);
+  useEffect(() => {
+    if (!didMountRef.current) return;           // skip before first mount fetch
+    if (location.key === prevKeyRef.current) return; // skip if key hasn't changed
+    prevKeyRef.current = location.key;
+    fetchData();
+  }, [location.key, fetchData]);
+
+  // Re-fetch when user comes back to this browser tab (covers scoring config changes in another tab)
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === 'visible' && didMountRef.current) fetchData();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [fetchData]);
 
   // When manager selected → fetch their team members to get reliable IDs
   useEffect(() => {
@@ -224,34 +291,106 @@ function WorkbenchList() {
       .catch(() => { setTeamMemberIds(new Set()); setFilterEmployee(''); });
   }, [filterManager]);
 
-  const fetchData = async () => {
-    setLoading(true);
-    setFaState({});
-    setSearch('');
-    setFilterManager('');
-    setFilterEmployee('');
-    setTeamMemberIds(null);
+
+  const handleRecalculate = async () => {
+    if (!window.confirm(`Recalculate all scores for ${quarter} ${fy} using the current scoring config?\n\nFA final scores already submitted will NOT change.`)) return;
+    setRecalculating(true);
     try {
-      const res = await getDeptQuarterlyStatusApi({ financialYear: fy, quarter });
-      const d = res.data.data;
-      setData(d);
-      // Pre-fill FA score from sum of monthly earned weightages (M1+M2+M3)
-      const initial = {};
-      (d.employees || []).forEach((e) => {
-        const id = e.employee?._id || e.employee?.id || e._id || e.id;
-        const mt = e.monthTotals || {};
-        const months = Object.keys(mt);
-        const calcEarned = months.reduce((s, m) => s + parseFloat(mt[m]?.earned || 0), 0);
-        initial[id] = {
-          score:      (calcEarned > 0 || e.quarterlyApproval) ? String(Math.round(calcEarned)) : '',
-          comment:    '',
-          submitting: false,
-          error:      null,
-        };
+      const res = await bulkRecalculateQuarterApi(fy, quarter);
+      const { recalculated, skipped } = res.data.data || {};
+      await fetchData();
+      window.alert(`Recalculation complete.\n${recalculated} employees updated, ${skipped} skipped.`);
+    } catch (err) {
+      window.alert(err.response?.data?.error?.message || 'Recalculation failed. Please try again.');
+    } finally {
+      setRecalculating(false);
+    }
+  };
+
+  const handleDownloadExcel = async () => {
+    const approvedEmps = (data?.employees || []).filter((e) => e.quarterlyApproval?.status === 'approved');
+    if (!approvedEmps.length) {
+      window.alert('No approved employees to export for this quarter.');
+      return;
+    }
+    setExporting(true);
+    try {
+      const qMonthKeys = QUARTER_MONTHS[quarter] || [];
+
+      // ── Build data rows ──────────────────────────────────────────────────────
+      const dataRows = approvedEmps.map((emp, idx) => {
+        const mt           = emp.monthTotals || {};
+        const calcPossible = qMonthKeys.reduce((s, m) => s + parseFloat(mt[m]?.possible || 0), 0);
+        const calcEarned   = qMonthKeys.reduce((s, m) => s + parseFloat(mt[m]?.earned  || 0), 0);
+        const calcPct      = calcPossible > 0 ? Math.round((calcEarned / calcPossible) * 100 * 100) / 100 : 0;
+
+        const faScorePct = parseFloat(emp.quarterlyApproval?.quarterlyScore ?? 0);
+
+        const approvedDate = emp.quarterlyApproval?.approvedAt
+          ? new Date(emp.quarterlyApproval.approvedAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+          : '';
+
+        return [
+          idx + 1,
+          emp.employee?.name             || '',
+          emp.employee?.employeeCode     || '',
+          emp.employee?.department?.name || '',
+          emp.employee?.designation      || '',
+          emp.employee?.manager?.name    || '',
+          `${calcPct}%`,                                            // System Calc %
+          `${Math.round(faScorePct * 100) / 100}%`,                // FA Final Score % (also used as PLI Payout)
+          approvedDate,
+          emp.quarterlyApproval?.faComment || '',
+        ];
       });
-      setFaState(initial);
-    } catch { /* handled by empty state */ }
-    finally { setLoading(false); }
+
+      const headers = [
+        'S.No', 'Employee Name', 'Employee Code', 'Department', 'Designation', 'Reporting Manager',
+        'System Calc %', 'FA Final Score %', 'Approved Date', 'FA Comment',
+      ];
+
+      // ── Build workbook ───────────────────────────────────────────────────────
+      const XLSX = await import('xlsx');
+      const wb   = XLSX.utils.book_new();
+
+      const titleRow   = [`PLI Quarterly Approval Report — ${quarter}  |  FY ${fy}`];
+      const subtitleRow = [`Exported: ${new Date().toLocaleString('en-IN')}    ·    Approved: ${approvedEmps.length} employees`];
+
+      const wsData = [titleRow, subtitleRow, [], headers, ...dataRows];
+      const ws     = XLSX.utils.aoa_to_sheet(wsData);
+
+      // Column widths (characters)
+      ws['!cols'] = [
+        { wch: 5  }, // S.No
+        { wch: 26 }, // Name
+        { wch: 13 }, // Code
+        { wch: 22 }, // Dept
+        { wch: 22 }, // Designation
+        { wch: 22 }, // Manager
+        { wch: 16 }, // System Calc %
+        { wch: 16 }, // FA Final Score %
+        { wch: 16 }, // Approved Date
+        { wch: 36 }, // FA Comment
+      ];
+
+      // Merge title across all columns
+      const totalCols = headers.length - 1;
+      ws['!merges'] = [
+        { s: { r: 0, c: 0 }, e: { r: 0, c: totalCols } },
+        { s: { r: 1, c: 0 }, e: { r: 1, c: totalCols } },
+      ];
+
+      const sheetName = `${quarter} ${fy}`.replace(/[:\\/?*[\]]/g, '-');
+      XLSX.utils.book_append_sheet(wb, ws, sheetName);
+
+      const fileName = `PLI_${quarter}_${fy}_Approved_${new Date().toISOString().slice(0, 10)}.xlsx`;
+      XLSX.writeFile(wb, fileName);
+    } catch (err) {
+      window.alert('Export failed. Please try again.');
+      console.error('[Excel Export]', err);
+    } finally {
+      setExporting(false);
+    }
   };
 
   const setEmpField = (empId, field, value) =>
@@ -260,26 +399,67 @@ function WorkbenchList() {
   const handleApprove = async (emp) => {
     const empId = emp.employee?._id || emp.employee?.id || emp._id || emp.id;
     const st    = faState[empId] || {};
-    // Calc earned = sum of monthly earned weightages
-    const mt = emp.monthTotals || {};
-    const calcEarned = Object.keys(mt).reduce((s, m) => s + parseFloat(mt[m]?.earned || 0), 0);
-    const faEarned   = parseFloat(st.score);
-    const scoreChanged = !isNaN(faEarned) && Math.abs(faEarned - calcEarned) > 0.001;
+    const mt    = emp.monthTotals || {};
+    // System-calculated values
+    const calcPossible = Object.keys(mt).reduce((s, m) => s + parseFloat(mt[m]?.possible || 0), 0);
+    const calcEarned   = Object.keys(mt).reduce((s, m) => s + parseFloat(mt[m]?.earned  || 0), 0);
+    const calcPct      = calcPossible > 0 ? Math.round((calcEarned / calcPossible) * 100 * 100) / 100 : 0;
 
-    if (!st.score) { setEmpField(empId, 'error', 'FA Final Score is required'); return; }
+    // FA enters a percentage; convert to earned value for the backend
+    const faPct        = parseFloat(st.score);
+    const faEarned     = !isNaN(faPct) && calcPossible > 0 ? Math.round((faPct / 100) * calcPossible) : NaN;
+    const scoreChanged = !isNaN(faPct) && Math.abs(faPct - calcPct) > 0.01;
+
+    if (st.score === '' || st.score == null) { setEmpField(empId, 'error', 'FA Final Score % is required'); return; }
+    if (isNaN(faPct) || faPct < 0)          { setEmpField(empId, 'error', 'Enter a valid percentage (0 or above)'); return; }
     if (scoreChanged && !st.comment?.trim()) { setEmpField(empId, 'error', 'Comment required when score differs from calculated'); return; }
 
     setEmpField(empId, 'submitting', true);
     setEmpField(empId, 'error', null);
     try {
-      // Init the approval record (creates/refreshes items) then submit
-      const initRes = await initQuarterlyApprovalApi(empId, fy, quarter);
+      const initRes    = await initQuarterlyApprovalApi(empId, fy, quarter);
       const approvalId = initRes.data.data?.id;
-      await submitQuarterlyApprovalApi(approvalId, {
-        overrideEarned:  faEarned,          // raw weightage sum (M1+M2+M3)
+      const submitRes  = await submitQuarterlyApprovalApi(approvalId, {
+        overrideEarned:  isNaN(faEarned) ? undefined : faEarned,
         overrideComment: st.comment?.trim() || undefined,
       });
-      await fetchData();
+      const submitted = submitRes.data.data;
+      const faComment = submitted?.items?.find((i) => i.finalComment)?.finalComment || null;
+
+      // Patch just this employee's row — no full-table reload, no spinner flash
+      setData((prev) => {
+        if (!prev) return prev;
+        const updatedEmployees = prev.employees.map((e) => {
+          const id = e.employee?._id || e.employee?.id || e._id || e.id;
+          if (id !== empId) return e;
+          return {
+            ...e,
+            quarterlyApproval: {
+              id:                      submitted.id,
+              status:                  submitted.status,
+              quarterlyScore:          submitted.quarterlyScore,
+              calculatedQuarterlyScore: submitted.calculatedQuarterlyScore,
+              approvedAt:              submitted.approvedAt,
+              faComment,
+            },
+          };
+        });
+        const approvedCount = updatedEmployees.filter((e) => e.quarterlyApproval?.status === 'approved').length;
+        return {
+          ...prev,
+          employees:        updatedEmployees,
+          approvedCount,
+          pendingCount:     prev.totalEmployees - approvedCount,
+          isQuarterComplete: approvedCount === prev.totalEmployees,
+        };
+      });
+
+      // Clear the input fields for this employee only
+      setFaState((prev) => {
+        const next = { ...prev };
+        delete next[empId];
+        return next;
+      });
     } catch (e) {
       setEmpField(empId, 'error', e.response?.data?.error?.message || 'Submission failed');
       setEmpField(empId, 'submitting', false);
@@ -409,7 +589,30 @@ function WorkbenchList() {
             {['Q1', 'Q2', 'Q3', 'Q4'].map((q) => <option key={q}>{q}</option>)}
           </select>
           <button onClick={fetchData} title="Refresh" className="p-2 rounded-lg hover:bg-gray-100 transition-colors">
-            <HiOutlineRefresh className="h-5 w-5 text-gray-500" />
+            <HiOutlineRefresh className={`h-5 w-5 text-gray-500 ${loading ? 'animate-spin' : ''}`} />
+          </button>
+          <button
+            onClick={handleRecalculate}
+            disabled={recalculating || loading}
+            title="Recalculate all scores using current scoring config"
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-300 rounded-lg hover:bg-amber-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <HiOutlineRefresh className={`h-3.5 w-3.5 ${recalculating ? 'animate-spin' : ''}`} />
+            {recalculating ? 'Recalculating…' : 'Recalculate'}
+          </button>
+
+          {/* Download Excel — only active when approved employees exist */}
+          <button
+            onClick={handleDownloadExcel}
+            disabled={exporting || loading || !(data?.approvedCount > 0)}
+            title={data?.approvedCount > 0 ? `Download Excel for ${data.approvedCount} approved employees` : 'No approved employees to export'}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-300 rounded-lg hover:bg-emerald-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {exporting
+              ? <HiOutlineRefresh className="h-3.5 w-3.5 animate-spin" />
+              : <HiOutlineDownload className="h-3.5 w-3.5" />
+            }
+            {exporting ? 'Exporting…' : `Download Excel${data?.approvedCount > 0 ? ` (${data.approvedCount})` : ''}`}
           </button>
         </div>
       </div>
@@ -606,25 +809,21 @@ function WorkbenchList() {
                   const calcPossible = Object.keys(mt).reduce((s, m) => s + parseFloat(mt[m]?.possible || 0), 0);
                   // Earned sum — used to pre-fill FA Final Score
                   const calcEarned   = Object.keys(mt).reduce((s, m) => s + parseFloat(mt[m]?.earned || 0), 0);
-                  const faScore         = parseFloat(emp.quarterlyApproval?.quarterlyScore ?? 0);
+                  // quarterlyScore from DB is a PERCENTAGE (e.g. 100.28), not a raw earned value
+                  const faScorePct      = parseFloat(emp.quarterlyApproval?.quarterlyScore ?? 0);
                   const st              = faState[empId] || {};
-                  const inputEarned     = parseFloat(st.score);
-                  const roundedCalc     = Math.round(calcEarned);
-                  const roundedInput    = !isNaN(inputEarned) ? Math.round(inputEarned) : NaN;
-                  const scoreChanged    = !isNaN(roundedInput) && roundedInput !== roundedCalc;
+                  // System calc % — same rounding as the badge (round earned & possible first)
+                  const calcPct         = Math.round(calcPossible) > 0
+                    ? Math.round((Math.round(calcEarned) / Math.round(calcPossible)) * 100)
+                    : 0;
+                  // FA inputs a percentage; derive earned value from it
+                  const inputPct        = parseFloat(st.score);
+                  const derivedEarned   = !isNaN(inputPct) && calcPossible > 0
+                    ? Math.round((inputPct / 100) * calcPossible)
+                    : NaN;
+                  const scoreChanged    = !isNaN(inputPct) && Math.abs(inputPct - calcPct) > 0.01;
 
                   const rowBgClass = isApproved ? 'bg-emerald-50/40' : emp.allMonthsReviewed ? 'bg-amber-50/20' : '';
-
-                  const quarterlyEarnedPct = (() => {
-                    const roundedPossible = Math.round(calcPossible);
-                    if (roundedPossible <= 0) return null;
-                    const earnedRaw = isApproved
-                      ? faScore
-                      : (!isNaN(inputEarned) ? inputEarned : calcEarned);
-                    if (earnedRaw == null || isNaN(earnedRaw)) return null;
-                    const roundedEarned = Math.round(earnedRaw);
-                    return Math.round((roundedEarned / roundedPossible) * 100);
-                  })();
 
                   return (
                     <tbody key={empId} className={`border-b border-gray-200 ${rowBgClass}`}>
@@ -710,34 +909,47 @@ function WorkbenchList() {
                         </td>
 
                         {/* FA Final Score — rowspan 2 */}
-                        {/* FA Final Score + Quarterly Earned % below */}
                         <td rowSpan={2} className="px-3 text-center bg-cyan-50/40">
-                          {isApproved ? (
+                          {isApproved ? (() => {
+                            // faScorePct is a PERCENTAGE (e.g. 100.28). Back-calculate raw earned
+                            // so the approved row shows the same layout as the ready-for-review row.
+                            const approvedEarned = calcPossible > 0 ? Math.round((faScorePct / 100) * calcPossible) : null;
+                            const pct = Math.round(faScorePct);
+                            return (
+                              <div className="flex flex-col items-center gap-1">
+                                <span className="text-base font-extrabold font-mono text-emerald-700">
+                                  {approvedEarned != null ? approvedEarned : '—'}
+                                </span>
+                                {pct > 0 && (
+                                  <span className={`text-xs font-bold font-mono px-2 py-0.5 rounded-full ${
+                                    pct >= 100 ? 'bg-green-100 text-green-700' : pct >= 70 ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'
+                                  }`}>{pct}%</span>
+                                )}
+                              </div>
+                            );
+                          })() : emp.allMonthsReviewed ? (
                             <div className="flex flex-col items-center gap-1">
-                              <span className="text-base font-extrabold font-mono text-emerald-700">{Math.round(faScore)}</span>
-                              {quarterlyEarnedPct != null && (
-                                <span className={`text-xs font-bold font-mono px-2 py-0.5 rounded-full ${
-                                  quarterlyEarnedPct >= 100 ? 'bg-green-100 text-green-700' : quarterlyEarnedPct >= 70 ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'
-                                }`}>{quarterlyEarnedPct}%</span>
+                              <div className="relative flex items-center">
+                                <input
+                                  type="number" step="0.01" min="0"
+                                  value={st.score ?? calcPct}
+                                  onChange={(e) => setEmpField(empId, 'score', e.target.value)}
+                                  className={`w-24 text-center text-base font-extrabold font-mono border-2 rounded-lg pl-2 pr-6 py-1.5 focus:outline-none focus:ring-2 ${
+                                    scoreChanged
+                                      ? 'border-amber-400 ring-amber-200 bg-amber-50'
+                                      : 'border-cyan-400 ring-cyan-200 bg-cyan-50'
+                                  }`}
+                                  placeholder="0"
+                                />
+                                <span className="absolute right-2 text-xs font-bold text-gray-400">%</span>
+                              </div>
+                              {!isNaN(derivedEarned) && (
+                                <span className="text-[10px] text-gray-500 font-mono">= {Math.round(derivedEarned)} earned</span>
                               )}
-                            </div>
-                          ) : emp.allMonthsReviewed ? (
-                            <div className="flex flex-col items-center gap-1">
-                              <input
-                                type="number" step="1" min="0"
-                                value={st.score || ''}
-                                onChange={(e) => setEmpField(empId, 'score', e.target.value)}
-                                className={`w-24 text-center text-base font-extrabold font-mono border-2 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 ${
-                                  scoreChanged
-                                    ? 'border-amber-400 ring-amber-200 bg-amber-50'
-                                    : 'border-cyan-400 ring-cyan-200 bg-cyan-50'
-                                }`}
-                                placeholder="0"
-                              />
-                              {quarterlyEarnedPct != null && (
+                              {!isNaN(inputPct) && inputPct >= 0 && (
                                 <span className={`text-xs font-bold font-mono px-2 py-0.5 rounded-full ${
-                                  quarterlyEarnedPct >= 100 ? 'bg-green-100 text-green-700' : quarterlyEarnedPct >= 70 ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'
-                                }`}>{quarterlyEarnedPct}%</span>
+                                  inputPct >= 100 ? 'bg-green-100 text-green-700' : inputPct >= 70 ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'
+                                }`}>{Math.round(inputPct * 100) / 100}%</span>
                               )}
                             </div>
                           ) : <span className="text-xs text-gray-400">—</span>}
@@ -746,14 +958,16 @@ function WorkbenchList() {
                         {/* Comment — rowspan 2 */}
                         <td rowSpan={2} className="px-3 py-2">
                           {isApproved ? (
-                            <span className="text-xs text-gray-400 italic">—</span>
+                            emp.quarterlyApproval?.faComment
+                              ? <span className="text-xs text-gray-700 italic">{emp.quarterlyApproval.faComment}</span>
+                              : <span className="text-xs text-gray-300">—</span>
                           ) : emp.allMonthsReviewed ? (
                             <div>
                               <input
                                 type="text"
                                 value={st.comment || ''}
                                 onChange={(e) => setEmpField(empId, 'comment', e.target.value)}
-                                placeholder={scoreChanged ? 'Required — score overridden' : 'Optional comment'}
+                                placeholder={scoreChanged ? 'Required — % overridden' : 'Optional comment'}
                                 className={`w-full text-xs border rounded-lg px-2 py-1.5 focus:outline-none focus:ring-1 ${
                                   scoreChanged && !st.comment?.trim()
                                     ? 'border-red-400 ring-red-200 bg-red-50'

@@ -9,8 +9,8 @@ const ScoringConfig = sequelize.define(
       defaultValue: DataTypes.UUIDV4,
       primaryKey: true,
     },
+    // One config per financial year — applies to ALL quarters (Q1-Q4) within that FY.
     financialYear: { type: DataTypes.STRING(16), allowNull: false },
-    quarter: { type: DataTypes.ENUM('Q1', 'Q2', 'Q3', 'Q4'), allowNull: false },
     meetsMultiplier:   { type: DataTypes.DECIMAL(6, 3), allowNull: false, defaultValue: 1.0 },
     belowMultiplier:   { type: DataTypes.DECIMAL(6, 3), allowNull: false, defaultValue: -0.5 },
     exceedsMultiplier: { type: DataTypes.DECIMAL(6, 3), allowNull: false, defaultValue: 1.5 },
@@ -22,8 +22,8 @@ const ScoringConfig = sequelize.define(
     indexes: [
       {
         unique: true,
-        fields: ['financialYear', 'quarter'],
-        name: 'uq_scoring_config_fy_q',
+        fields: ['financialYear'],
+        name: 'uq_scoring_config_fy',
       },
     ],
   }

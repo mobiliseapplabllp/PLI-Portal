@@ -325,6 +325,19 @@ const getImportTemplate = async (req, res, next) => {
   }
 };
 
+const revertSelfReview = async (req, res, next) => {
+  try {
+    const assignment = await kpiAssignmentService.revertSelfReview(
+      req.params.id,
+      req.body.revertComment,
+      req.user
+    );
+    sendSuccess(res, assignment, 'Self-review reverted successfully');
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   getAssignments,
   getAssignmentById,
@@ -347,6 +360,7 @@ module.exports = {
   cloneKpis,
   bulkCloneKpis,
   bulkImportKpis,
+  revertSelfReview,
   getImportTemplate,
   getEmployeeAttachment,
   getManagerAttachment,

@@ -26,6 +26,10 @@ const KpiAssignment = sequelize.define(
     },
     // Reason stored when manager rejects a commitment
     commitmentRejectionComment: { type: DataTypes.TEXT, allowNull: true },
+    // Revert self-review audit fields
+    selfReviewRevertComment: { type: DataTypes.TEXT, allowNull: true },
+    selfReviewRevertedById: { type: DataTypes.UUID, allowNull: true },
+    selfReviewRevertedAt: { type: DataTypes.DATE, allowNull: true },
     totalWeightage: { type: DataTypes.DECIMAL(10, 2), defaultValue: 0 },
     isLocked: { type: DataTypes.BOOLEAN, defaultValue: false },
     lockedAt: { type: DataTypes.DATE, allowNull: true },

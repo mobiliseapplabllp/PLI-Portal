@@ -4,8 +4,6 @@ const createScoringConfigValidator = [
   body('financialYear')
     .notEmpty().withMessage('financialYear is required')
     .matches(/^\d{4}-\d{2}$/).withMessage('financialYear must be in YYYY-YY format (e.g. 2025-26)'),
-  body('quarter')
-    .isIn(['Q1', 'Q2', 'Q3', 'Q4']).withMessage('quarter must be Q1, Q2, Q3, or Q4'),
   body('meetsMultiplier')
     .optional()
     .isNumeric().withMessage('meetsMultiplier must be a number'),

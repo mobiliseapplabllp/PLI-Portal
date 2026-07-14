@@ -505,9 +505,6 @@ export default function KpiSelfAssessment() {
                         {item.finalApproverStatus ? (
                           <div>
                             <StatusChip value={item.finalApproverStatus} />
-                            {item.finalApproverAchievedWeightage != null && (
-                              <div className="text-xs text-gray-400 mt-0.5">{item.finalApproverAchievedWeightage}%</div>
-                            )}
                           </div>
                         ) : item.finalScore != null ? (
                           <span className="text-xs text-gray-500">{formatScore(item.finalScore)}</span>

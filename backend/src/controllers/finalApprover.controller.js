@@ -44,6 +44,21 @@ const getDeptApprovals = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
+const bulkRecalculateQuarter = async (req, res, next) => {
+  try {
+    const { financialYear, quarter, departmentId } = req.body;
+    if (!financialYear || !quarter) {
+      return res.status(400).json({ success: false, error: { message: 'financialYear and quarter are required.' } });
+    }
+    const result = await svc.bulkRecalculateQuarter(financialYear, quarter, departmentId || null, req.user);
+    res.json({
+      success: true,
+      data: result,
+      message: `Recalculation complete. ${result.recalculated} employees updated, ${result.skipped} skipped.`,
+    });
+  } catch (err) { next(err); }
+};
+
 module.exports = {
   getDeptQuarterlyStatus,
   buildQuarterlyApprovalData,
@@ -51,4 +66,5 @@ module.exports = {
   submitQuarterlyApproval,
   getQuarterlyApproval,
   getDeptApprovals,
+  bulkRecalculateQuarter,
 };

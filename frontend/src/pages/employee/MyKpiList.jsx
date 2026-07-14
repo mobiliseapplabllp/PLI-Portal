@@ -153,7 +153,6 @@ export default function MyKpiList() {
   const showCommitCol = rank >= statusRank(KPI_STATUS.ASSIGNED);
   const showSelfReviewCol = rank >= statusRank(KPI_STATUS.COMMITMENT_APPROVED);
   const showManagerCol = rank >= statusRank(KPI_STATUS.EMPLOYEE_SUBMITTED);
-  const showFinalCol = rank >= statusRank(KPI_STATUS.MANAGER_REVIEWED);
 
   const headItems = items.filter((i) => (i.kpiHead || 'Performance') === activeHead);
 
@@ -307,9 +306,8 @@ export default function MyKpiList() {
     try {
       const res = await downloadItemAttachmentApi(assignmentId, itemId);
       const url = URL.createObjectURL(res.data);
-      const a = document.createElement('a');
-      a.href = url; a.download = fileName || 'attachment'; a.click();
-      URL.revokeObjectURL(url);
+      window.open(url, '_blank');
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
     } catch { toast.error('Could not download attachment'); }
   };
 
@@ -319,9 +317,8 @@ export default function MyKpiList() {
     try {
       const res = await downloadEmployeeAttachmentApi(assignmentId);
       const url = URL.createObjectURL(res.data);
-      const a = document.createElement('a');
-      a.href = url; a.download = currentAssignment.employeeAttachmentName || 'attachment'; a.click();
-      URL.revokeObjectURL(url);
+      window.open(url, '_blank');
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
     } catch { toast.error('Could not download attachment'); }
   };
 
@@ -524,13 +521,11 @@ export default function MyKpiList() {
                         <>
                           <th className="px-3 py-2.5 text-center border border-gray-200 min-w-[110px] text-amber-600">Self-Review</th>
                           <th className="px-3 py-2.5 text-center border border-gray-200 min-w-[110px] text-amber-500">Review Note</th>
+                          <th className="px-3 py-2.5 text-center border border-gray-200 min-w-[100px] text-amber-600">Attachment</th>
                         </>
                       )}
                       {showManagerCol && (
                         <th className="px-3 py-2.5 text-center border border-gray-200 min-w-[100px] text-purple-600">Mgr Review</th>
-                      )}
-                      {showFinalCol && (
-                        <th className="px-3 py-2.5 text-center border border-gray-200 min-w-[110px] text-emerald-600">Final Approval</th>
                       )}
                     </tr>
                   </thead>
@@ -673,39 +668,58 @@ export default function MyKpiList() {
                             </td>
                           )}
 
-                          {/* Per-item attachment — editable only when canSelfReview */}
-                          {showSelfReviewCol && canSelfReview && (
+                          {/* Per-item attachment — editable while canSelfReview, read-only after */}
+                          {showSelfReviewCol && (
                             <td className="px-2 py-2 text-center border border-gray-200 align-top">
-                              {itemAttachments[itemId] ? (
-                                <div className="flex flex-col gap-1 items-start">
+                              {canSelfReview ? (
+                                itemAttachments[itemId] ? (
+                                  <div className="flex flex-col gap-1 items-start">
+                                    <div className="flex items-center gap-1 text-xs text-gray-600 bg-gray-50 border border-gray-200 rounded px-2 py-1">
+                                      <HiOutlinePaperClip className="w-3.5 h-3.5 flex-shrink-0 text-gray-400" />
+                                      <span className="truncate max-w-[90px]" title={itemAttachments[itemId].name}>
+                                        {itemAttachments[itemId].name}
+                                      </span>
+                                    </div>
+                                    <div className="flex gap-1">
+                                      <button
+                                        onClick={() => handleItemFileDownload(itemId, itemAttachments[itemId].name)}
+                                        className="text-[10px] text-primary-600 hover:underline flex items-center gap-0.5"
+                                      >
+                                        <HiOutlineDownload className="w-3 h-3" /> Download
+                                      </button>
+                                      <span className="text-gray-300">·</span>
+                                      <button
+                                        onClick={() => handleItemFileRemove(itemId)}
+                                        className="text-[10px] text-red-500 hover:underline flex items-center gap-0.5"
+                                      >
+                                        <HiOutlineX className="w-3 h-3" /> Remove
+                                      </button>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <label className={`cursor-pointer inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-dashed border-gray-300 text-gray-500 hover:border-amber-400 hover:text-amber-600 transition-colors ${uploadingItem === itemId ? 'opacity-50 pointer-events-none' : ''}`}>
+                                    <HiOutlinePaperClip className="w-3.5 h-3.5" />
+                                    {uploadingItem === itemId ? 'Uploading...' : 'Attach'}
+                                    <input type="file" className="hidden" onChange={(e) => handleItemFileChange(itemId, e.target.files[0])} />
+                                  </label>
+                                )
+                              ) : itemAttachments[itemId] ? (
+                                <div className="flex flex-col gap-1 items-center">
                                   <div className="flex items-center gap-1 text-xs text-gray-600 bg-gray-50 border border-gray-200 rounded px-2 py-1">
                                     <HiOutlinePaperClip className="w-3.5 h-3.5 flex-shrink-0 text-gray-400" />
                                     <span className="truncate max-w-[90px]" title={itemAttachments[itemId].name}>
                                       {itemAttachments[itemId].name}
                                     </span>
                                   </div>
-                                  <div className="flex gap-1">
-                                    <button
-                                      onClick={() => handleItemFileDownload(itemId, itemAttachments[itemId].name)}
-                                      className="text-[10px] text-primary-600 hover:underline flex items-center gap-0.5"
-                                    >
-                                      <HiOutlineDownload className="w-3 h-3" /> Download
-                                    </button>
-                                    <span className="text-gray-300">·</span>
-                                    <button
-                                      onClick={() => handleItemFileRemove(itemId)}
-                                      className="text-[10px] text-red-500 hover:underline flex items-center gap-0.5"
-                                    >
-                                      <HiOutlineX className="w-3 h-3" /> Remove
-                                    </button>
-                                  </div>
+                                  <button
+                                    onClick={() => handleItemFileDownload(itemId, itemAttachments[itemId].name)}
+                                    className="text-[10px] text-primary-600 hover:underline flex items-center gap-0.5"
+                                  >
+                                    <HiOutlineDownload className="w-3 h-3" /> Download
+                                  </button>
                                 </div>
                               ) : (
-                                <label className={`cursor-pointer inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-dashed border-gray-300 text-gray-500 hover:border-amber-400 hover:text-amber-600 transition-colors ${uploadingItem === itemId ? 'opacity-50 pointer-events-none' : ''}`}>
-                                  <HiOutlinePaperClip className="w-3.5 h-3.5" />
-                                  {uploadingItem === itemId ? 'Uploading...' : 'Attach'}
-                                  <input type="file" className="hidden" onChange={(e) => handleItemFileChange(itemId, e.target.files[0])} />
-                                </label>
+                                <span className="text-gray-400 text-xs">—</span>
                               )}
                             </td>
                           )}
@@ -723,23 +737,6 @@ export default function MyKpiList() {
                             </td>
                           )}
 
-                          {/* Final Approval */}
-                          {showFinalCol && (
-                            <td className="px-3 py-3 text-center border border-gray-200">
-                              <span className={`text-xs font-semibold px-2 py-0.5 rounded-full inline-block ${
-                                item.finalApproverStatus
-                                  ? (SUBMIT_COLORS[item.finalApproverStatus] || 'bg-gray-100 text-gray-600')
-                                  : 'text-gray-400'
-                              }`}>
-                                {item.finalApproverStatus || '—'}
-                              </span>
-                              {item.finalApproverAchievedWeightage != null && (
-                                <div className="text-[10px] text-emerald-600 mt-0.5">
-                                  {Number(item.finalApproverAchievedWeightage).toFixed(1)}% credited
-                                </div>
-                              )}
-                            </td>
-                          )}
                         </tr>
                       );
                     })}
@@ -758,9 +755,8 @@ export default function MyKpiList() {
                         </span>
                       </td>
                       {showCommitCol && <td className="border border-gray-200" />}
-                      {showSelfReviewCol && <td colSpan={canSelfReview ? 3 : 2} className="border border-gray-200" />}
+                      {showSelfReviewCol && <td colSpan={3} className="border border-gray-200" />}
                       {showManagerCol && <td className="border border-gray-200" />}
-                      {showFinalCol && <td className="border border-gray-200" />}
                     </tr>
                   </tbody>
                 </table>

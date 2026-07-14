@@ -1,16 +1,20 @@
 const { body } = require('express-validator');
-const { KPI_SUBMISSION_VALUES } = require('../config/constants');
 
 const submitQuarterlyApprovalValidator = [
-  body('items').isArray({ min: 1 }).withMessage('items must be a non-empty array'),
-  body('items.*.id').isUUID().withMessage('Each item must have a valid UUID id'),
-  body('items.*.finalStatus')
-    .isIn(KPI_SUBMISSION_VALUES)
-    .withMessage(`finalStatus must be one of: ${KPI_SUBMISSION_VALUES.join(', ')}`),
-  body('items.*.quarterlyAchievedWeightage')
-    .isFloat({ min: 0 })
-    .withMessage('quarterlyAchievedWeightage must be a number >= 0'),
-  body('items.*.finalComment').optional().trim(),
+  // overrideEarned: optional numeric — FA's total earned weightage sum (raw, e.g. 24.86)
+  // When omitted the backend uses the system-calculated sum from QA items.
+  body('overrideEarned')
+    .optional({ nullable: true })
+    .isFloat()
+    .withMessage('overrideEarned must be a number'),
+
+  // overrideComment: required only when FA earned differs from calculated (enforced in service)
+  body('overrideComment')
+    .optional({ nullable: true })
+    .isString()
+    .trim()
+    .isLength({ max: 1000 })
+    .withMessage('overrideComment must be a string under 1000 characters'),
 ];
 
 module.exports = { submitQuarterlyApprovalValidator };

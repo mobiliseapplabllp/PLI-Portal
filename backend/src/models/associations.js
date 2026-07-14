@@ -68,6 +68,7 @@ QuarterlyApprovalItem.belongsTo(KpiPlanItem, { foreignKey: 'kpiPlanItemId', as: 
 
 // ── ScoringConfig ─────────────────────────────────────────────────────────────
 ScoringConfig.belongsTo(User, { foreignKey: 'createdById', as: 'createdBy' });
+QuarterlyApproval.belongsTo(ScoringConfig, { foreignKey: 'scoringConfigId', as: 'scoringConfig' });
 
 // ── PLI ───────────────────────────────────────────────────────────────────────
 PliRule.belongsTo(User, { foreignKey: 'createdById', as: 'createdBy' });

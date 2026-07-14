@@ -37,8 +37,8 @@ const statusToMultiplier = (status, config = null) => {
  * @returns {number}
  */
 const calculateActualWeightage = (monthlyWeightage, status, config = null) => {
-  const raw = parseFloat(monthlyWeightage || 0) * statusToMultiplier(status, config);
-  return Math.round(raw * 100) / 100;
+  // Return full-precision value — caller rounds after summing to avoid accumulated error
+  return parseFloat(monthlyWeightage || 0) * statusToMultiplier(status, config);
 };
 
 /**

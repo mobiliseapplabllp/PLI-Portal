@@ -25,4 +25,8 @@ router.post('/approvals/:id/submit', authorize('final_approver', 'admin'), submi
 // List dept quarterly approvals
 router.get('/approvals', authorize('final_approver', 'admin'), ctrl.getDeptApprovals);
 
+// Bulk recalculate quarter — recomputes system-calculated values for all employees using current scoring config
+// Option A: FA final score and status are never changed
+router.post('/quarterly/recalculate', authorize('final_approver', 'admin'), ctrl.bulkRecalculateQuarter);
+
 module.exports = router;

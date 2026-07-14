@@ -46,6 +46,9 @@ router.post('/:id/reject-commitment', authorize('manager', 'senior_manager', 'ad
 // ctrl.employeeSubmit is an array [multerMiddleware, handler]
 router.post('/:id/employee-submit', authorize('employee', 'manager', 'admin'), ...ctrl.employeeSubmit);
 
+// Manager/admin reverts self-review back to editable (EMPLOYEE_SUBMITTED → COMMITMENT_APPROVED)
+router.post('/:id/revert-self-review', authorize('manager', 'senior_manager', 'admin'), ctrl.revertSelfReview);
+
 // Manager review — ctrl.managerReview is an array [multerMiddleware, handler]
 router.post('/:id/manager-review', authorize('manager', 'senior_manager', 'admin'), ...ctrl.managerReview);
 

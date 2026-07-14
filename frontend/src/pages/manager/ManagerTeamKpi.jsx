@@ -6,6 +6,8 @@ import {
   reviewCommitmentApi,
   managerReviewApi,
   saveDraftApi,
+  downloadItemAttachmentApi,
+  revertSelfReviewApi,
 } from '../../api/kpiAssignments.api';
 import { getDepartmentsApi } from '../../api/departments.api';
 import { getUsersApi } from '../../api/users.api';
@@ -32,6 +34,8 @@ import {
   HiOutlineUserGroup,
   HiOutlineClipboardCheck,
   HiOutlineSave,
+  HiOutlinePaperClip,
+  HiOutlineDownload,
 } from 'react-icons/hi';
 
 const FY_MONTHS = [4, 5, 6, 7, 8, 9, 10, 11, 12, 1, 2, 3];
@@ -83,6 +87,8 @@ export default function ManagerTeamKpi() {
   const [itemsLoading, setItemsLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [activeHead, setActiveHead] = useState(KPI_HEADS[0]);
+  const [revertModal, setRevertModal] = useState(false);
+  const [reverting, setReverting] = useState(false);
 
   // Admin-only: department / role / employee selectors
   const [adminDept, setAdminDept] = useState('');
@@ -239,7 +245,6 @@ export default function ManagerTeamKpi() {
   const showCommitReviewCol = true;
   const showSelfReviewCol = true;
   const showMgrReviewCol = true;
-  const showFinalCol = true;
 
   const headItems = items.filter((i) => (i.kpiHead || 'Performance') === activeHead);
   const headWt = (head) =>
@@ -313,6 +318,38 @@ export default function ManagerTeamKpi() {
       toast.error(err.response?.data?.error?.message || 'Failed to submit manager review');
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handleItemAttachmentDownload = async (assignmentId, itemId, fileName) => {
+    try {
+      const res = await downloadItemAttachmentApi(assignmentId, itemId);
+      const url = URL.createObjectURL(res.data);
+      window.open(url, '_blank');
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch { toast.error('Could not download attachment'); }
+  };
+
+  const handleRevertSelfReview = async () => {
+    const assignmentId = currentAssignment?.id || currentAssignment?._id;
+    setReverting(true);
+    try {
+      await revertSelfReviewApi(assignmentId, null);
+      toast.success('Self-review reverted — employee can now resubmit');
+      setRevertModal(false);
+      // Immediately patch teamData so UI reflects new status without waiting for reload
+      setTeamData((prev) => prev.map((m) => {
+        const id = m.assignment?.id || m.assignment?._id;
+        if (id !== assignmentId) return m;
+        return { ...m, assignment: { ...m.assignment, status: KPI_STATUS.COMMITMENT_APPROVED } };
+      }));
+      // Also clear manager review inputs from local state
+      setMgrReviewMap({});
+      setItems((prev) => prev.map((i) => ({ ...i, managerStatus: null, managerComment: null })));
+    } catch (err) {
+      toast.error(err.response?.data?.error?.message || 'Failed to revert self-review');
+    } finally {
+      setReverting(false);
     }
   };
 
@@ -586,14 +623,14 @@ export default function ManagerTeamKpi() {
                       {showSelfReviewCol && (
                         <th className="px-3 py-2.5 text-left border border-gray-200 min-w-[120px] text-amber-500">Review Note</th>
                       )}
+                      {showSelfReviewCol && (
+                        <th className="px-3 py-2.5 text-center border border-gray-200 min-w-[100px] text-amber-400">Attachment</th>
+                      )}
                       {showMgrReviewCol && (
                         <th className="px-3 py-2.5 text-center border border-gray-200 min-w-[110px] text-purple-600">Mgr Status</th>
                       )}
                       {showMgrReviewCol && (
                         <th className="px-3 py-2.5 text-left border border-gray-200 min-w-[140px] text-purple-500">Mgr Comment</th>
-                      )}
-                      {showFinalCol && (
-                        <th className="px-3 py-2.5 text-center border border-gray-200 min-w-[110px] text-emerald-600">Final</th>
                       )}
                     </tr>
                   </thead>
@@ -739,6 +776,34 @@ export default function ManagerTeamKpi() {
                             </td>
                           )}
 
+                          {/* Per-item attachment (read-only) */}
+                          {showSelfReviewCol && (
+                            <td className="px-2 py-2 text-center border border-gray-200 align-top">
+                              {item.selfReviewAttachmentName ? (
+                                <div className="flex flex-col gap-1 items-center">
+                                  <div className="flex items-center gap-1 text-xs text-gray-600 bg-gray-50 border border-gray-200 rounded px-2 py-1">
+                                    <HiOutlinePaperClip className="w-3.5 h-3.5 flex-shrink-0 text-gray-400" />
+                                    <span className="truncate max-w-[80px]" title={item.selfReviewAttachmentName}>
+                                      {item.selfReviewAttachmentName}
+                                    </span>
+                                  </div>
+                                  <button
+                                    onClick={() => handleItemAttachmentDownload(
+                                      currentAssignment?.id || currentAssignment?._id,
+                                      itemId,
+                                      item.selfReviewAttachmentName
+                                    )}
+                                    className="text-[10px] text-primary-600 hover:underline flex items-center gap-0.5"
+                                  >
+                                    <HiOutlineDownload className="w-3 h-3" /> Download
+                                  </button>
+                                </div>
+                              ) : (
+                                <span className="text-gray-400 text-xs">—</span>
+                              )}
+                            </td>
+                          )}
+
                           {/* Manager Status — editable when EMPLOYEE_SUBMITTED */}
                           {showMgrReviewCol && (
                             <td className="px-2 py-2 text-center border border-gray-200">
@@ -782,23 +847,6 @@ export default function ManagerTeamKpi() {
                             </td>
                           )}
 
-                          {/* Final Approval */}
-                          {showFinalCol && (
-                            <td className="px-3 py-3 text-center border border-gray-200">
-                              <span className={`text-xs font-semibold px-2 py-0.5 rounded-full inline-block ${
-                                item.finalApproverStatus
-                                  ? (SUBMIT_COLORS[item.finalApproverStatus] || 'bg-gray-100 text-gray-600')
-                                  : 'text-gray-400'
-                              }`}>
-                                {item.finalApproverStatus || '—'}
-                              </span>
-                              {item.finalApproverAchievedWeightage != null && (
-                                <div className="text-[10px] text-emerald-600 mt-0.5">
-                                  {Number(item.finalApproverAchievedWeightage).toFixed(1)}% credited
-                                </div>
-                              )}
-                            </td>
-                          )}
                         </tr>
                       );
                     })}
@@ -818,9 +866,8 @@ export default function ManagerTeamKpi() {
                       </td>
                       {showCommitCol && <td className="border border-gray-200" />}
                       {showCommitReviewCol && <td className="border border-gray-200" />}
-                      {showSelfReviewCol && <td colSpan={2} className="border border-gray-200" />}
+                      {showSelfReviewCol && <td colSpan={3} className="border border-gray-200" />}
                       {showMgrReviewCol && <td colSpan={2} className="border border-gray-200" />}
-                      {showFinalCol && <td className="border border-gray-200" />}
                     </tr>
                   </tbody>
                 </table>
@@ -835,6 +882,15 @@ export default function ManagerTeamKpi() {
                       : 'Select Meets / Exceeds / Below for each item, then submit your manager review.'}
                   </p>
                   <div className="flex items-center gap-2">
+                    {status === KPI_STATUS.EMPLOYEE_SUBMITTED && (
+                      <button
+                        onClick={() => setRevertModal(true)}
+                        className="text-sm flex items-center gap-2 px-3 py-2 rounded-lg border border-orange-300 text-orange-600 hover:bg-orange-50 transition-colors"
+                      >
+                        <HiOutlineXCircle className="w-4 h-4" />
+                        Revert Self-Review
+                      </button>
+                    )}
                     {isMgrReview && (
                       <button
                         onClick={handleSaveManagerDraft}
@@ -878,6 +934,35 @@ export default function ManagerTeamKpi() {
           </div>
         )}
       </div>
+
+      {/* Revert Self-Review Modal */}
+      {revertModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md mx-4 p-6">
+            <h3 className="text-base font-semibold text-gray-800 mb-1">Revert Self-Review</h3>
+            <p className="text-sm text-gray-500 mb-4">
+              The employee's self-review will be sent back for correction. Their existing answers will remain visible so they can edit and resubmit.
+            </p>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setRevertModal(false)}
+                className="btn-secondary text-sm"
+                disabled={reverting}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleRevertSelfReview}
+                disabled={reverting}
+                className="text-sm flex items-center gap-2 px-4 py-2 rounded-lg bg-orange-500 text-white hover:bg-orange-600 disabled:opacity-50 transition-colors"
+              >
+                {reverting ? <HiOutlineRefresh className="w-4 h-4 animate-spin" /> : <HiOutlineXCircle className="w-4 h-4" />}
+                {reverting ? 'Reverting…' : 'Confirm Revert'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

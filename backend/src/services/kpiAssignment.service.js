@@ -21,6 +21,11 @@ const {
 } = require('../config/constants');
 const notificationService = require('./notification.service');
 const { findPlanForEmployee, applyPlanToAssignment } = require('./kpiPlan.service');
+// Lazy-required to avoid circular dependency: finalApprover → kpiAssignment → finalApprover
+const getFinalApproverService = () => require('./finalApprover.service');
+
+// Months that are the LAST month of their quarter: Q1→6, Q2→9, Q3→12, Q4→3
+const QUARTER_LAST_MONTHS = new Set([3, 6, 9, 12]);
 
 const employeeWithDept = {
   model: User,
@@ -47,16 +52,22 @@ const withCurrentManager = (assignment) => {
 };
 
 // Strip employee-entered draft fields from items when the viewer is not the employee.
-// Commitment draft (status=ASSIGNED): hide commitValue + employeeCommitmentComment.
+// Commitment draft (status=ASSIGNED, never submitted): hide commitValue + employeeCommitmentComment.
+// Post-rejection (status=ASSIGNED, commitmentRejectionComment set): keep commitment visible so manager
+//   can see what the employee submitted before rejecting it.
 // Self-review draft (status=COMMITMENT_APPROVED): hide employeeStatus + employeeComment.
-const maskDraftFields = (items, assignmentStatus, viewerIsEmployee) => {
+const maskDraftFields = (items, assignmentStatus, viewerIsEmployee, commitmentRejectionComment = null) => {
   return items.map((item) => {
     const masked = { ...item };
     if (!viewerIsEmployee) {
-      // Manager / admin / HR: hide employee draft fields until the employee submits
       if (assignmentStatus === KPI_STATUS.ASSIGNED) {
-        masked.commitValue = null;
-        masked.employeeCommitmentComment = null;
+        // Only hide commitment on a FRESH assignment (employee hasn't submitted yet).
+        // After manager rejection the status reverts to ASSIGNED but commitmentRejectionComment
+        // is set — commitment text must remain visible so manager can see what was submitted.
+        if (!commitmentRejectionComment) {
+          masked.commitValue = null;
+          masked.employeeCommitmentComment = null;
+        }
       } else if (assignmentStatus === KPI_STATUS.COMMITMENT_APPROVED) {
         masked.employeeStatus = null;
         masked.employeeComment = null;
@@ -194,7 +205,7 @@ const getAssignmentById = async (id, user) => {
     return plain;
   });
 
-  const maskedItems = maskDraftFields(items, assignment.status, isOwnAssignmentViewer);
+  const maskedItems = maskDraftFields(items, assignment.status, isOwnAssignmentViewer, assignment.commitmentRejectionComment);
 
   return { assignment: assignmentPlain, items: maskedItems };
 };
@@ -590,6 +601,9 @@ const employeeSubmit = async (id, itemsData, file, user) => {
 
   assignment.status = KPI_STATUS.EMPLOYEE_SUBMITTED;
   assignment.employeeSubmittedAt = now;
+  assignment.selfReviewRevertComment = null;
+  assignment.selfReviewRevertedById = null;
+  assignment.selfReviewRevertedAt = null;
   if (file) {
     assignment.employeeAttachmentBlob = file.buffer;
     assignment.employeeAttachmentName = file.originalname;
@@ -676,6 +690,35 @@ const managerReview = async (id, itemsData, file, user) => {
     changedBy: user._id,
     newValue: { status: KPI_STATUS.MANAGER_REVIEWED },
   });
+
+  // Option B — auto-init QuarterlyApproval when manager submits the last month of a quarter.
+  // Fires async (non-blocking) so manager submit never waits for FA init.
+  if (QUARTER_LAST_MONTHS.has(assignment.month)) {
+    const quarter = getQuarterFromMonth(assignment.month);
+    if (quarter) {
+      // Verify all 3 months of this quarter are now MANAGER_REVIEWED before triggering
+      const { QUARTER_MONTHS: QM } = require('../config/constants');
+      const qMonths = QM[quarter] || [];
+      KpiAssignment.count({
+        where: {
+          employeeId: assignment.employeeId,
+          financialYear: assignment.financialYear,
+          month: { [Op.in]: qMonths },
+          status: KPI_STATUS.MANAGER_REVIEWED,
+        },
+      }).then((count) => {
+        if (count === 3) {
+          getFinalApproverService().autoInitQuarterlyApproval(
+            assignment.employeeId,
+            assignment.financialYear,
+            quarter
+          );
+        }
+      }).catch((err) => {
+        console.error('[Option B] Quarter check failed:', err.message);
+      });
+    }
+  }
 
   return assignment;
 };
@@ -909,6 +952,8 @@ function validateTransition(currentStatus, targetStatus) {
 function itemPlain(item) {
   const obj = item.get ? item.get({ plain: true }) : item;
   obj.calculatedResult = computeItemAverage(obj);
+  // Exclude binary blob — download endpoint serves it; list responses only need the filename flag
+  delete obj.selfReviewAttachmentBlob;
   return obj;
 }
 
@@ -929,7 +974,7 @@ const getTeamOverview = async (managerId, query = {}) => {
         where: { kpiAssignmentId: assignment.id },
         order: [['createdAt', 'ASC']],
       });
-      const maskedItems = maskDraftFields(items.map((item) => itemPlain(item)), assignment.status, false);
+      const maskedItems = maskDraftFields(items.map((item) => itemPlain(item)), assignment.status, false, assignment.commitmentRejectionComment);
       return [{ employee: employee.get({ plain: true }), assignment: withCurrentManager(assignment), items: maskedItems }];
     }
     return [{ employee: employee.get({ plain: true }), assignment: null, items: [] }];
@@ -957,15 +1002,27 @@ const getTeamOverview = async (managerId, query = {}) => {
     assignmentMap[a.employeeId] = a;
   }
 
+  // Fetch all KPI items for all assignments in one query (eliminates N+1)
+  const assignmentIds = assignments.map((a) => a.id);
+  const allItems = assignmentIds.length
+    ? await KpiItem.findAll({
+        where: { kpiAssignmentId: { [Op.in]: assignmentIds } },
+        order: [['createdAt', 'ASC']],
+      })
+    : [];
+  const itemsByAssignment = {};
+  for (const item of allItems) {
+    const aid = item.kpiAssignmentId;
+    if (!itemsByAssignment[aid]) itemsByAssignment[aid] = [];
+    itemsByAssignment[aid].push(item);
+  }
+
   const results = [];
   for (const member of teamMembers) {
     const assignment = assignmentMap[member.id] || null;
     if (assignment) {
-      const items = await KpiItem.findAll({
-        where: { kpiAssignmentId: assignment.id },
-        order: [['createdAt', 'ASC']],
-      });
-      const itemsWithAvg = maskDraftFields(items.map((item) => itemPlain(item)), assignment.status, false);
+      const items = itemsByAssignment[assignment.id] || [];
+      const itemsWithAvg = maskDraftFields(items.map((item) => itemPlain(item)), assignment.status, false, assignment.commitmentRejectionComment);
       results.push({ employee: member, assignment: withCurrentManager(assignment), items: itemsWithAvg });
     } else {
       results.push({ employee: member, assignment: null, items: [] });
@@ -994,15 +1051,26 @@ const getAdminOverview = async (query = {}) => {
     order: [['createdAt', 'DESC']],
   });
 
+  // Fetch all KPI items for all assignments in one query (eliminates N+1)
+  const adminAssignmentIds = assignments.map((a) => a.id);
+  const allAdminItems = adminAssignmentIds.length
+    ? await KpiItem.findAll({
+        where: { kpiAssignmentId: { [Op.in]: adminAssignmentIds } },
+        order: [['createdAt', 'ASC']],
+      })
+    : [];
+  const adminItemsByAssignment = {};
+  for (const item of allAdminItems) {
+    const aid = item.kpiAssignmentId;
+    if (!adminItemsByAssignment[aid]) adminItemsByAssignment[aid] = [];
+    adminItemsByAssignment[aid].push(item);
+  }
+
   const results = [];
   for (const assignment of assignments) {
     const assignmentPlain = withCurrentManager(assignment);
-
-    const items = await KpiItem.findAll({
-      where: { kpiAssignmentId: assignmentPlain.id },
-      order: [['createdAt', 'ASC']],
-    });
-    const itemsWithAvg = maskDraftFields(items.map((item) => itemPlain(item)), assignment.status, false);
+    const items = adminItemsByAssignment[assignment.id] || [];
+    const itemsWithAvg = maskDraftFields(items.map((item) => itemPlain(item)), assignment.status, false, assignment.commitmentRejectionComment);
 
     const avgScores = itemsWithAvg
       .filter((i) => i.calculatedResult != null)
@@ -1484,6 +1552,34 @@ const deleteItemAttachment = async (assignmentId, itemId, user) => {
   await item.update({ selfReviewAttachmentBlob: null, selfReviewAttachmentName: null, selfReviewAttachmentMime: null });
 };
 
+const revertSelfReview = async (assignmentId, revertComment, user) => {
+  const assignment = await KpiAssignment.findByPk(assignmentId, {
+    include: [{ model: User, as: 'employee', attributes: ['id', 'managerId'] }],
+  });
+  if (!assignment) throw new NotFoundError('KPI Assignment');
+  if (assignment.status !== KPI_STATUS.EMPLOYEE_SUBMITTED) {
+    throw new ValidationError('Self-review can only be reverted when status is Employee Submitted');
+  }
+  const isAdmin = ['admin', 'hr_admin'].includes(user.role);
+  const isManager = ['manager', 'senior_manager'].includes(user.role) &&
+    String(assignment.employee?.managerId) === String(user._id);
+  if (!isAdmin && !isManager) throw new ForbiddenError('Only the employee\'s manager or an admin can revert self-review');
+  // Clear any manager draft values saved before the revert so stale data doesn't show
+  await KpiItem.update(
+    { managerStatus: null, managerComment: null, managerReviewedAt: null, itemStatus: KPI_STATUS.EMPLOYEE_SUBMITTED },
+    { where: { kpiAssignmentId: assignmentId } }
+  );
+
+  await assignment.update({
+    status: KPI_STATUS.COMMITMENT_APPROVED,
+    selfReviewRevertComment: revertComment?.trim() || null,
+    selfReviewRevertedById: user._id,
+    selfReviewRevertedAt: new Date(),
+    employeeSubmittedAt: null,
+  });
+  return assignment;
+};
+
 module.exports = {
   getAssignments,
   getAssignmentById,
@@ -1510,4 +1606,5 @@ module.exports = {
   saveItemAttachment,
   getItemAttachmentData,
   deleteItemAttachment,
+  revertSelfReview,
 };

@@ -56,3 +56,5 @@ export const downloadItemAttachmentApi = (assignmentId, itemId) =>
   api.get(`/kpi-assignments/${assignmentId}/items/${itemId}/attachment`, { responseType: 'blob' });
 export const deleteItemAttachmentApi = (assignmentId, itemId) =>
   api.delete(`/kpi-assignments/${assignmentId}/items/${itemId}/attachment`);
+export const revertSelfReviewApi = (assignmentId, revertComment) =>
+  api.post(`/kpi-assignments/${assignmentId}/revert-self-review`, { revertComment });

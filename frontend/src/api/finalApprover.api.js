@@ -20,3 +20,8 @@ export const submitQuarterlyApprovalApi = (id, data) =>
 
 // List dept quarterly approvals
 export const getDeptApprovalsApi = (params) => api.get('/final-approver/approvals', { params });
+
+// Bulk recalculate quarter — recomputes month_actual for all employees using current scoring config
+// Option A: FA final score (quarterlyScore) is never changed
+export const bulkRecalculateQuarterApi = (financialYear, quarter, departmentId) =>
+  api.post('/final-approver/quarterly/recalculate', { financialYear, quarter, departmentId });

@@ -24,6 +24,8 @@ const QuarterlyApproval = sequelize.define(
       defaultValue: 'draft',
     },
     approvedAt: { type: DataTypes.DATE, allowNull: true },
+    // Snapshot of which scoring config was active when this QA was built (audit trail)
+    scoringConfigId: { type: DataTypes.UUID, allowNull: true },
   },
   {
     tableName: 'quarterly_approvals',

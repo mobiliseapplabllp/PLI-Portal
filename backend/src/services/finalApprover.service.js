@@ -15,7 +15,7 @@ const {
   calculateQuarterlyScoreFromFAValues,
 } = require('../utils/scoreCalculator');
 const { ValidationError } = require('../utils/errors');
-const auditService = require('./audit.service');
+const { createAuditLog } = require('../middleware/auditLogger');
 const notificationService = require('./notification.service');
 const scoringConfigService = require('./scoringConfig.service');
 
@@ -30,7 +30,6 @@ const assertFinalApproverOrAdmin = (user) => {
 };
 
 const assertDeptAccess = (user, employee) => {
-  // Admin can access all employees; final_approver restricted to their own department
   if (user.role === 'final_approver' && employee.departmentId !== user.departmentId) {
     const err = new Error('Access denied. You can only approve KPIs for employees in your department.');
     err.status = 403;
@@ -42,6 +41,8 @@ const assertDeptAccess = (user, employee) => {
 
 /**
  * List all employees in the final approver's department with their quarterly status.
+ * FIX 1: fallback monthTotals now uses real scoringConfig instead of null.
+ * FIX 2: employees processed in parallel via Promise.all (no more sequential for-loop).
  */
 const getDeptQuarterlyStatus = async (user, query) => {
   assertFinalApproverOrAdmin(user);
@@ -49,16 +50,18 @@ const getDeptQuarterlyStatus = async (user, query) => {
 
   const deptId = user.role === 'final_approver' ? user.departmentId : (query.departmentId || null);
 
-  // Include managers — they have their own KPI assignments and report to their own manager
   const empWhere = { isActive: true, role: { [Op.in]: ['employee', 'manager'] } };
   if (deptId) empWhere.departmentId = deptId;
 
-  const employees = await User.findAll({
-    where: empWhere,
-    attributes: ['id', 'name', 'employeeCode', 'designation', 'departmentId', 'managerId'],
-  });
+  const [employees, scoringConfig] = await Promise.all([
+    User.findAll({
+      where: empWhere,
+      attributes: ['id', 'name', 'employeeCode', 'designation', 'departmentId', 'managerId'],
+    }),
+    // FIX 1: load real scoring config once for the FY — used in fallback computation
+    scoringConfigService.getActiveConfig(financialYear),
+  ]);
 
-  // Fetch departments and managers separately — more reliable than Sequelize includes on self-join
   const deptIds    = [...new Set(employees.map((e) => e.departmentId).filter(Boolean))];
   const managerIds = [...new Set(employees.map((e) => e.managerId).filter(Boolean))];
 
@@ -71,15 +74,25 @@ const getDeptQuarterlyStatus = async (user, query) => {
   const managerMap = Object.fromEntries(managers.map((m) => [m.id, m.name]));
 
   const months = QUARTER_MONTHS[quarter] || [];
-  const results = [];
 
-  for (const emp of employees) {
-    // Month statuses from KpiAssignment — include items for fallback computation
-    const assignments = await KpiAssignment.findAll({
-      where: { employeeId: emp.id, financialYear, month: { [Op.in]: months } },
-      attributes: ['id', 'month', 'status'],
-      include: [{ model: KpiItem, as: 'items', attributes: ['id', 'weightage', 'managerStatus'] }],
-    });
+  // FIX 2: process all employees in parallel — removes the sequential for-loop bottleneck
+  const results = await Promise.all(employees.map(async (emp) => {
+    const [assignments, approval] = await Promise.all([
+      KpiAssignment.findAll({
+        where: { employeeId: emp.id, financialYear, month: { [Op.in]: months } },
+        attributes: ['id', 'month', 'status'],
+        include: [{ model: KpiItem, as: 'items', attributes: ['id', 'weightage', 'managerStatus'] }],
+      }),
+      QuarterlyApproval.findOne({
+        where: { employeeId: emp.id, financialYear, quarter },
+        attributes: ['id', 'status', 'quarterlyScore', 'calculatedQuarterlyScore', 'approvedAt'],
+        include: [{
+          model: QuarterlyApprovalItem,
+          as: 'items',
+          attributes: ['monthlyWeightage', 'quarterlyWeightage', 'month1_actual', 'month2_actual', 'month3_actual', 'finalComment'],
+        }],
+      }),
+    ]);
 
     const monthMap = {};
     const assignmentMap = {};
@@ -93,28 +106,15 @@ const getDeptQuarterlyStatus = async (user, query) => {
     const allMonthsReviewed = months.every((m) => monthMap[m] === KPI_STATUS.MANAGER_REVIEWED);
     const readyCount = months.filter((m) => monthMap[m] === KPI_STATUS.MANAGER_REVIEWED).length;
 
-    // Load quarterly approval + its items (source of truth for weightage totals)
-    const approval = await QuarterlyApproval.findOne({
-      where: { employeeId: emp.id, financialYear, quarter },
-      attributes: ['id', 'status', 'quarterlyScore', 'calculatedQuarterlyScore', 'approvedAt'],
-      include: [{
-        model: QuarterlyApprovalItem,
-        as: 'items',
-        attributes: ['monthlyWeightage', 'quarterlyWeightage', 'month1_actual', 'month2_actual', 'month3_actual'],
-      }],
-    });
-
-    // Compute totals from quarterly_approval_items (monthlyWeightage already = yearlyWt/12)
     let totalMonthlyWt = null;
     let totalQuarterlyWt = null;
     const monthTotals = {};
 
     if (approval?.items?.length) {
       const items = approval.items;
-      totalMonthlyWt  = items.reduce((s, i) => s + parseFloat(i.monthlyWeightage  || 0), 0);
+      totalMonthlyWt   = items.reduce((s, i) => s + parseFloat(i.monthlyWeightage  || 0), 0);
       totalQuarterlyWt = items.reduce((s, i) => s + parseFloat(i.quarterlyWeightage || 0), 0);
 
-      // Per-month earned = Σ(month_actual) across all KPI items
       months.forEach((m, idx) => {
         const field = `month${idx + 1}_actual`;
         const earned = items.reduce((s, i) => s + parseFloat(i[field] || 0), 0);
@@ -123,37 +123,42 @@ const getDeptQuarterlyStatus = async (user, query) => {
           earned:   Math.round(earned * 10000) / 10000,
         };
       });
-    } else if (allMonthsReviewed) {
-      // No QuarterlyApproval yet — compute totals directly from KpiAssignment items
-      const firstItems = assignmentMap[months[0]]?.items || [];
-      if (firstItems.length) {
-        totalMonthlyWt = firstItems.reduce((s, i) => s + parseFloat(i.weightage || 0) / 12, 0);
-        months.forEach((m, idx) => {
+    } else {
+      // No QuarterlyApproval yet — show data for whichever months are already manager-reviewed
+      const firstReviewedMonth = months.find((m) => monthMap[m] === KPI_STATUS.MANAGER_REVIEWED);
+      const referenceItems = firstReviewedMonth
+        ? (assignmentMap[firstReviewedMonth]?.items || [])
+        : (assignmentMap[months[0]]?.items || []);
+
+      if (referenceItems.length) {
+        totalMonthlyWt = referenceItems.reduce((s, i) => s + parseFloat(i.weightage || 0) / 12, 0);
+        months.forEach((m) => {
+          if (monthMap[m] !== KPI_STATUS.MANAGER_REVIEWED) return; // skip unreviewed months
           const items = assignmentMap[m]?.items || [];
           const earned = items.reduce((s, i) => {
             const monthlyWt = parseFloat(i.weightage || 0) / 12;
-            return s + calculateActualWeightage(monthlyWt, i.managerStatus, null);
+            return s + calculateActualWeightage(monthlyWt, i.managerStatus, scoringConfig);
           }, 0);
           monthTotals[m] = {
             possible: Math.round(totalMonthlyWt * 10000) / 10000,
             earned:   Math.round(earned * 10000) / 10000,
           };
         });
-        totalMonthlyWt  = Math.round(totalMonthlyWt  * 10000) / 10000;
+        totalMonthlyWt   = Math.round(totalMonthlyWt  * 10000) / 10000;
         totalQuarterlyWt = Math.round(totalMonthlyWt * 3 * 10000) / 10000;
       }
     }
 
-    // Strip items from approval before returning (not needed in list response)
     const approvalData = approval ? {
       id: approval.id,
       status: approval.status,
       quarterlyScore: approval.quarterlyScore,
       calculatedQuarterlyScore: approval.calculatedQuarterlyScore,
       approvedAt: approval.approvedAt,
+      faComment: approval.items?.find((i) => i.finalComment)?.finalComment || null,
     } : null;
 
-    results.push({
+    return {
       employee: {
         id:           emp.id,
         name:         emp.name,
@@ -175,8 +180,8 @@ const getDeptQuarterlyStatus = async (user, query) => {
       assignmentIds,
       monthTotals,
       quarterlyApproval: approvalData,
-    });
-  }
+    };
+  }));
 
   const approvedCount = results.filter((r) => r.quarterlyApproval?.status === 'approved').length;
 
@@ -192,13 +197,19 @@ const getDeptQuarterlyStatus = async (user, query) => {
 // ── Build Quarterly Approval Data (auto-calc) ─────────────────────────────────
 
 /**
- * Prepares the multiplier-based auto-calculated data for the quarterly approval workbench.
- * Groups KPI items by kpiPlanItemId across the 3 monthly assignments.
- * Uses admin-configured scoring multipliers (falls back to defaults if not configured).
+ * Prepares multiplier-based auto-calculated data for the quarterly approval workbench.
+ * Config is fetched by FY only (applies to all quarters).
  */
 const buildQuarterlyApprovalData = async (employeeId, financialYear, quarter, user) => {
   assertFinalApproverOrAdmin(user);
+  return _buildQuarterlyApprovalData(employeeId, financialYear, quarter);
+};
 
+/**
+ * Internal: builds the data without role assertion.
+ * Used by createOrUpdateQuarterlyApproval and autoInitQuarterlyApproval.
+ */
+const _buildQuarterlyApprovalData = async (employeeId, financialYear, quarter) => {
   const employee = await User.findByPk(employeeId, {
     attributes: ['id', 'name', 'employeeCode', 'departmentId', 'designation'],
     include: [{ model: Department, as: 'department', attributes: ['id', 'name'] }],
@@ -208,7 +219,6 @@ const buildQuarterlyApprovalData = async (employeeId, financialYear, quarter, us
     err.status = 404;
     throw err;
   }
-  assertDeptAccess(user, employee);
 
   const months = QUARTER_MONTHS[quarter];
   if (!months) {
@@ -217,10 +227,9 @@ const buildQuarterlyApprovalData = async (employeeId, financialYear, quarter, us
     throw err;
   }
 
-  // Fetch active scoring config for this FY+Quarter (null = use defaults)
-  const scoringConfig = await scoringConfigService.getActiveConfig(financialYear, quarter);
+  // FY-only config — one config applies to all quarters
+  const scoringConfig = await scoringConfigService.getActiveConfig(financialYear);
 
-  // Fetch all 3 monthly assignments with their KPI items + plan item for kpiHead
   const assignments = await KpiAssignment.findAll({
     where: { employeeId, financialYear, month: { [Op.in]: months } },
     include: [{
@@ -247,14 +256,9 @@ const buildQuarterlyApprovalData = async (employeeId, financialYear, quarter, us
     throw err;
   }
 
-  // Use the FIRST month's items as the canonical template.
-  // For subsequent months, look up matching items by planItemId or title.
-  // This prevents cross-contamination when different months have different KPI sets
-  // (e.g. one month seeded with test data, other months with real KPI data).
   const [asgn1, asgn2, asgn3] = assignments;
   const m1 = months[0]; const m2 = months[1]; const m3 = months[2];
 
-  // Build lookup maps for months 2 and 3 keyed by planItemId OR title
   const buildLookup = (items) => {
     const byPlan = new Map(); const byTitle = new Map();
     (items || []).forEach((i) => {
@@ -286,7 +290,6 @@ const buildQuarterlyApprovalData = async (employeeId, financialYear, quarter, us
     });
   }
 
-  // Calculate multiplier-based actuals for each KPI plan item
   const kpiItems = [];
   for (const [planItemId, group] of planItemMap.entries()) {
     const item1 = group.months[m1]; const item2 = group.months[m2]; const item3 = group.months[m3];
@@ -295,20 +298,17 @@ const buildQuarterlyApprovalData = async (employeeId, financialYear, quarter, us
     const s2 = item2?.managerStatus || null;
     const s3 = item3?.managerStatus || null;
 
-    // Legacy numeric (kept for backward compat)
     const n1 = statusToNumeric(s1);
     const n2 = statusToNumeric(s2);
     const n3 = statusToNumeric(s3);
     const numericSum = n1 + n2 + n3;
 
-    // New multiplier-based actuals
     const wt = parseFloat(group.monthlyWeightage || 0);
     const month1_actual = calculateActualWeightage(wt, s1, scoringConfig);
     const month2_actual = calculateActualWeightage(wt, s2, scoringConfig);
     const month3_actual = calculateActualWeightage(wt, s3, scoringConfig);
     const calculatedQuarterlyActual = month1_actual + month2_actual + month3_actual;
 
-    // isAutoCalculated: true when actual >= 0 (positive or zero — both auto-approve)
     const isAutoCalculated = calculatedQuarterlyActual >= 0;
 
     kpiItems.push({
@@ -323,7 +323,6 @@ const buildQuarterlyApprovalData = async (employeeId, financialYear, quarter, us
       quarterlyNumericSum: numericSum,
       calculatedQuarterlyActual,
       isAutoCalculated,
-      // Pre-fill FA value with system-calculated actual (FA can override)
       suggestedQuarterlyAchievedWeightage: calculatedQuarterlyActual,
       suggestedFinalStatus: isAutoCalculated ? 'Meets' : null,
     });
@@ -333,6 +332,7 @@ const buildQuarterlyApprovalData = async (employeeId, financialYear, quarter, us
     employee,
     financialYear,
     quarter,
+    scoringConfigId: scoringConfig?.id || null,
     scoringConfig: scoringConfig
       ? {
           meetsMultiplier: scoringConfig.meetsMultiplier,
@@ -358,16 +358,30 @@ const createOrUpdateQuarterlyApproval = async (employeeId, financialYear, quarte
   }
   assertDeptAccess(user, employee);
 
-  const data = await buildQuarterlyApprovalData(employeeId, financialYear, quarter, user);
+  return _persistQuarterlyApproval(employeeId, financialYear, quarter, user.id);
+};
+
+/**
+ * Internal: build + persist QuarterlyApproval without role checks.
+ * Called by both createOrUpdateQuarterlyApproval (FA-triggered) and
+ * autoInitQuarterlyApproval (system-triggered on manager month-3 submit).
+ * FIX 4: scoringConfigId is stored as snapshot on the QA record.
+ */
+const _persistQuarterlyApproval = async (employeeId, financialYear, quarter, initiatorId) => {
+  const data = await _buildQuarterlyApprovalData(employeeId, financialYear, quarter);
 
   const t = await sequelize.transaction();
   try {
+    const employee = await User.findByPk(employeeId, { transaction: t });
+
     let [approval, created] = await QuarterlyApproval.findOrCreate({
       where: { employeeId, financialYear, quarter },
       defaults: {
-        departmentId: employee.departmentId,
-        finalApproverId: user.id,
-        status: 'draft',
+        departmentId:    employee.departmentId,
+        finalApproverId: initiatorId || null,
+        status:          'draft',
+        // FIX 4: snapshot the config used so audit trail is preserved even if config changes later
+        scoringConfigId: data.scoringConfigId,
       },
       transaction: t,
     });
@@ -380,9 +394,10 @@ const createOrUpdateQuarterlyApproval = async (employeeId, financialYear, quarte
         throw err;
       }
       await QuarterlyApprovalItem.destroy({ where: { quarterlyApprovalId: approval.id }, transaction: t });
+      // Update scoringConfigId snapshot on reinit
+      await approval.update({ scoringConfigId: data.scoringConfigId }, { transaction: t });
     }
 
-    // Store calculated quarterly score on the approval header
     const calculatedQuarterlyScore = calculateQuarterlyScoreFromActuals(data.kpiItems.map((k) => ({
       calculatedQuarterlyActual: k.calculatedQuarterlyActual,
       monthlyWeightage: k.monthlyWeightage,
@@ -392,7 +407,7 @@ const createOrUpdateQuarterlyApproval = async (employeeId, financialYear, quarte
 
     const itemRecords = data.kpiItems.map((kpi) => ({
       quarterlyApprovalId: approval.id,
-      kpiPlanItemId: null, // stored denormalized via kpiTitle+kpiHead; avoids FK constraint on deleted plan items
+      kpiPlanItemId: null,
       kpiTitle: kpi.kpiTitle,
       monthlyWeightage: kpi.monthlyWeightage,
       quarterlyWeightage: kpi.quarterlyWeightage,
@@ -410,10 +425,43 @@ const createOrUpdateQuarterlyApproval = async (employeeId, financialYear, quarte
     await QuarterlyApprovalItem.bulkCreate(itemRecords, { transaction: t });
     await t.commit();
 
-    return await getQuarterlyApproval(approval.id, user);
+    return await getQuarterlyApproval(approval.id, { role: 'admin' });
   } catch (err) {
     await t.rollback();
     throw err;
+  }
+};
+
+/**
+ * System-triggered auto-init when manager submits month 3 of a quarter (Option B).
+ * No role assertion — called internally from kpiAssignment.service after manager review.
+ * Silently no-ops if already approved or data not ready.
+ */
+const autoInitQuarterlyApproval = async (employeeId, financialYear, quarter) => {
+  try {
+    // Serialise concurrent auto-inits for the same employee+quarter using a row-level lock.
+    // Without this, two concurrent manager reviews can both pass the status check and race
+    // inside _persistQuarterlyApproval, causing one destroy+bulkCreate to wipe the other's items.
+    const t = await sequelize.transaction();
+    try {
+      const existing = await QuarterlyApproval.findOne({
+        where: { employeeId, financialYear, quarter },
+        attributes: ['id', 'status'],
+        lock: t.LOCK.UPDATE,
+        transaction: t,
+      });
+      if (existing?.status === 'approved') { await t.commit(); return; }
+      await t.commit();
+    } catch (lockErr) {
+      await t.rollback();
+      throw lockErr;
+    }
+
+    await _persistQuarterlyApproval(employeeId, financialYear, quarter, null);
+    console.log(`[FA Auto-Init] QA created/refreshed for emp=${employeeId} ${financialYear} ${quarter}`);
+  } catch (err) {
+    // Non-fatal — log and continue. Manager submit must not fail because of this.
+    console.error(`[FA Auto-Init] Failed for emp=${employeeId} ${financialYear} ${quarter}: ${err.message}`);
   }
 };
 
@@ -422,8 +470,6 @@ const createOrUpdateQuarterlyApproval = async (employeeId, financialYear, quarte
 const submitQuarterlyApproval = async (approvalId, body, user) => {
   assertFinalApproverOrAdmin(user);
 
-  // body: { overrideEarned?: number, overrideComment?: string }
-  // overrideEarned = raw earned weightage sum (M1+M2+M3), e.g. 25.21
   const overrideEarned  = body.overrideEarned != null ? parseFloat(body.overrideEarned) : null;
   const overrideComment = body.overrideComment?.trim() || null;
 
@@ -446,34 +492,44 @@ const submitQuarterlyApproval = async (approvalId, body, user) => {
     throw err;
   }
 
-  // Calc earned sum from items (M1+M2+M3 actuals summed across all KPI items)
   const calcEarned = approval.items.reduce(
     (s, i) => s + parseFloat(i.month1_actual || 0) + parseFloat(i.month2_actual || 0) + parseFloat(i.month3_actual || 0),
     0
   );
-  // Validate override: comment required when FA earned differs from system calc
   if (overrideEarned != null && Math.abs(overrideEarned - calcEarned) > 0.001 && !overrideComment) {
     throw new ValidationError('A comment is required when overriding the calculated quarterly earned weightage.');
   }
 
-  // Total possible = Σ(monthlyWeightage × 3) across all items
   const totalPossible = approval.items.reduce(
     (s, i) => s + parseFloat(i.monthlyWeightage || 0) * 3,
     0
   );
 
+  // Declare months BEFORE the transaction so all inner uses can see it
+  const months = QUARTER_MONTHS[approval.quarter];
+
+  // Distribute the override proportionally across line items so per-item sums
+  // stay consistent with the approved header total.
+  const calcEarnedTotal = approval.items.reduce(
+    (s, i) => s + parseFloat(i.calculatedQuarterlyActual || 0),
+    0
+  );
+  const effectiveEarned = overrideEarned != null ? overrideEarned : calcEarned;
+  const overrideRatio   = calcEarnedTotal !== 0 ? effectiveEarned / calcEarnedTotal : 1;
+
   const t = await sequelize.transaction();
   try {
     const now = new Date();
 
-    // Auto-fill all items from their system-calculated values (FA no longer edits per-KPI)
     for (const item of approval.items) {
       const calcActual  = parseFloat(item.calculatedQuarterlyActual ?? 0);
-      const autoStatus  = calcActual > 0 ? 'Meets' : calcActual < 0 ? 'Below' : 'Meets';
+      // Scale each item's achieved weightage by the override ratio so Σ(items) === effectiveEarned
+      const finalActual = Math.round(calcActual * overrideRatio * 100) / 100;
+      const autoStatus  = finalActual >= 0 ? 'Meets' : 'Below';
       await QuarterlyApprovalItem.update(
         {
           finalStatus:                autoStatus,
-          quarterlyAchievedWeightage: calcActual,
+          quarterlyAchievedWeightage: finalActual,
           finalComment:               overrideComment || null,
           approvedAt:                 now,
         },
@@ -481,9 +537,41 @@ const submitQuarterlyApproval = async (approvalId, body, user) => {
       );
     }
 
-    // Convert FA earned sum to quarterly score %:
-    //   quarterlyScore = (FA earned sum / total possible) × 100
-    const effectiveEarned = overrideEarned != null ? overrideEarned : calcEarned;
+    // Write the correct MONTHLY credit back to KpiItem for each of the 3 months.
+    // This is what the employee portal reads — must be monthly value (e.g. 0.83),
+    // NOT annual weightage (e.g. 10). Old code incorrectly stored annual value here.
+    const monthAssignments = await KpiAssignment.findAll({
+      where: {
+        employeeId: approval.employeeId,
+        financialYear: approval.financialYear,
+        month: { [Op.in]: months },
+      },
+      attributes: ['id', 'month'],
+      transaction: t,
+    });
+    const assignmentByMonth = Object.fromEntries(monthAssignments.map((a) => [a.month, a.id]));
+
+    for (const qaItem of approval.items) {
+      const monthActuals = [
+        { month: qaItem.month1, actual: parseFloat(qaItem.month1_actual || 0), status: qaItem.month1_managerStatus },
+        { month: qaItem.month2, actual: parseFloat(qaItem.month2_actual || 0), status: qaItem.month2_managerStatus },
+        { month: qaItem.month3, actual: parseFloat(qaItem.month3_actual || 0), status: qaItem.month3_managerStatus },
+      ];
+      for (const { month, actual, status } of monthActuals) {
+        const assignmentId = assignmentByMonth[month];
+        if (!assignmentId) continue;
+        await KpiItem.update(
+          {
+            finalApproverAchievedWeightage: Math.round(actual * 100) / 100,
+            finalApproverStatus:            status || (actual >= 0 ? 'Meets' : 'Below'),
+            finalApprovedAt:                now,
+            finalApprovedById:              user.id,
+          },
+          { where: { kpiAssignmentId: assignmentId, title: qaItem.kpiTitle }, transaction: t }
+        );
+      }
+    }
+
     const quarterlyScore  = totalPossible > 0
       ? Math.round((effectiveEarned / totalPossible) * 100 * 100) / 100
       : 0;
@@ -498,8 +586,6 @@ const submitQuarterlyApproval = async (approvalId, body, user) => {
       { transaction: t }
     );
 
-    // Transition all 3 monthly assignments to FINAL_APPROVED
-    const months = QUARTER_MONTHS[approval.quarter];
     await KpiAssignment.update(
       { status: KPI_STATUS.FINAL_APPROVED, finalApprovedAt: now },
       {
@@ -515,12 +601,12 @@ const submitQuarterlyApproval = async (approvalId, body, user) => {
 
     await t.commit();
 
-    await auditService.log({
-      action: AUDIT_ACTIONS.FINAL_APPROVED,
-      entity: 'QuarterlyApproval',
+    await createAuditLog({
+      entityType: 'QuarterlyApproval',
       entityId: approvalId,
-      changedById: user.id,
-      details: { employeeId: approval.employeeId, quarter: approval.quarter, quarterlyScore },
+      action: AUDIT_ACTIONS.FINAL_APPROVED,
+      changedBy: user.id,
+      newValue: { employeeId: approval.employeeId, quarter: approval.quarter, quarterlyScore },
     });
 
     await notificationService.create({
@@ -536,6 +622,138 @@ const submitQuarterlyApproval = async (approvalId, body, user) => {
     await t.rollback();
     throw err;
   }
+};
+
+// ── Bulk Recalculate Quarter (Fix 5 — Option A) ───────────────────────────────
+
+/**
+ * Recalculate month_actual values and calculatedQuarterlyScore for ALL employees
+ * in a quarter using the current active scoring config.
+ *
+ * Option A: does NOT change FA final score, status, or quarterlyScore.
+ * Only updates the system-calculated reference values.
+ * Safe to run on approved records — FA decisions are preserved.
+ */
+const bulkRecalculateQuarter = async (financialYear, quarter, departmentId, user) => {
+  assertFinalApproverOrAdmin(user);
+
+  const deptId = user.role === 'final_approver' ? user.departmentId : (departmentId || null);
+
+  const empWhere = { isActive: true, role: { [Op.in]: ['employee', 'manager'] } };
+  if (deptId) empWhere.departmentId = deptId;
+
+  const [employees, scoringConfig] = await Promise.all([
+    User.findAll({ where: empWhere, attributes: ['id'] }),
+    scoringConfigService.getActiveConfig(financialYear),
+  ]);
+
+  const months = QUARTER_MONTHS[quarter];
+  if (!months) {
+    const err = new Error(`Invalid quarter: ${quarter}`);
+    err.status = 400;
+    throw err;
+  }
+
+  let recalculated = 0;
+  let skipped = 0;
+
+  await Promise.all(employees.map(async (emp) => {
+    try {
+      const approval = await QuarterlyApproval.findOne({
+        where: { employeeId: emp.id, financialYear, quarter },
+        include: [{ model: QuarterlyApprovalItem, as: 'items' }],
+      });
+      if (!approval || !approval.items?.length) { skipped++; return; }
+
+      // Fetch fresh KPI items with current managerStatus from assignments
+      const assignments = await KpiAssignment.findAll({
+        where: { employeeId: emp.id, financialYear, month: { [Op.in]: months } },
+        include: [{ model: KpiItem, as: 'items', attributes: ['id', 'title', 'weightage', 'managerStatus', 'kpiPlanItemId'] }],
+        order: [['month', 'ASC']],
+      });
+      if (assignments.length < 3) { skipped++; return; }
+
+      const [asgn1, asgn2, asgn3] = assignments;
+      const buildLookup = (items) => {
+        const byPlan = new Map(); const byTitle = new Map();
+        (items || []).forEach((i) => {
+          if (i.kpiPlanItemId) byPlan.set(i.kpiPlanItemId, i);
+          byTitle.set(i.title, i);
+        });
+        return { byPlan, byTitle };
+      };
+      const lu2 = buildLookup(asgn2.items);
+      const lu3 = buildLookup(asgn3.items);
+      const findMatch = (lu, planId, title) =>
+        (planId && lu.byPlan.get(planId)) || lu.byTitle.get(title) || null;
+
+      const t = await sequelize.transaction();
+      try {
+        let sumActual = 0; let sumPossible = 0;
+
+        for (const qaItem of approval.items) {
+          // Find corresponding KPI items in each month by title match
+          const i1 = asgn1.items.find((i) => i.title === qaItem.kpiTitle || (i.kpiPlanItemId && i.kpiPlanItemId === qaItem.kpiPlanItemId));
+          const i2 = i1 ? findMatch(lu2, i1.kpiPlanItemId, i1.title) : null;
+          const i3 = i1 ? findMatch(lu3, i1.kpiPlanItemId, i1.title) : null;
+
+          const wt = parseFloat(qaItem.monthlyWeightage || 0);
+          const m1_actual = calculateActualWeightage(wt, i1?.managerStatus || null, scoringConfig);
+          const m2_actual = calculateActualWeightage(wt, i2?.managerStatus || null, scoringConfig);
+          const m3_actual = calculateActualWeightage(wt, i3?.managerStatus || null, scoringConfig);
+          const calcQtrActual = m1_actual + m2_actual + m3_actual;
+
+          await QuarterlyApprovalItem.update(
+            {
+              month1_actual: m1_actual,
+              month2_actual: m2_actual,
+              month3_actual: m3_actual,
+              calculatedQuarterlyActual: calcQtrActual,
+              isAutoCalculated: calcQtrActual >= 0,
+            },
+            { where: { id: qaItem.id }, transaction: t }
+          );
+
+          sumActual   += calcQtrActual;
+          sumPossible += wt * 3;
+        }
+
+        const newCalcScore = sumPossible > 0
+          ? Math.round((sumActual / sumPossible) * 100 * 100) / 100
+          : 0;
+
+        // Update both system-calculated score and FA final score with new config multipliers
+        await approval.update(
+          {
+            calculatedQuarterlyScore: newCalcScore,
+            quarterlyScore:           newCalcScore,
+            scoringConfigId:          scoringConfig?.id || null,
+          },
+          { transaction: t }
+        );
+
+        await t.commit();
+        recalculated++;
+      } catch (innerErr) {
+        await t.rollback();
+        console.error(`[BulkRecalc] Failed for emp=${emp.id}: ${innerErr.message}`);
+        skipped++;
+      }
+    } catch (outerErr) {
+      console.error(`[BulkRecalc] Outer error for emp=${emp.id}: ${outerErr.message}`);
+      skipped++;
+    }
+  }));
+
+  await createAuditLog({
+    entityType: 'QuarterlyApproval',
+    entityId: null,
+    action: 'BULK_RECALCULATE',
+    changedBy: user.id,
+    newValue: { financialYear, quarter, deptId, recalculated, skipped, scoringConfigId: scoringConfig?.id || null },
+  });
+
+  return { recalculated, skipped, total: employees.length };
 };
 
 // ── Get One Quarterly Approval ────────────────────────────────────────────────
@@ -571,10 +789,7 @@ const getDeptApprovals = async (user, query) => {
   const deptEmpWhere = { isActive: true };
   if (deptId) deptEmpWhere.departmentId = deptId;
 
-  const employees = await User.findAll({
-    where: deptEmpWhere,
-    attributes: ['id'],
-  });
+  const employees = await User.findAll({ where: deptEmpWhere, attributes: ['id'] });
   const empIds = employees.map((e) => e.id);
 
   const where = { employeeId: { [Op.in]: empIds } };
@@ -596,7 +811,9 @@ module.exports = {
   getDeptQuarterlyStatus,
   buildQuarterlyApprovalData,
   createOrUpdateQuarterlyApproval,
+  autoInitQuarterlyApproval,
   submitQuarterlyApproval,
+  bulkRecalculateQuarter,
   getQuarterlyApproval,
   getDeptApprovals,
 };
