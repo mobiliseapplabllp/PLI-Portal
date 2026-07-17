@@ -6,6 +6,7 @@ const { Model } = require('sequelize');
 function renameIdsForClient(val) {
   if (val === null || val === undefined) return val;
   if (val instanceof Date) return val;
+  if (Buffer.isBuffer(val)) return val;
   if (Array.isArray(val)) return val.map(renameIdsForClient);
   if (val instanceof Model) return renameIdsForClient(val.get({ plain: true }));
   if (typeof val !== 'object') return val;

@@ -39,7 +39,6 @@ const kpiNavItems = {
       icon: HiOutlineClipboardList,
       children: [
         { to: '/employee/kpis', label: 'My KPIs', icon: HiOutlineClipboardList },
-        { to: '/employee/quarterly', label: 'Quarterly Summary', icon: HiOutlineChartBar },
       ],
     },
   ],
@@ -52,10 +51,8 @@ const kpiNavItems = {
       children: [
         { to: '/manager/team-kpi', label: 'Team KPIs', icon: HiOutlineClipboardList },
         { to: '/employee/kpis', label: 'My KPIs', icon: HiOutlineClipboardCheck },
-        { to: '/employee/quarterly', label: 'Quarterly Summary', icon: HiOutlineChartBar },
       ],
     },
-    { to: '/admin/reports', label: 'Reports', icon: HiOutlineDocumentReport },
   ],
   senior_manager: [
     { to: '/manager/dashboard', label: 'Dashboard', icon: HiOutlineHome },
@@ -66,10 +63,8 @@ const kpiNavItems = {
       children: [
         { to: '/manager/team-kpi', label: 'Team KPIs', icon: HiOutlineClipboardList },
         { to: '/employee/kpis', label: 'My KPIs', icon: HiOutlineClipboardCheck },
-        { to: '/employee/quarterly', label: 'Quarterly Summary', icon: HiOutlineChartBar },
       ],
     },
-    { to: '/admin/reports', label: 'Reports', icon: HiOutlineDocumentReport },
   ],
   hr_admin: [
     { to: '/hr-admin/dashboard', label: 'Dashboard', icon: HiOutlineHome },
@@ -81,25 +76,29 @@ const kpiNavItems = {
         { to: '/hr-admin/kpi-plans', label: 'Edit KPI', icon: HiOutlinePencilAlt },
       ],
     },
-    { to: '/admin/reports', label: 'Reports', icon: HiOutlineChartBar },
+    {
+      label: 'Miscellaneous',
+      icon: HiOutlineViewGridAdd,
+      children: [
+        { to: '/admin/reports', label: 'Reports', icon: HiOutlineDocumentReport },
+      ],
+    },
   ],
   final_approver: [
     { to: '/final-approver/dashboard', label: 'Dashboard', icon: HiOutlineHome },
-    { to: '/final-approver/workbench', label: 'Approval Workbench', icon: HiOutlineClipboardCheck },
+    {
+      label: 'KPI',
+      icon: HiOutlineClipboardList,
+      children: [
+        { to: '/final-approver/workbench', label: 'Approval Workbench', icon: HiOutlineClipboardCheck },
+      ],
+    },
     { to: '/admin/reports', label: 'Reports', icon: HiOutlineChartBar },
   ],
   admin: [
     { to: '/admin/dashboard', label: 'Dashboard', icon: HiOutlineHome },
     { to: '/admin/employees', label: 'Employees', icon: HiOutlineUserGroup },
     { to: '/admin/departments', label: 'Departments', icon: HiOutlineOfficeBuilding },
-    { to: '/admin/cycles', label: 'Appraisal Cycles', icon: HiOutlineCalendar },
-    { to: '/admin/review-table', label: 'Review Table', icon: HiOutlineTable },
-    { to: '/admin/final-review', label: 'Final Approval Overview', icon: HiOutlineShieldCheck },
-    { to: '/final-approver/workbench', label: 'Approval Workbench', icon: HiOutlineClipboardCheck },
-    { to: '/admin/pli-rules', label: 'PLI Rules', icon: HiOutlineCog },
-    { to: '/admin/scoring-config', label: 'Scoring Config', icon: HiOutlineChartBar },
-    { to: '/admin/reports', label: 'Reports', icon: HiOutlineDocumentReport },
-    { to: '/admin/audit-logs', label: 'Audit Logs', icon: HiOutlineDocumentText },
     { to: '/manager/team', label: 'My Team', icon: HiOutlineUserGroup },
     {
       label: 'KPI',
@@ -109,9 +108,22 @@ const kpiNavItems = {
         { to: '/hr-admin/kpi-plans', label: 'Edit KPI', icon: HiOutlinePencilAlt },
         { to: '/manager/team-kpi', label: 'Team KPIs', icon: HiOutlineClipboardList },
         { to: '/employee/kpis', label: 'My KPIs', icon: HiOutlineClipboardCheck },
-        { to: '/employee/quarterly', label: 'Quarterly Summary', icon: HiOutlineChartBar },
+        { to: '/final-approver/workbench', label: 'Approval Workbench', icon: HiOutlineClipboardCheck },
+        { to: '/admin/scoring-config', label: 'Scoring Config', icon: HiOutlineChartBar },
       ],
     },
+    {
+      label: 'Miscellaneous',
+      icon: HiOutlineViewGridAdd,
+      children: [
+        { to: '/admin/cycles', label: 'Appraisal Cycles', icon: HiOutlineCalendar },
+        { to: '/admin/review-table', label: 'Review Table', icon: HiOutlineTable },
+        { to: '/admin/final-review', label: 'Final Approval Overview', icon: HiOutlineShieldCheck },
+        { to: '/admin/pli-rules', label: 'PLI Rules', icon: HiOutlineCog },
+        { to: '/admin/reports', label: 'Reports', icon: HiOutlineDocumentReport },
+      ],
+    },
+    { to: '/admin/audit-logs', label: 'Audit Logs', icon: HiOutlineDocumentText },
   ],
   // MD/Director fallback to PM
   md: [],
