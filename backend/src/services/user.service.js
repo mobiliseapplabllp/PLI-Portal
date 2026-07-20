@@ -128,6 +128,7 @@ const updateUser = async (id, data, updatedBy) => {
 
   const wasActive = oldValue.isActive;
   const isBeingDeactivated = wasActive && patch.isActive === false;
+  const isBeingReactivated = !wasActive && patch.isActive === true;
   const hasManagerChanged = patch.managerId !== undefined && String(oldValue.managerId || '') !== String(patch.managerId || '');
 
   if (isBeingDeactivated) {
@@ -156,12 +157,15 @@ const updateUser = async (id, data, updatedBy) => {
     const openStatuses = [
       KPI_STATUS.DRAFT,
       KPI_STATUS.ASSIGNED,
+      KPI_STATUS.COMMITMENT_SUBMITTED,
+      KPI_STATUS.COMMITMENT_APPROVED,
       KPI_STATUS.EMPLOYEE_SUBMITTED,
       KPI_STATUS.MANAGER_REVIEWED,
       KPI_STATUS.FINAL_REVIEWED,
     ];
+    const now = new Date();
     const [affected] = await KpiAssignment.update(
-      { status: KPI_STATUS.LOCKED },
+      { status: KPI_STATUS.LOCKED, isLocked: true, lockedAt: now, lockedById: updatedBy },
       { where: { employeeId: user.id, status: { [Op.in]: openStatuses } } }
     );
     if (affected > 0) {
@@ -172,6 +176,34 @@ const updateUser = async (id, data, updatedBy) => {
         changedBy: updatedBy,
         oldValue: { openAssignments: affected },
         newValue: { status: 'locked', reason: 'Employee deactivated' },
+      });
+    }
+  }
+
+  if (isBeingReactivated) {
+    // Unlock assignments that were bulk-locked on deactivation (lockedAt IS NULL = old bug, or lockedById matches)
+    // Only unlock assignments that have no real admin lock (i.e. locked via deactivation, not manually)
+    const [unlocked] = await KpiAssignment.update(
+      { status: KPI_STATUS.ASSIGNED, isLocked: false, lockedAt: null, lockedById: null },
+      {
+        where: {
+          employeeId: user.id,
+          status: KPI_STATUS.LOCKED,
+          [Op.or]: [
+            { lockedAt: null },           // old records locked before this fix
+            { lockedById: updatedBy },    // locked by an admin (deactivation path)
+          ],
+        },
+      }
+    );
+    if (unlocked > 0) {
+      await createAuditLog({
+        entityType: 'kpi_assignment',
+        entityId: user.id,
+        action: 'bulk_unlocked_on_reactivation',
+        changedBy: updatedBy,
+        oldValue: { lockedAssignments: unlocked },
+        newValue: { status: 'assigned', reason: 'Employee reactivated' },
       });
     }
   }

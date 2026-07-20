@@ -79,6 +79,8 @@ app.listen(PORT, () => {
   startDeadlineReminderJob();
   const { startProjectDailyReportJob } = require('./src/jobs/projectDailyReport.job');
   startProjectDailyReportJob();
+  const { startSurveyCron } = require('./src/jobs/surveyCron.job');
+  startSurveyCron();
 });
 
 module.exports = app;

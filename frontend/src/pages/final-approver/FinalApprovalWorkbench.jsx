@@ -308,83 +308,179 @@ function WorkbenchList() {
   };
 
   const handleDownloadExcel = async () => {
-    const approvedEmps = (data?.employees || []).filter((e) => e.quarterlyApproval?.status === 'approved');
-    if (!approvedEmps.length) {
-      window.alert('No approved employees to export for this quarter.');
-      return;
-    }
     setExporting(true);
     try {
+      const XLSX       = await import('xlsx');
       const qMonthKeys = QUARTER_MONTHS[quarter] || [];
+      const today      = new Date().toISOString().slice(0, 10);
+      const allEmps    = data?.employees || [];
 
-      // ── Build data rows ──────────────────────────────────────────────────────
-      const dataRows = approvedEmps.map((emp, idx) => {
-        const mt           = emp.monthTotals || {};
-        const calcPossible = qMonthKeys.reduce((s, m) => s + parseFloat(mt[m]?.possible || 0), 0);
-        const calcEarned   = qMonthKeys.reduce((s, m) => s + parseFloat(mt[m]?.earned  || 0), 0);
-        const calcPct      = calcPossible > 0 ? Math.round((calcEarned / calcPossible) * 100 * 100) / 100 : 0;
+      if (activeFilter === 'approved') {
+        // ── Approved tab — existing format ────────────────────────────────────
+        const approvedEmps = allEmps.filter((e) => e.quarterlyApproval?.status === 'approved');
+        if (!approvedEmps.length) { window.alert('No approved employees to export.'); return; }
 
-        const faScorePct = parseFloat(emp.quarterlyApproval?.quarterlyScore ?? 0);
-
-        const approvedDate = emp.quarterlyApproval?.approvedAt
-          ? new Date(emp.quarterlyApproval.approvedAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
-          : '';
-
-        return [
-          idx + 1,
-          emp.employee?.name             || '',
-          emp.employee?.employeeCode     || '',
-          emp.employee?.department?.name || '',
-          emp.employee?.designation      || '',
-          emp.employee?.manager?.name    || '',
-          `${calcPct}%`,                                            // System Calc %
-          `${Math.round(faScorePct * 100) / 100}%`,                // FA Final Score % (also used as PLI Payout)
-          approvedDate,
-          emp.quarterlyApproval?.faComment || '',
+        const headers = [
+          'S.No', 'Employee Name', 'Employee Code', 'Department', 'Designation',
+          'Reporting Manager', 'System Calc %', 'FA Final Score %', 'Approved Date', 'FA Comment',
         ];
-      });
+        const dataRows = approvedEmps.map((emp, idx) => {
+          const mt              = emp.monthTotals || {};
+          const calcEarned      = qMonthKeys.reduce((s, m) => s + parseFloat(mt[m]?.earned   || 0), 0);
+          const calcPossible    = qMonthKeys.reduce((s, m) => s + parseFloat(mt[m]?.possible || 0), 0);
+          const roundedEarned   = Math.round(calcEarned);
+          const roundedPossible = Math.round(calcPossible);
+          // Match screen: round earned & possible first, then derive integer %
+          const calcPct         = roundedPossible > 0 ? `${Math.round((roundedEarned / roundedPossible) * 100)}%` : '—';
+          // Match screen: Math.round(faScorePct) → integer %
+          const faScorePct      = emp.quarterlyApproval?.quarterlyScore != null
+            ? `${Math.round(parseFloat(emp.quarterlyApproval.quarterlyScore))}%`
+            : '—';
+          const approvedDate    = emp.quarterlyApproval?.approvedAt
+            ? new Date(emp.quarterlyApproval.approvedAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+            : '';
+          return [
+            idx + 1,
+            emp.employee?.name || '', emp.employee?.employeeCode || '',
+            emp.employee?.department?.name || '', emp.employee?.designation || '',
+            emp.employee?.manager?.name || '',
+            calcPct, faScorePct,
+            approvedDate, emp.quarterlyApproval?.faComment || '',
+          ];
+        });
+        const ws = XLSX.utils.aoa_to_sheet([
+          [`PLI Quarterly Approval Report — ${quarter}  |  FY ${fy}`],
+          [`Exported: ${new Date().toLocaleString('en-IN')}    ·    Approved: ${approvedEmps.length} employees`],
+          [], headers, ...dataRows,
+        ]);
+        ws['!cols'] = [
+          { wch: 5 }, { wch: 26 }, { wch: 13 }, { wch: 22 },
+          { wch: 22 }, { wch: 22 }, { wch: 16 }, { wch: 16 }, { wch: 16 }, { wch: 36 },
+        ];
+        ws['!merges'] = [
+          { s: { r: 0, c: 0 }, e: { r: 0, c: headers.length - 1 } },
+          { s: { r: 1, c: 0 }, e: { r: 1, c: headers.length - 1 } },
+        ];
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, `${quarter} ${fy}`.replace(/[:\\/?*[\]]/g, '-'));
+        XLSX.writeFile(wb, `PLI_${quarter}_${fy}_Approved_${today}.xlsx`);
 
-      const headers = [
-        'S.No', 'Employee Name', 'Employee Code', 'Department', 'Designation', 'Reporting Manager',
-        'System Calc %', 'FA Final Score %', 'Approved Date', 'FA Comment',
-      ];
+      } else if (activeFilter === 'pending') {
+        // ── Pending tab — per-month DONE / Pending status ─────────────────────
+        const pendingEmps = allEmps.filter((e) => !e.allMonthsReviewed);
+        if (!pendingEmps.length) { window.alert('No pending employees to export.'); return; }
 
-      // ── Build workbook ───────────────────────────────────────────────────────
-      const XLSX = await import('xlsx');
-      const wb   = XLSX.utils.book_new();
+        const monthLabels = qMonthKeys.map((m) => MONTHS.find((x) => x.value === Number(m))?.label || String(m));
+        const headers     = [
+          'S.No', 'Employee Name', 'Employee Code', 'Department', 'Designation',
+          'Reporting Manager', ...monthLabels,
+        ];
+        const dataRows = pendingEmps.map((emp, idx) => {
+          const monthsArr     = emp.months || [];
+          // Any status at or beyond manager_reviewed means the manager has reviewed that month
+          const DONE_STATUSES = new Set(['manager_reviewed', 'final_approved', 'final_reviewed', 'locked']);
+          const monthStatuses = qMonthKeys.map((m) => {
+            const found = monthsArr.find((x) => Number(x.month) === Number(m));
+            return DONE_STATUSES.has(found?.status) ? 'DONE' : 'Pending';
+          });
+          return [
+            idx + 1,
+            emp.employee?.name || '', emp.employee?.employeeCode || '',
+            emp.employee?.department?.name || '', emp.employee?.designation || '',
+            emp.employee?.manager?.name || '',
+            ...monthStatuses,
+          ];
+        });
+        const ws = XLSX.utils.aoa_to_sheet([
+          [`PLI Pending Review Report — ${quarter}  |  FY ${fy}`],
+          [`Exported: ${new Date().toLocaleString('en-IN')}    ·    Pending: ${pendingEmps.length} employees`],
+          [], headers, ...dataRows,
+        ]);
+        ws['!cols'] = [
+          { wch: 5 }, { wch: 26 }, { wch: 13 }, { wch: 22 }, { wch: 22 }, { wch: 22 },
+          ...qMonthKeys.map(() => ({ wch: 14 })),
+        ];
+        ws['!merges'] = [
+          { s: { r: 0, c: 0 }, e: { r: 0, c: headers.length - 1 } },
+          { s: { r: 1, c: 0 }, e: { r: 1, c: headers.length - 1 } },
+        ];
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, `${quarter} ${fy} Pending`.replace(/[:\\/?*[\]]/g, '-'));
+        XLSX.writeFile(wb, `PLI_${quarter}_${fy}_Pending_${today}.xlsx`);
 
-      const titleRow   = [`PLI Quarterly Approval Report — ${quarter}  |  FY ${fy}`];
-      const subtitleRow = [`Exported: ${new Date().toLocaleString('en-IN')}    ·    Approved: ${approvedEmps.length} employees`];
+      } else {
+        // ── All tab + Ready tab — combined format (status + months + scores) ──
+        const sourceEmps = activeFilter === 'ready'
+          ? allEmps.filter((e) => e.allMonthsReviewed && e.quarterlyApproval?.status !== 'approved')
+          : allEmps;
+        if (!sourceEmps.length) { window.alert('No employees to export.'); return; }
 
-      const wsData = [titleRow, subtitleRow, [], headers, ...dataRows];
-      const ws     = XLSX.utils.aoa_to_sheet(wsData);
+        const monthLabels = qMonthKeys.map((m) => MONTHS.find((x) => x.value === Number(m))?.label || String(m));
+        const headers     = [
+          'S.No', 'Employee Name', 'Employee Code', 'Department', 'Designation',
+          'Reporting Manager', 'Status', ...monthLabels, 'System Calc %', 'FA Final Score %',
+        ];
 
-      // Column widths (characters)
-      ws['!cols'] = [
-        { wch: 5  }, // S.No
-        { wch: 26 }, // Name
-        { wch: 13 }, // Code
-        { wch: 22 }, // Dept
-        { wch: 22 }, // Designation
-        { wch: 22 }, // Manager
-        { wch: 16 }, // System Calc %
-        { wch: 16 }, // FA Final Score %
-        { wch: 16 }, // Approved Date
-        { wch: 36 }, // FA Comment
-      ];
+        const getStatus = (e) => {
+          if (e.quarterlyApproval?.status === 'approved') return 'Approved';
+          if (e.allMonthsReviewed) return 'Ready for Review';
+          return 'Pending';
+        };
 
-      // Merge title across all columns
-      const totalCols = headers.length - 1;
-      ws['!merges'] = [
-        { s: { r: 0, c: 0 }, e: { r: 0, c: totalCols } },
-        { s: { r: 1, c: 0 }, e: { r: 1, c: totalCols } },
-      ];
+        const dataRows = sourceEmps.map((emp, idx) => {
+          const mt              = emp.monthTotals || {};
+          const calcEarned      = qMonthKeys.reduce((s, m) => s + parseFloat(mt[m]?.earned   || 0), 0);
+          const calcPossible    = qMonthKeys.reduce((s, m) => s + parseFloat(mt[m]?.possible || 0), 0);
+          const roundedEarned   = Math.round(calcEarned);
+          const roundedPossible = Math.round(calcPossible);
+          // Match screen: round earned & possible first, then derive integer %
+          const calcPct         = roundedPossible > 0 ? `${Math.round((roundedEarned / roundedPossible) * 100)}%` : '—';
+          // Match screen: Math.round(faScorePct) → integer %; only set when approved
+          const faScorePct      = emp.quarterlyApproval?.status === 'approved' && emp.quarterlyApproval?.quarterlyScore != null
+            ? `${Math.round(parseFloat(emp.quarterlyApproval.quarterlyScore))}%`
+            : '—';
 
-      const sheetName = `${quarter} ${fy}`.replace(/[:\\/?*[\]]/g, '-');
-      XLSX.utils.book_append_sheet(wb, ws, sheetName);
+          const monthsArr     = emp.months || [];
+          // Any status at or beyond manager_reviewed means the manager has reviewed that month
+          const DONE_STATUSES = new Set(['manager_reviewed', 'final_approved', 'final_reviewed', 'locked']);
+          const monthStatuses = qMonthKeys.map((m) => {
+            const found = monthsArr.find((x) => Number(x.month) === Number(m));
+            return DONE_STATUSES.has(found?.status) ? 'DONE' : 'Pending';
+          });
 
-      const fileName = `PLI_${quarter}_${fy}_Approved_${new Date().toISOString().slice(0, 10)}.xlsx`;
-      XLSX.writeFile(wb, fileName);
+          return [
+            idx + 1,
+            emp.employee?.name || '', emp.employee?.employeeCode || '',
+            emp.employee?.department?.name || '', emp.employee?.designation || '',
+            emp.employee?.manager?.name || '',
+            getStatus(emp),
+            ...monthStatuses,
+            calcPct,
+            faScorePct,
+          ];
+        });
+
+        const tabLabel = activeFilter === 'ready' ? 'Ready for Review' : 'All Employees';
+        const ws = XLSX.utils.aoa_to_sheet([
+          [`PLI ${tabLabel} Report — ${quarter}  |  FY ${fy}`],
+          [`Exported: ${new Date().toLocaleString('en-IN')}    ·    Total: ${sourceEmps.length} employees`],
+          [], headers, ...dataRows,
+        ]);
+        ws['!cols'] = [
+          { wch: 5 }, { wch: 26 }, { wch: 13 }, { wch: 22 }, { wch: 22 }, { wch: 22 },
+          { wch: 18 },
+          ...qMonthKeys.map(() => ({ wch: 14 })),
+          { wch: 16 }, { wch: 16 },
+        ];
+        ws['!merges'] = [
+          { s: { r: 0, c: 0 }, e: { r: 0, c: headers.length - 1 } },
+          { s: { r: 1, c: 0 }, e: { r: 1, c: headers.length - 1 } },
+        ];
+        const suffix  = activeFilter === 'ready' ? 'Ready' : 'All';
+        const wb      = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, `${quarter} ${fy} ${suffix}`.replace(/[:\\/?*[\]]/g, '-'));
+        XLSX.writeFile(wb, `PLI_${quarter}_${fy}_${suffix}_${today}.xlsx`);
+      }
     } catch (err) {
       window.alert('Export failed. Please try again.');
       console.error('[Excel Export]', err);
@@ -601,19 +697,31 @@ function WorkbenchList() {
             {recalculating ? 'Recalculating…' : 'Recalculate'}
           </button>
 
-          {/* Download Excel — only active when approved employees exist */}
-          <button
-            onClick={handleDownloadExcel}
-            disabled={exporting || loading || !(data?.approvedCount > 0)}
-            title={data?.approvedCount > 0 ? `Download Excel for ${data.approvedCount} approved employees` : 'No approved employees to export'}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-300 rounded-lg hover:bg-emerald-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            {exporting
-              ? <HiOutlineRefresh className="h-3.5 w-3.5 animate-spin" />
-              : <HiOutlineDownload className="h-3.5 w-3.5" />
-            }
-            {exporting ? 'Exporting…' : `Download Excel${data?.approvedCount > 0 ? ` (${data.approvedCount})` : ''}`}
-          </button>
+          {/* Download Excel — label, count, and format change per active tab */}
+          {(() => {
+            const tabMeta = {
+              all:      { label: 'Download All',     count: allEmployees.length,  tip: 'Download full status report for all employees' },
+              ready:    { label: 'Download Ready',   count: readyCount,           tip: 'Download ready-for-review report with monthly status' },
+              pending:  { label: 'Download Pending', count: pendingCount,         tip: 'Download pending report with monthly status' },
+              approved: { label: 'Download Excel',   count: data?.approvedCount || 0, tip: 'Download approved employees report' },
+            }[activeFilter] || { label: 'Download Excel', count: 0, tip: '' };
+
+            const isDisabled = exporting || loading || tabMeta.count === 0;
+            return (
+              <button
+                onClick={handleDownloadExcel}
+                disabled={isDisabled}
+                title={tabMeta.count > 0 ? `${tabMeta.tip} (${tabMeta.count})` : 'No data to export'}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-300 rounded-lg hover:bg-emerald-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {exporting
+                  ? <HiOutlineRefresh className="h-3.5 w-3.5 animate-spin" />
+                  : <HiOutlineDownload className="h-3.5 w-3.5" />
+                }
+                {exporting ? 'Exporting…' : `${tabMeta.label}${tabMeta.count > 0 ? ` (${tabMeta.count})` : ''}`}
+              </button>
+            );
+          })()}
         </div>
       </div>
 

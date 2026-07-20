@@ -44,6 +44,20 @@ import ScoringConfigPage from '../pages/admin/ScoringConfigPage';
 import Reports from '../pages/admin/Reports';
 import AuditLogs from '../pages/admin/AuditLogs';
 
+// CSAT pages
+import ClientOrgsPage from '../pages/csat/ClientOrgsPage';
+import ClientEmployeesPage from '../pages/csat/ClientEmployeesPage';
+import SurveyBuilderPage from '../pages/csat/SurveyBuilderPage';
+import SendSurveyPage from '../pages/csat/SendSurveyPage';
+import PublicSurveyPage from '../pages/csat/PublicSurveyPage';
+import CsatDashboardPage from '../pages/csat/CsatDashboardPage';
+import SurveyResponsesPage from '../pages/csat/SurveyResponsesPage';
+import RecipientResponsePage from '../pages/csat/RecipientResponsePage';
+import SurveyPreviewPage from '../pages/csat/SurveyPreviewPage';
+import SurveyApprovalInboxPage from '../pages/csat/SurveyApprovalInboxPage';
+import SurveyApprovalDetailPage from '../pages/csat/SurveyApprovalDetailPage';
+import MyApprovalRequestsPage from '../pages/csat/MyApprovalRequestsPage';
+
 // PM pages
 import PMDashboard from '../pages/pm/PMDashboard';
 import ProjectList from '../pages/pm/ProjectList';
@@ -83,6 +97,19 @@ function HomeRedirect() {
 export default function AppRoutes() {
   return (
     <Routes>
+      {/* Fully public — no auth, no layout */}
+      <Route path="/survey/:token" element={<PublicSurveyPage />} />
+
+      {/* Auth-protected but NO sidebar/header — admin sees the exact client view */}
+      <Route
+        path="/csat/surveys/:surveyId/preview"
+        element={
+          <PrivateRoute>
+            <SurveyPreviewPage />
+          </PrivateRoute>
+        }
+      />
+
       {/* Public */}
       <Route path="/login" element={<LoginPage />} />
 
@@ -148,6 +175,19 @@ export default function AppRoutes() {
         <Route path="/pm/projects/:id/daily-logs" element={<RoleRoute roles={ALL_ROLES}><DailyLogHistory /></RoleRoute>} />
         <Route path="/pm/my-tasks" element={<RoleRoute roles={ALL_ROLES}><MyTasks /></RoleRoute>} />
         <Route path="/pm/settings" element={<RoleRoute roles={['admin']}><PMSettings /></RoleRoute>} />
+
+        {/* CSAT routes */}
+        <Route path="/csat/client-organisations" element={<RoleRoute roles={['admin', 'manager', 'senior_manager']}><ClientOrgsPage /></RoleRoute>} />
+        <Route path="/csat/client-organisations/:orgId/employees" element={<RoleRoute roles={['admin', 'manager', 'senior_manager']}><ClientEmployeesPage /></RoleRoute>} />
+        <Route path="/csat/dashboard" element={<RoleRoute roles={ALL_ROLES}><CsatDashboardPage /></RoleRoute>} />
+        <Route path="/csat/surveys" element={<RoleRoute roles={['admin']}><SurveyBuilderPage /></RoleRoute>} />
+        <Route path="/csat/send" element={<RoleRoute roles={['admin', 'manager', 'senior_manager']}><SendSurveyPage /></RoleRoute>} />
+        <Route path="/csat/send/:dispatchId/revise" element={<RoleRoute roles={['manager', 'senior_manager']}><SendSurveyPage /></RoleRoute>} />
+        <Route path="/csat/responses" element={<RoleRoute roles={['admin', 'manager', 'senior_manager', 'hr_admin', 'final_approver']}><SurveyResponsesPage /></RoleRoute>} />
+        <Route path="/csat/responses/:dispatchId/recipient/:recipientId" element={<RoleRoute roles={['admin', 'manager', 'senior_manager', 'hr_admin', 'final_approver']}><RecipientResponsePage /></RoleRoute>} />
+        <Route path="/csat/approval-inbox" element={<RoleRoute roles={['admin']}><SurveyApprovalInboxPage /></RoleRoute>} />
+        <Route path="/csat/approval/:approvalId" element={<RoleRoute roles={['admin', 'manager', 'senior_manager']}><SurveyApprovalDetailPage /></RoleRoute>} />
+        <Route path="/csat/my-requests" element={<RoleRoute roles={['manager', 'senior_manager']}><MyApprovalRequestsPage /></RoleRoute>} />
       </Route>
 
       <Route path="*" element={<NotFoundPage />} />

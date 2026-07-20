@@ -16,5 +16,9 @@ router.use('/scoring-configs', require('./scoringConfig.routes'));
 router.use('/notifications', require('./notification.routes'));
 router.use('/audit-logs', require('./audit.routes'));
 router.use('/pm', require('./pm/index'));
+router.use('/csat', require('./csat/index'));
+
+// Public (no-auth) routes — rate-limited inside the file
+router.use('/public/survey', require('./public/publicSurvey.routes'));
 
 module.exports = router;

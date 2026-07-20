@@ -276,8 +276,150 @@ const sendCycleOpenedEmail = async (employeeEmail, employeeName, month, year, co
   return sendEmail(employeeEmail, subject, html);
 };
 
+/**
+ * Send CSAT survey invitation to a client employee.
+ * Throws on SMTP failure — caller catches and stores emailError.
+ */
+const sendCsatSurveyEmail = async (to, recipientName, surveyName, surveyLink, emailSubject, expiresAt) => {
+  const expiryNote = expiresAt
+    ? `<p style="color: #d97706; font-size: 13px;">⏰ This survey closes on <strong>${new Date(expiresAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })}</strong>.</p>`
+    : '';
+  const subject = emailSubject || `Survey: ${surveyName}`;
+  const html = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+      <h2 style="color: #059669;">We'd love your feedback</h2>
+      <p>Dear <strong>${recipientName}</strong>,</p>
+      <p>You have received a satisfaction survey: <strong>${surveyName}</strong>.</p>
+      <p style="color: #6b7280; font-size: 13px;">No account required. Takes under 2 minutes.</p>
+      ${expiryNote}
+      <p style="margin-top: 24px;">
+        <a href="${surveyLink}"
+           style="background-color: #059669; color: white; padding: 12px 28px; text-decoration: none; border-radius: 6px; font-size: 15px;">
+          Start Survey
+        </a>
+      </p>
+      <hr style="margin-top: 32px; border: none; border-top: 1px solid #e5e7eb;" />
+      <p style="font-size: 12px; color: #6b7280;">If you did not expect this survey, you may ignore this email.</p>
+    </div>
+  `;
+  const t = getTransporter();
+  if (!t) throw new Error('SMTP not configured');
+  const from = process.env.SMTP_FROM || process.env.SMTP_USER;
+  await t.sendMail({ from, to, subject, html });
+};
+
+/**
+ * Send CSAT survey reminder to a non-submitting recipient.
+ * Throws on SMTP failure — caller catches and logs.
+ */
+const sendCsatReminderEmail = async (to, recipientName, surveyName, surveyLink) => {
+  const subject = `Reminder: ${surveyName}`;
+  const html = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+      <h2 style="color: #d97706;">Reminder: Your feedback is still pending</h2>
+      <p>Dear <strong>${recipientName}</strong>,</p>
+      <p>You haven't completed the survey yet: <strong>${surveyName}</strong>.</p>
+      <p style="color: #6b7280; font-size: 13px;">It only takes under 2 minutes.</p>
+      <p style="margin-top: 24px;">
+        <a href="${surveyLink}"
+           style="background-color: #d97706; color: white; padding: 12px 28px; text-decoration: none; border-radius: 6px; font-size: 15px;">
+          Complete Survey
+        </a>
+      </p>
+      <hr style="margin-top: 32px; border: none; border-top: 1px solid #e5e7eb;" />
+      <p style="font-size: 12px; color: #6b7280;">If you did not expect this survey, you may ignore this email.</p>
+    </div>
+  `;
+  const t = getTransporter();
+  if (!t) throw new Error('SMTP not configured');
+  const from = process.env.SMTP_FROM || process.env.SMTP_USER;
+  await t.sendMail({ from, to, subject, html });
+};
+
+// ── CSAT Approval emails ──────────────────────────────────────────────────────
+
+const sendApprovalRequestEmail = async (adminEmail, {
+  requesterName, surveyName, orgName, recipientCount,
+  dispatchMode, scheduledAt, approvalDeadline, version, approvalLink,
+}) => {
+  const subject = version > 1
+    ? `[Resubmission v${version}] Survey Dispatch Approval: ${surveyName}`
+    : `New Survey Dispatch Approval Request: ${surveyName}`;
+
+  const deadlineText = approvalDeadline
+    ? `<p><strong>Approval Deadline:</strong> ${new Date(approvalDeadline).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}</p>`
+    : '';
+
+  const html = `
+    <p>Hi,</p>
+    <p><strong>${requesterName}</strong> submitted a survey dispatch for your approval.</p>
+    <table style="border-collapse:collapse;width:100%;max-width:480px">
+      <tr><td style="padding:4px 8px;color:#555">Survey</td><td style="padding:4px 8px"><strong>${surveyName}</strong></td></tr>
+      <tr><td style="padding:4px 8px;color:#555">Organisation</td><td style="padding:4px 8px">${orgName || '—'}</td></tr>
+      <tr><td style="padding:4px 8px;color:#555">Recipients</td><td style="padding:4px 8px">${recipientCount || '—'}</td></tr>
+      <tr><td style="padding:4px 8px;color:#555">Mode</td><td style="padding:4px 8px">${dispatchMode}</td></tr>
+      ${scheduledAt ? `<tr><td style="padding:4px 8px;color:#555">Scheduled</td><td style="padding:4px 8px">${new Date(scheduledAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}</td></tr>` : ''}
+    </table>
+    ${deadlineText}
+    <p><a href="${approvalLink}" style="display:inline-block;margin-top:12px;padding:10px 20px;background:#059669;color:#fff;text-decoration:none;border-radius:6px">Review Request</a></p>
+  `;
+  return sendEmail(adminEmail, subject, html);
+};
+
+const sendApprovalOutcomeEmail = async (managerEmail, {
+  outcome, surveyName, overallFeedback, questionFeedbackCount, approvalLink,
+}) => {
+  const outcomeText = {
+    approved: '✅ Your survey dispatch request has been approved.',
+    changes_requested: '🔄 Your survey dispatch request needs changes.',
+    rejected: '❌ Your survey dispatch request has been rejected.',
+    expired: '⏱ Your survey dispatch request expired without approval.',
+  }[outcome] || 'Your approval request was updated.';
+
+  const subject = {
+    approved: `Approved: ${surveyName}`,
+    changes_requested: `Changes Requested: ${surveyName}`,
+    rejected: `Rejected: ${surveyName}`,
+    expired: `Expired: ${surveyName}`,
+  }[outcome] || `Update: ${surveyName}`;
+
+  const feedbackHtml = overallFeedback
+    ? `<p><strong>Admin feedback:</strong> ${overallFeedback}</p>`
+    : '';
+  const qFeedback = questionFeedbackCount
+    ? `<p>${questionFeedbackCount} per-question note(s) provided — view in portal.</p>`
+    : '';
+
+  const html = `
+    <p>${outcomeText}</p>
+    <p><strong>Survey:</strong> ${surveyName}</p>
+    ${feedbackHtml}${qFeedback}
+    <p><a href="${approvalLink}" style="display:inline-block;margin-top:12px;padding:10px 20px;background:#059669;color:#fff;text-decoration:none;border-radius:6px">View Details</a></p>
+  `;
+  return sendEmail(managerEmail, subject, html);
+};
+
+const sendApprovalEscalationEmail = async (adminEmail, {
+  surveyName, requesterName, minutesRemaining, approvalLink,
+}) => {
+  const subject = `⚠️ Approval Needed in ${minutesRemaining} min: ${surveyName}`;
+  const html = `
+    <p><strong>⚠️ Urgent:</strong> A survey dispatch approval is about to expire.</p>
+    <p><strong>Survey:</strong> ${surveyName}</p>
+    <p><strong>Requested by:</strong> ${requesterName || '—'}</p>
+    <p><strong>Time remaining:</strong> ${minutesRemaining} minutes</p>
+    <p><a href="${approvalLink}" style="display:inline-block;margin-top:12px;padding:10px 20px;background:#dc2626;color:#fff;text-decoration:none;border-radius:6px">Review Now</a></p>
+  `;
+  return sendEmail(adminEmail, subject, html);
+};
+
 module.exports = {
   sendEmail,
+  sendCsatSurveyEmail,
+  sendCsatReminderEmail,
+  sendApprovalRequestEmail,
+  sendApprovalOutcomeEmail,
+  sendApprovalEscalationEmail,
   sendKpiAssignedEmail,
   sendSubmissionReminderEmail,
   sendReviewCompleteEmail,

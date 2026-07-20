@@ -115,6 +115,14 @@ const NOTIFICATION_TYPES = {
   PM_DAILY_LOG: 'pm_daily_log',
   // Scoring config
   SCORING_CONFIG_UPDATED: 'scoring_config_updated',
+  // CSAT
+  CSAT_ALL_SUBMITTED: 'csat_all_submitted',
+  // CSAT Approval
+  CSAT_APPROVAL_SUBMITTED: 'csat_approval_submitted',
+  CSAT_APPROVAL_APPROVED: 'csat_approval_approved',
+  CSAT_APPROVAL_CHANGES_REQUESTED: 'csat_approval_changes_requested',
+  CSAT_APPROVAL_REJECTED: 'csat_approval_rejected',
+  CSAT_APPROVAL_EXPIRED: 'csat_approval_expired',
 };
 
 // Audit actions
@@ -132,6 +140,19 @@ const AUDIT_ACTIONS = {
   REOPENED: 'reopened',
   LOGIN: 'login',
   PASSWORD_CHANGED: 'password_changed',
+  // CSAT
+  DISPATCH_CREATED: 'dispatch_created',
+  DISPATCH_CLOSED: 'dispatch_closed',
+  SURVEY_PUBLISHED: 'survey_published',
+  EMAIL_RESENT: 'email_resent',
+  // CSAT Approval
+  APPROVAL_SUBMITTED: 'approval_submitted',
+  APPROVAL_APPROVED: 'approval_approved',
+  APPROVAL_CHANGES_REQUESTED: 'approval_changes_requested',
+  APPROVAL_REJECTED: 'approval_rejected',
+  APPROVAL_RESUBMITTED: 'approval_resubmitted',
+  APPROVAL_EXPIRED: 'approval_deadline_expired',
+  DISPATCH_REVISED: 'dispatch_revised',
 };
 
 // Project Management statuses

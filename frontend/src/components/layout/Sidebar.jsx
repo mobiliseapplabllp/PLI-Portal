@@ -27,6 +27,10 @@ import {
   HiOutlineCheckCircle,
   HiOutlineClipboard,
   HiOutlineEye,
+  HiOutlinePaperAirplane,
+  HiOutlineAnnotation,
+  HiOutlineInbox,
+  HiOutlineClipboardCheck as HiOutlineMyRequests,
 } from 'react-icons/hi';
 import { ROLE_CONFIG } from '../../utils/constants';
 
@@ -188,8 +192,48 @@ const pmNavItems = {
     },
     { to: '/pm/my-tasks', label: 'My Tasks', icon: HiOutlineCheckCircle },
     { to: '/pm/settings', label: 'PM Settings', icon: HiOutlineCog },
+    { section: 'Client Surveys' },
+    { to: '/csat/dashboard', label: 'CSAT Dashboard', icon: HiOutlineChartBar },
+    { to: '/csat/client-organisations', label: 'Client Orgs', icon: HiOutlineOfficeBuilding },
+    { to: '/csat/approval-inbox', label: 'Approval Inbox', icon: HiOutlineInbox },
+    {
+      label: 'Surveys',
+      icon: HiOutlineAnnotation,
+      children: [
+        { to: '/csat/surveys', label: 'Survey Builder', icon: HiOutlinePencilAlt },
+        { to: '/csat/send', label: 'Send Survey', icon: HiOutlinePaperAirplane },
+        { to: '/csat/responses', label: 'Survey Responses', icon: HiOutlineChartBar },
+      ],
+    },
   ],
 };
+
+// CSAT items appended to manager/senior_manager/hr_admin/final_approver PM nav
+const csatManagerItems = [
+  { section: 'Client Surveys' },
+  { to: '/csat/dashboard', label: 'CSAT Dashboard', icon: HiOutlineChartBar },
+  {
+    label: 'Surveys',
+    icon: HiOutlineAnnotation,
+    children: [
+      { to: '/csat/send', label: 'Send Survey', icon: HiOutlinePaperAirplane },
+      { to: '/csat/my-requests', label: 'My Requests', icon: HiOutlineMyRequests },
+      { to: '/csat/responses', label: 'Survey Responses', icon: HiOutlineChartBar },
+    ],
+  },
+];
+
+const csatReadOnlyItems = [
+  { section: 'Client Surveys' },
+  { to: '/csat/dashboard', label: 'CSAT Dashboard', icon: HiOutlineChartBar },
+  { to: '/csat/responses', label: 'Survey Responses', icon: HiOutlineChartBar },
+];
+
+// Inject CSAT into pm nav items for non-admin roles
+pmNavItems.manager       = [...pmNavItems.manager,       ...csatManagerItems];
+pmNavItems.senior_manager = [...pmNavItems.senior_manager, ...csatManagerItems];
+pmNavItems.hr_admin      = [...pmNavItems.hr_admin,      ...csatReadOnlyItems];
+pmNavItems.final_approver = [...pmNavItems.final_approver, ...csatReadOnlyItems];
 
 export default function Sidebar({ collapsed, onToggle, onNavClick }) {
   const { user } = useSelector((state) => state.auth);

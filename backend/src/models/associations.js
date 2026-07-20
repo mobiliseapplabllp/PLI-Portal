@@ -111,5 +111,67 @@ DailyStatusLog.belongsTo(User, { foreignKey: 'createdById', as: 'createdBy' });
 ProjectNotificationRecipient.belongsTo(Project, { foreignKey: 'projectId', as: 'project' });
 ProjectNotificationRecipient.belongsTo(User, { foreignKey: 'userId', as: 'user' });
 
+// ── CSAT Models ───────────────────────────────────────────────────────────────
+const ClientOrganisation = require('./csat/ClientOrganisation');
+const ClientEmployee = require('./csat/ClientEmployee');
+const Survey = require('./csat/Survey');
+const SurveyQuestion = require('./csat/SurveyQuestion');
+const SurveyDispatch = require('./csat/SurveyDispatch');
+const SurveyRecipient = require('./csat/SurveyRecipient');
+const SurveyResponse = require('./csat/SurveyResponse');
+const SurveyDispatchApproval = require('./csat/SurveyDispatchApproval');
+const SurveyDispatchApprovalFeedback = require('./csat/SurveyDispatchApprovalFeedback');
+
+// ── ClientOrganisation ────────────────────────────────────────────────────────
+ClientOrganisation.belongsTo(User, { foreignKey: 'createdById', as: 'createdBy' });
+ClientOrganisation.belongsTo(User, { foreignKey: 'managedById', as: 'managedBy' });
+ClientOrganisation.hasMany(ClientEmployee, { foreignKey: 'clientOrganisationId', as: 'employees', onDelete: 'CASCADE' });
+
+// ── ClientEmployee ────────────────────────────────────────────────────────────
+ClientEmployee.belongsTo(ClientOrganisation, { foreignKey: 'clientOrganisationId', as: 'organisation' });
+ClientEmployee.hasMany(SurveyRecipient, { foreignKey: 'clientEmployeeId', as: 'surveyRecipients' });
+
+// ── Survey ────────────────────────────────────────────────────────────────────
+Survey.belongsTo(User, { foreignKey: 'createdById', as: 'createdBy' });
+Survey.hasMany(SurveyQuestion, { foreignKey: 'surveyId', as: 'questions', onDelete: 'CASCADE' });
+Survey.hasMany(SurveyDispatch, { foreignKey: 'surveyId', as: 'dispatches' });
+
+// ── SurveyQuestion ────────────────────────────────────────────────────────────
+SurveyQuestion.belongsTo(Survey, { foreignKey: 'surveyId', as: 'survey' });
+SurveyQuestion.hasMany(SurveyResponse, { foreignKey: 'surveyQuestionId', as: 'responses' });
+
+// ── SurveyDispatch ────────────────────────────────────────────────────────────
+SurveyDispatch.belongsTo(Survey, { foreignKey: 'surveyId', as: 'survey' });
+SurveyDispatch.belongsTo(ClientOrganisation, { foreignKey: 'clientOrganisationId', as: 'clientOrganisation' });
+SurveyDispatch.belongsTo(User, { foreignKey: 'sentById', as: 'sentBy' });
+// Self-referencing: parent dispatch (recurring) ↔ child dispatches
+SurveyDispatch.belongsTo(SurveyDispatch, { foreignKey: 'parentDispatchId', as: 'parentDispatch' });
+SurveyDispatch.hasMany(SurveyDispatch, { foreignKey: 'parentDispatchId', as: 'childDispatches' });
+SurveyDispatch.hasMany(SurveyRecipient, { foreignKey: 'surveyDispatchId', as: 'recipients', onDelete: 'CASCADE' });
+
+// ── SurveyRecipient ───────────────────────────────────────────────────────────
+SurveyRecipient.belongsTo(SurveyDispatch, { foreignKey: 'surveyDispatchId', as: 'dispatch' });
+SurveyRecipient.belongsTo(ClientEmployee, { foreignKey: 'clientEmployeeId', as: 'employee' });
+SurveyRecipient.hasMany(SurveyResponse, { foreignKey: 'surveyRecipientId', as: 'responses', onDelete: 'CASCADE' });
+
+// ── SurveyResponse ────────────────────────────────────────────────────────────
+SurveyResponse.belongsTo(SurveyRecipient, { foreignKey: 'surveyRecipientId', as: 'recipient' });
+SurveyResponse.belongsTo(SurveyQuestion, { foreignKey: 'surveyQuestionId', as: 'question' });
+
+// ── SurveyDispatchApproval ────────────────────────────────────────────────────
+SurveyDispatch.hasMany(SurveyDispatchApproval, { foreignKey: 'surveyDispatchId', as: 'approvals' });
+SurveyDispatchApproval.belongsTo(SurveyDispatch, { foreignKey: 'surveyDispatchId', as: 'dispatch' });
+SurveyDispatchApproval.belongsTo(User, { foreignKey: 'requestedById', as: 'requestedBy' });
+SurveyDispatchApproval.belongsTo(User, { foreignKey: 'reviewedById', as: 'reviewedBy' });
+SurveyDispatchApproval.hasMany(SurveyDispatchApprovalFeedback, { foreignKey: 'surveyDispatchApprovalId', as: 'feedbacks' });
+SurveyDispatchApprovalFeedback.belongsTo(SurveyDispatchApproval, { foreignKey: 'surveyDispatchApprovalId', as: 'approval' });
+SurveyDispatchApprovalFeedback.belongsTo(SurveyQuestion, { foreignKey: 'surveyQuestionId', as: 'question' });
+
 // Export PM models so other files can import from associations
-module.exports = { Project, ProjectMember, Milestone, Task, DailyStatusLog, ProjectNotificationRecipient, PmSettings };
+module.exports = {
+  Project, ProjectMember, Milestone, Task, DailyStatusLog, ProjectNotificationRecipient, PmSettings,
+  // CSAT
+  ClientOrganisation, ClientEmployee, Survey, SurveyQuestion,
+  SurveyDispatch, SurveyRecipient, SurveyResponse,
+  SurveyDispatchApproval, SurveyDispatchApprovalFeedback,
+};

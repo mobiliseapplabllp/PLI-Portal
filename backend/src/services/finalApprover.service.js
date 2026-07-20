@@ -103,8 +103,15 @@ const getDeptQuarterlyStatus = async (user, query) => {
       assignmentIds[a.month] = a.id;
     });
 
-    const allMonthsReviewed = months.every((m) => monthMap[m] === KPI_STATUS.MANAGER_REVIEWED);
-    const readyCount = months.filter((m) => monthMap[m] === KPI_STATUS.MANAGER_REVIEWED).length;
+    // Any status at or beyond manager_reviewed means the manager has reviewed that month
+    const REVIEWED_OR_BEYOND = new Set([
+      KPI_STATUS.MANAGER_REVIEWED,
+      KPI_STATUS.FINAL_APPROVED,
+      KPI_STATUS.FINAL_REVIEWED,
+      KPI_STATUS.LOCKED,
+    ]);
+    const allMonthsReviewed = months.every((m) => REVIEWED_OR_BEYOND.has(monthMap[m]));
+    const readyCount = months.filter((m) => REVIEWED_OR_BEYOND.has(monthMap[m])).length;
 
     let totalMonthlyWt = null;
     let totalQuarterlyWt = null;
