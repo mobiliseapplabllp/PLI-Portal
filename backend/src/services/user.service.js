@@ -3,9 +3,12 @@ const sequelize = require('../config/database');
 const User = require('../models/User');
 const Department = require('../models/Department');
 const KpiAssignment = require('../models/KpiAssignment');
+const KpiItem = require('../models/KpiItem');
 const { KPI_STATUS } = require('../config/constants');
 const { NotFoundError } = require('../utils/errors');
 const { createAuditLog } = require('../middleware/auditLogger');
+const { findPlanForEmployee, applyPlanToAssignment } = require('./kpiPlan.service');
+const { getFinancialYear, getQuarterFromMonth } = require('../utils/quarterHelper');
 
 const userIncludes = [
   { model: Department, as: 'department', attributes: ['id', 'name', 'code'] },
@@ -79,6 +82,42 @@ const mapCreateBody = (data) => {
   };
 };
 
+const autoSyncKpiForNewEmployee = async (employee, createdBy) => {
+  try {
+    if (!employee.departmentId || !employee.kpiReviewApplicable) return;
+    const fy = getFinancialYear(new Date());
+    const plan = await findPlanForEmployee(employee, fy);
+    if (!plan || !plan.isPublished) return;
+
+    const months = [4, 5, 6, 7, 8, 9, 10, 11, 12, 1, 2, 3];
+    const totalWeightage = Math.round(
+      (plan.items || []).reduce((s, i) => s + parseFloat(i.monthlyWeightage || 0), 0)
+    );
+
+    for (const month of months) {
+      const exists = await KpiAssignment.findOne({
+        where: { employeeId: employee.id, financialYear: fy, month },
+      });
+      if (exists) continue; // preserve existing — never overwrite
+
+      const assignment = await KpiAssignment.create({
+        financialYear: fy,
+        month,
+        quarter: getQuarterFromMonth(month),
+        employeeId: employee.id,
+        managerId: employee.managerId || createdBy,
+        createdById: createdBy,
+        status: KPI_STATUS.ASSIGNED,
+        totalWeightage,
+      });
+
+      await applyPlanToAssignment(plan, assignment.id, null);
+    }
+  } catch (err) {
+    console.error('[autoSyncKpi] failed for new employee:', err.message);
+  }
+};
+
 const createUser = async (data, createdBy) => {
   const user = await User.create(mapCreateBody(data));
 
@@ -94,6 +133,10 @@ const createUser = async (data, createdBy) => {
     attributes: { exclude: ['passwordHash'] },
     include: userIncludes,
   });
+
+  // Fire-and-forget: auto-create KPI assignments if a published plan exists for this employee
+  autoSyncKpiForNewEmployee(full.get({ plain: true }), createdBy).catch(() => {});
+
   return full.get({ plain: true });
 };
 

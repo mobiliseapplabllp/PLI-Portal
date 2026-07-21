@@ -255,14 +255,6 @@ const buildItemPayload = (assignmentId, planItems) =>
 const resyncPlanAssignments = async (plan, planItems, actorId) => {
   if (!plan.isPublished) return { synced: 0, created: 0 };
 
-  // Safe to reset: employee has not yet done self-assessment
-  const RESEEDABLE = [
-    KPI_STATUS.DRAFT,
-    KPI_STATUS.ASSIGNED,
-    KPI_STATUS.COMMITMENT_SUBMITTED,
-    KPI_STATUS.COMMITMENT_APPROVED,
-  ];
-
   const totalWeightage = Math.round(
     planItems.reduce((s, i) => s + parseFloat(i.monthlyWeightage || 0), 0)
   );
@@ -277,7 +269,6 @@ const resyncPlanAssignments = async (plan, planItems, actorId) => {
 
   const employees = await User.findAll({ where: empWhere, attributes: ['id', 'managerId'] });
   console.log(`[resync] plan=${plan.id} role=${plan.role} dept=${plan.departmentId} → ${employees.length} employees, ${months.length} months`);
-  let synced = 0;
   let created = 0;
 
   for (const emp of employees) {
@@ -288,19 +279,7 @@ const resyncPlanAssignments = async (plan, planItems, actorId) => {
         where: { employeeId: emp.id, financialYear: plan.financialYear, month },
       });
 
-      if (exists) {
-        const reseedable = RESEEDABLE.includes(exists.status);
-        if (reseedable) {
-          await KpiItem.destroy({ where: { kpiAssignmentId: exists.id } });
-          if (planItems.length > 0) {
-            await KpiItem.bulkCreate(buildItemPayload(exists.id, planItems));
-          }
-          // Always reset to ASSIGNED so employee re-commits with the updated items
-          await exists.update({ totalWeightage, managerId, status: KPI_STATUS.ASSIGNED });
-          synced++;
-        }
-        continue;
-      }
+      if (exists) continue; // preserve existing employee KPI data untouched
 
       const assignment = await KpiAssignment.create({
         financialYear: plan.financialYear,
@@ -320,7 +299,7 @@ const resyncPlanAssignments = async (plan, planItems, actorId) => {
     }
   }
 
-  return { synced, created };
+  return { synced: 0, created };
 };
 
 const publishPlan = async (planId, user) => {
