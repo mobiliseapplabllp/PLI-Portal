@@ -129,6 +129,27 @@ const kpiNavItems = {
     },
     { to: '/admin/audit-logs', label: 'Audit Logs', icon: HiOutlineDocumentText },
   ],
+  sales_director: [
+    { to: '/manager/dashboard', label: 'Dashboard', icon: HiOutlineHome },
+    { to: '/manager/team', label: 'My Team', icon: HiOutlineUserGroup },
+    {
+      label: 'KPI',
+      icon: HiOutlineClipboardList,
+      children: [
+        { to: '/hr-admin/kpi-plans/create', label: 'Create KPI', icon: HiOutlinePlus },
+        { to: '/hr-admin/kpi-plans', label: 'Edit KPI', icon: HiOutlinePencilAlt },
+        { to: '/manager/team-kpi', label: 'Team KPIs', icon: HiOutlineClipboardList },
+        { to: '/employee/kpis', label: 'My KPIs', icon: HiOutlineClipboardCheck },
+      ],
+    },
+    {
+      label: 'Miscellaneous',
+      icon: HiOutlineViewGridAdd,
+      children: [
+        { to: '/admin/reports', label: 'Reports', icon: HiOutlineDocumentReport },
+      ],
+    },
+  ],
   // MD/Director fallback to PM
   md: [],
   director: [],
@@ -228,6 +249,9 @@ const csatReadOnlyItems = [
   { to: '/csat/dashboard', label: 'CSAT Dashboard', icon: HiOutlineChartBar },
   { to: '/csat/responses', label: 'Survey Responses', icon: HiOutlineChartBar },
 ];
+
+// Sales Director has no PM module access
+pmNavItems.sales_director = [];
 
 // Inject CSAT into pm nav items for non-admin roles
 pmNavItems.manager       = [...pmNavItems.manager,       ...csatManagerItems];

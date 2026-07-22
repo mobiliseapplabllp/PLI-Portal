@@ -7,9 +7,9 @@ const { createDepartmentValidator, updateDepartmentValidator } = require('../val
 
 router.use(authenticate);
 
-router.get('/', authorize('admin', 'hr_admin', 'manager', 'senior_manager'), getDepartments);
+router.get('/', authorize('admin', 'hr_admin', 'manager', 'senior_manager', 'sales_director'), getDepartments);
 router.post('/', authorize('admin'), createDepartmentValidator, validate, createDepartment);
 router.put('/:id', authorize('admin'), updateDepartmentValidator, validate, updateDepartment);
-router.get('/:id/roles', authorize('admin', 'hr_admin', 'manager', 'senior_manager'), getDepartmentRoles);
+router.get('/:id/roles', authorize('admin', 'hr_admin', 'manager', 'senior_manager', 'sales_director'), getDepartmentRoles);
 
 module.exports = router;

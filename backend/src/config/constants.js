@@ -8,6 +8,7 @@ const ROLES = {
   ADMIN: 'admin',
   MD: 'md',
   DIRECTOR: 'director',
+  SALES_DIRECTOR: 'sales_director',
 };
 
 // KPI Assignment statuses

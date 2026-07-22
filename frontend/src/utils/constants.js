@@ -5,6 +5,7 @@ export const ROLES = {
   HR_ADMIN: 'hr_admin',
   FINAL_APPROVER: 'final_approver',
   ADMIN: 'admin',
+  SALES_DIRECTOR: 'sales_director',
 };
 
 export const ROLE_OPTIONS = [
@@ -14,6 +15,7 @@ export const ROLE_OPTIONS = [
   { value: 'hr_admin',        label: 'HR Admin' },
   { value: 'final_approver',  label: 'Final Approver' },
   { value: 'admin',           label: 'Admin' },
+  { value: 'sales_director',  label: 'Sales Director' },
 ];
 
 export const KPI_STATUS = {
@@ -233,4 +235,5 @@ export const ROLE_CONFIG = {
   hr_admin:        { label: 'HR Admin Portal',         accentClass: 'from-violet-600 to-violet-700' },
   final_approver:  { label: 'Final Approver Portal',  accentClass: 'from-cyan-700 to-cyan-800' },
   admin:           { label: 'Admin Portal',            accentClass: 'from-gray-700 to-gray-800' },
+  sales_director:  { label: 'Sales Director Portal',  accentClass: 'from-rose-600 to-rose-700' },
 };

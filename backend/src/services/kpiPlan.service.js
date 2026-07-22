@@ -12,8 +12,13 @@ const { getQuarterFromMonth } = require('../utils/quarterHelper');
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const assertHrAdminOrAdmin = (user) => {
-  if (!['hr_admin', 'admin'].includes(user.role))
-    throw new ForbiddenError('Only HR Admin or Admin can manage KPI plans.');
+  if (!['hr_admin', 'admin', 'sales_director'].includes(user.role))
+    throw new ForbiddenError('Only HR Admin, Admin or Sales Director can manage KPI plans.');
+};
+
+const assertSalesDeptAccess = (plan, user) => {
+  if (user.role === 'sales_director' && String(plan.departmentId) !== String(user.departmentId))
+    throw new ForbiddenError('Access denied — you can only manage your own department KPI plans.');
 };
 
 const validateHeadWeightages = (hw) => {
@@ -31,6 +36,8 @@ const getPlans = async (query, user) => {
   if (status) where.status = status;
   // Match exact role OR plans where role is NULL (legacy plans created before role field was added)
   if (role) where.role = { [Op.or]: [role, null] };
+  // Sales Director can only see their own department's plans
+  if (user.role === 'sales_director') where.departmentId = user.departmentId;
 
   // Managers can only see their own department plan
   if (user.role === 'manager') {
@@ -61,7 +68,7 @@ const getPlanById = async (id, user) => {
     ],
   });
   if (!plan) throw new NotFoundError('KPI Plan');
-  if (user.role === 'manager' && plan.departmentId !== user.departmentId)
+  if (['manager', 'sales_director'].includes(user.role) && String(plan.departmentId) !== String(user.departmentId))
     throw new ForbiddenError('Access denied.');
   return plan;
 };
@@ -70,6 +77,8 @@ const getPlanById = async (id, user) => {
 
 const createPlan = async (data, user) => {
   assertHrAdminOrAdmin(user);
+  // Sales Director can only create plans for their own department
+  if (user.role === 'sales_director') data.departmentId = user.departmentId;
   const { financialYear, departmentId, headWeightages, role } = data;
 
   if (!departmentId) throw new AppError('departmentId is required.', 400);
@@ -100,6 +109,7 @@ const updatePlan = async (id, data, user) => {
   assertHrAdminOrAdmin(user);
   const plan = await KpiPlan.findByPk(id);
   if (!plan) throw new NotFoundError('KPI Plan');
+  assertSalesDeptAccess(plan, user);
 
   if (plan.isPublished && (data.financialYear || data.departmentId || data.role !== undefined)) {
     throw new AppError('Financial year, department, and role cannot be changed on a published plan.', 400);
@@ -113,7 +123,7 @@ const updatePlan = async (id, data, user) => {
   }
 
   if (data.financialYear) plan.financialYear = data.financialYear;
-  if (data.departmentId) plan.departmentId = data.departmentId;
+  if (data.departmentId && user.role !== 'sales_director') plan.departmentId = data.departmentId;
   if (data.role !== undefined) plan.role = data.role;
 
   await plan.save();
@@ -126,6 +136,7 @@ const updatePlanStatus = async (id, status, user) => {
   assertHrAdminOrAdmin(user);
   const plan = await KpiPlan.findByPk(id);
   if (!plan) throw new NotFoundError('KPI Plan');
+  assertSalesDeptAccess(plan, user);
 
   const allowed = Object.values(KPI_PLAN_STATUS);
   if (!allowed.includes(status))
@@ -141,6 +152,7 @@ const addPlanItem = async (planId, itemData, user) => {
   assertHrAdminOrAdmin(user);
   const plan = await KpiPlan.findByPk(planId);
   if (!plan) throw new NotFoundError('KPI Plan');
+  assertSalesDeptAccess(plan, user);
 
   const newWt = parseFloat(itemData.monthlyWeightage || 0);
   const allItems = await KpiPlanItem.findAll({ where: { kpiPlanId: planId } });
@@ -171,6 +183,7 @@ const updatePlanItem = async (planId, itemId, itemData, user) => {
   assertHrAdminOrAdmin(user);
   const plan = await KpiPlan.findByPk(planId);
   if (!plan) throw new NotFoundError('KPI Plan');
+  assertSalesDeptAccess(plan, user);
 
   const item = await KpiPlanItem.findOne({ where: { id: itemId, kpiPlanId: planId } });
   if (!item) throw new NotFoundError('KPI Plan Item');
@@ -215,6 +228,7 @@ const deletePlanItem = async (planId, itemId, user) => {
   assertHrAdminOrAdmin(user);
   const plan = await KpiPlan.findByPk(planId);
   if (!plan) throw new NotFoundError('KPI Plan');
+  assertSalesDeptAccess(plan, user);
 
   const item = await KpiPlanItem.findOne({ where: { id: itemId, kpiPlanId: planId } });
   if (!item) throw new NotFoundError('KPI Plan Item');
@@ -306,6 +320,7 @@ const publishPlan = async (planId, user) => {
   assertHrAdminOrAdmin(user);
   const plan = await KpiPlan.findByPk(planId);
   if (!plan) throw new NotFoundError('KPI Plan');
+  assertSalesDeptAccess(plan, user);
 
   const items = await KpiPlanItem.findAll({ where: { kpiPlanId: planId } });
   if (items.length === 0) throw new AppError('Cannot publish a plan with no KPI items.', 400);

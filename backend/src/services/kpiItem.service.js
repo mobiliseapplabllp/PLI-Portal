@@ -1,13 +1,23 @@
 const KpiItem = require('../models/KpiItem');
 const KpiAssignment = require('../models/KpiAssignment');
-const { NotFoundError, ValidationError } = require('../utils/errors');
+const User = require('../models/User');
+const { NotFoundError, ValidationError, ForbiddenError } = require('../utils/errors');
 const { KPI_STATUS } = require('../config/constants');
 const { createAuditLog } = require('../middleware/auditLogger');
+
+const assertSalesDeptItemAccess = async (assignment, user) => {
+  if (user.role !== 'sales_director') return;
+  const employee = await User.findByPk(assignment.employeeId, { attributes: ['departmentId'] });
+  if (!employee || String(employee.departmentId) !== String(user.departmentId))
+    throw new ForbiddenError('Access denied — you can only manage KPI items for your own department.');
+};
 
 const createItem = async (data, user) => {
   const assignmentId = data.kpiAssignment || data.kpiAssignmentId;
   const assignment = await KpiAssignment.findByPk(assignmentId);
   if (!assignment) throw new NotFoundError('KPI Assignment');
+
+  await assertSalesDeptItemAccess(assignment, user);
 
   if (![KPI_STATUS.DRAFT, KPI_STATUS.ASSIGNED].includes(assignment.status)) {
     throw new ValidationError('Cannot add items after submission');
@@ -39,6 +49,7 @@ const updateItem = async (id, data, user) => {
   if (!item) throw new NotFoundError('KPI Item');
 
   const assignment = await KpiAssignment.findByPk(item.kpiAssignmentId);
+  if (assignment) await assertSalesDeptItemAccess(assignment, user);
   if (assignment && assignment.isLocked) {
     throw new ValidationError('Cannot edit items in a locked assignment');
   }
@@ -70,6 +81,7 @@ const deleteItem = async (id, user) => {
   if (!item) throw new NotFoundError('KPI Item');
 
   const assignment = await KpiAssignment.findByPk(item.kpiAssignmentId);
+  if (assignment) await assertSalesDeptItemAccess(assignment, user);
   if (assignment && assignment.status !== KPI_STATUS.DRAFT) {
     throw new ValidationError('Can only delete items in draft status');
   }

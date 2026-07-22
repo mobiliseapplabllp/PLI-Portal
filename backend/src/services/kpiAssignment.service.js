@@ -109,7 +109,7 @@ const getAssignments = async (query = {}, user) => {
 
   if (user.role === 'employee') {
     where.employeeId = user._id;
-  } else if (user.role === 'manager') {
+  } else if (['manager', 'sales_director'].includes(user.role)) {
     if (!query.employee) {
       const teamMembers = await User.findAll({
         where: { managerId: user._id },
@@ -167,7 +167,7 @@ const getAssignmentById = async (id, user) => {
   if (user.role === 'employee' && !isOwnAssignment) {
     throw new ForbiddenError('You can only view your own assignments');
   }
-  if (user.role === 'manager') {
+  if (['manager', 'sales_director'].includes(user.role)) {
     const canView = isOwnAssignment || await isManagerOfEmployee(assignment, user._id);
     if (!canView) throw new ForbiddenError('You can only view your own or your team assignments');
   }
@@ -1533,7 +1533,7 @@ const getItemAttachmentData = async (assignmentId, itemId, user) => {
   const assignment = await KpiAssignment.findByPk(assignmentId);
   if (!assignment) throw new NotFoundError('KPI Assignment');
   const canView = String(assignment.employeeId) === String(user._id) ||
-    ['manager', 'senior_manager', 'final_approver', 'admin'].includes(user.role);
+    ['manager', 'senior_manager', 'final_approver', 'admin', 'sales_director'].includes(user.role);
   if (!canView) throw new ForbiddenError('Access denied');
   const item = await KpiItem.findOne({ where: { id: itemId, kpiAssignmentId: assignmentId } });
   if (!item || !item.selfReviewAttachmentBlob) throw new NotFoundError('Attachment');
@@ -1561,7 +1561,7 @@ const revertSelfReview = async (assignmentId, revertComment, user) => {
     throw new ValidationError('Self-review can only be reverted when status is Employee Submitted');
   }
   const isAdmin = ['admin', 'hr_admin'].includes(user.role);
-  const isManager = ['manager', 'senior_manager'].includes(user.role) &&
+  const isManager = ['manager', 'senior_manager', 'sales_director'].includes(user.role) &&
     String(assignment.employee?.managerId) === String(user._id);
   if (!isAdmin && !isManager) throw new ForbiddenError('Only the employee\'s manager or an admin can revert self-review');
   // Clear any manager draft values saved before the revert so stale data doesn't show

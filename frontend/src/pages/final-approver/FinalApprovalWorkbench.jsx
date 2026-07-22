@@ -20,6 +20,7 @@ import {
   bulkRecalculateQuarterApi,
 } from '../../api/finalApprover.api';
 import { getUsersApi, getTeamApi } from '../../api/users.api';
+import { getDepartmentsApi } from '../../api/departments.api';
 import { getAssignmentByIdApi } from '../../api/kpiAssignments.api';
 import { getCurrentFinancialYear, MONTHS, QUARTER_MONTHS, KPI_HEAD_LABELS } from '../../utils/constants';
 import StatusBadge from '../../components/common/StatusBadge';
@@ -194,6 +195,8 @@ function WorkbenchList() {
   const [filterEmployee, setFilterEmployee] = useState('');
   const [sortBy, setSortBy]                 = useState('name');
   const [managers, setManagers]             = useState([]);
+  const [departments, setDepartments]       = useState([]);
+  const [filterDepartment, setFilterDepartment] = useState('');
   const [teamMemberIds, setTeamMemberIds]   = useState(null); // null = no manager selected, Set = filtered
 
   const [recalculating, setRecalculating] = useState(false);
@@ -212,6 +215,7 @@ function WorkbenchList() {
     setSearch('');
     setFilterManager('');
     setFilterEmployee('');
+    setFilterDepartment('');
     setTeamMemberIds(null);
     try {
       // _t busts browser GET cache — ensures fresh data after scoring config changes
@@ -243,11 +247,20 @@ function WorkbenchList() {
   // Track whether initial mount fetch has run — prevents double-fetch
   const didMountRef = useRef(false);
 
-  // Load managers once on mount
+  // Load managers + departments once on mount
   useEffect(() => {
-    getUsersApi({ role: 'manager', isActive: 'true', limit: 200 })
-      .then((r) => setManagers(r.data.data || []))
+    Promise.all([
+      getUsersApi({ role: 'manager', isActive: 'true', limit: 200 }),
+      getUsersApi({ role: 'sales_director', isActive: 'true', limit: 200 }),
+    ])
+      .then(([mRes, sdRes]) => {
+        const combined = [...(mRes.data.data || []), ...(sdRes.data.data || [])];
+        setManagers(combined);
+      })
       .catch(() => setManagers([]));
+    getDepartmentsApi()
+      .then((r) => setDepartments(r.data.data || []))
+      .catch(() => setDepartments([]));
   }, []);
 
   // Fetch when fy or quarter dropdown changes (also fires on initial mount)
@@ -580,26 +593,34 @@ function WorkbenchList() {
   const pendingCount = allEmployees.filter((e) => !e.allMonthsReviewed).length;
 
   // All managers from API — getUsersApi renames id → _id via renameIdsForClient
+  // When a department is selected, narrow the list to managers in that department only
   const activeManagerOptions = useMemo(() => {
-    return [...managers].sort((a, b) => a.name.localeCompare(b.name));
-  }, [managers]);
+    const list = filterDepartment
+      ? managers.filter((m) => String(m.departmentId) === String(filterDepartment))
+      : managers;
+    return [...list].sort((a, b) => a.name.localeCompare(b.name));
+  }, [managers, filterDepartment]);
 
   // Cascaded employee list — uses teamMemberIds fetched from getTeamApi (reliable)
+  // Respects filterDepartment first, then narrows by manager team selection
   const employeeOptions = useMemo(() => {
     const getEmpId = (e) => e.employee?._id || e.employee?.id || e._id || e.id;
+    // Step 1: scope to selected department (if any)
+    const deptScoped = filterDepartment
+      ? allEmployees.filter((e) => String(e.employee?.departmentId) === String(filterDepartment))
+      : allEmployees;
+    // Step 2: narrow to manager's team (if manager selected)
     if (!teamMemberIds) {
-      // No manager selected — show all employees
-      return allEmployees
+      return deptScoped
         .map((e) => ({ id: getEmpId(e), name: e.employee?.name || e.name }))
         .filter((e) => e.id)
         .sort((a, b) => a.name.localeCompare(b.name));
     }
-    // Manager selected — show only team members (teamMemberIds includes manager themselves)
-    return allEmployees
+    return deptScoped
       .filter((e) => teamMemberIds.has(getEmpId(e)))
       .map((e) => ({ id: getEmpId(e), name: e.employee?.name || e.name }))
       .sort((a, b) => a.name.localeCompare(b.name));
-  }, [allEmployees, teamMemberIds]);
+  }, [allEmployees, teamMemberIds, filterDepartment]);
 
   const employees = useMemo(() => {
     let list = [...allEmployees];
@@ -625,6 +646,11 @@ function WorkbenchList() {
         const empId = e.employee?._id || e.employee?.id || e._id || e.id;
         return teamMemberIds.has(empId);
       });
+    }
+
+    // Department filter (admin-only relevant; final_approver already scoped server-side)
+    if (filterDepartment) {
+      list = list.filter((e) => String(e.employee?.departmentId) === String(filterDepartment));
     }
 
     // Individual employee filter (cascades from manager selection)
@@ -654,7 +680,7 @@ function WorkbenchList() {
     });
 
     return list;
-  }, [allEmployees, activeFilter, search, teamMemberIds, filterEmployee, sortBy]);
+  }, [allEmployees, activeFilter, search, teamMemberIds, filterDepartment, filterEmployee, sortBy]);
 
   const TAB_COUNTS = {
     all:      allEmployees.length,
@@ -793,6 +819,25 @@ function WorkbenchList() {
 
             <span className="text-gray-300 text-lg hidden sm:block">›</span>
 
+            {/* Department filter */}
+            {departments.length > 0 && (
+              <div className="flex items-center gap-2">
+                <label className="text-xs font-semibold text-gray-500 whitespace-nowrap">Department</label>
+                <select
+                  value={filterDepartment}
+                  onChange={(e) => { setFilterDepartment(e.target.value); setFilterManager(''); setFilterEmployee(''); }}
+                  className="input-field text-sm py-1.5 w-44"
+                >
+                  <option value="">— All Departments —</option>
+                  {departments.map((d) => (
+                    <option key={d._id || d.id} value={d._id || d.id}>{d.name}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            <span className="text-gray-300 text-lg hidden sm:block">›</span>
+
             {/* Manager / Team dropdown — fetched from API by role='manager' */}
             <div className="flex items-center gap-2">
               <label className="text-xs font-semibold text-gray-500 whitespace-nowrap flex items-center gap-1">
@@ -846,9 +891,9 @@ function WorkbenchList() {
 
             {/* Result count + clear */}
             <div className="ml-auto flex items-center gap-3">
-              {(search || filterManager || filterEmployee) && (
+              {(search || filterDepartment || filterManager || filterEmployee) && (
                 <button
-                  onClick={() => { setSearch(''); setFilterManager(''); setFilterEmployee(''); }}
+                  onClick={() => { setSearch(''); setFilterDepartment(''); setFilterManager(''); setFilterEmployee(''); }}
                   className="text-xs text-red-500 hover:text-red-700 font-medium flex items-center gap-1 whitespace-nowrap"
                 >
                   <HiOutlineX className="w-3 h-3" /> Clear filters
@@ -946,8 +991,18 @@ function WorkbenchList() {
                             onClick={() => navigate(`/final-approver/workbench/${empId}/${fy}/${quarter}`)}
                             className="text-left hover:underline"
                           >
-                            <div className="font-semibold text-gray-900 text-sm">{empName}</div>
+                            <div className="font-semibold text-gray-900 text-sm flex items-center gap-1.5">
+                              {empName}
+                              {emp.employee?.role === 'manager' && (
+                                <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700 leading-none">MGR</span>
+                              )}
+                            </div>
                             <div className="text-xs text-gray-400">{empCode}</div>
+                            {emp.employee?.manager?.name && (
+                              <div className="text-xs text-gray-400 mt-0.5">
+                                <span className="text-gray-300">↳</span> {emp.employee.manager.name}
+                              </div>
+                            )}
                           </button>
                         </td>
 

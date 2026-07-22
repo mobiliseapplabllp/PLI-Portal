@@ -14,7 +14,7 @@ const {
 router.use(authenticate);
 
 router.get('/', ctrl.getAssignments);
-router.get('/team-overview', authorize('manager', 'senior_manager', 'admin'), ctrl.teamOverview);
+router.get('/team-overview', authorize('manager', 'senior_manager', 'admin', 'sales_director'), ctrl.teamOverview);
 router.get('/admin-overview', authorize('admin'), ctrl.adminOverview);
 
 // Clone/import now restricted to hr_admin and admin only
@@ -24,42 +24,42 @@ router.post('/clone', authorize('hr_admin', 'admin'), ctrl.cloneKpis);
 router.post('/bulk-clone', authorize('hr_admin', 'admin'), ctrl.bulkCloneKpis);
 
 router.get('/:id', ctrl.getAssignmentById);
-router.post('/', authorize('manager', 'senior_manager', 'admin'), createAssignmentValidator, validate, ctrl.createAssignment);
-router.put('/:id', authorize('manager', 'senior_manager', 'admin'), ctrl.updateAssignment);
+router.post('/', authorize('manager', 'senior_manager', 'admin', 'sales_director'), createAssignmentValidator, validate, ctrl.createAssignment);
+router.put('/:id', authorize('manager', 'senior_manager', 'admin', 'sales_director'), ctrl.updateAssignment);
 
 // Workflow transitions
-router.post('/:id/assign', authorize('manager', 'senior_manager', 'admin'), ctrl.assignToEmployee);
+router.post('/:id/assign', authorize('manager', 'senior_manager', 'admin', 'sales_director'), ctrl.assignToEmployee);
 
 // Save draft without status change (employee: ASSIGNED/COMMITMENT_APPROVED; manager: EMPLOYEE_SUBMITTED)
-router.post('/:id/save-draft', authorize('employee', 'manager', 'senior_manager', 'admin'), ctrl.saveDraft);
+router.post('/:id/save-draft', authorize('employee', 'manager', 'senior_manager', 'admin', 'sales_director'), ctrl.saveDraft);
 
 // NEW: Employee submits commitment (ASSIGNED → COMMITMENT_SUBMITTED)
-router.post('/:id/commit', authorize('employee', 'manager', 'admin'), commitValidator, validate, ctrl.commitKpi);
+router.post('/:id/commit', authorize('employee', 'manager', 'admin', 'sales_director'), commitValidator, validate, ctrl.commitKpi);
 
 // Manager reviews commitment per item (COMMITMENT_SUBMITTED → COMMITMENT_APPROVED | ASSIGNED)
-router.post('/:id/review-commitment', authorize('manager', 'senior_manager', 'admin'), reviewCommitmentValidator, validate, ctrl.reviewCommitment);
+router.post('/:id/review-commitment', authorize('manager', 'senior_manager', 'admin', 'sales_director'), reviewCommitmentValidator, validate, ctrl.reviewCommitment);
 // Legacy single-action approve/reject kept for backward compat
-router.post('/:id/approve-commitment', authorize('manager', 'senior_manager', 'admin'), approveCommitmentValidator, validate, ctrl.approveCommitment);
-router.post('/:id/reject-commitment', authorize('manager', 'senior_manager', 'admin'), rejectCommitmentValidator, validate, ctrl.rejectCommitment);
+router.post('/:id/approve-commitment', authorize('manager', 'senior_manager', 'admin', 'sales_director'), approveCommitmentValidator, validate, ctrl.approveCommitment);
+router.post('/:id/reject-commitment', authorize('manager', 'senior_manager', 'admin', 'sales_director'), rejectCommitmentValidator, validate, ctrl.rejectCommitment);
 
 // Employee submits achievement (COMMITMENT_APPROVED → EMPLOYEE_SUBMITTED)
 // ctrl.employeeSubmit is an array [multerMiddleware, handler]
-router.post('/:id/employee-submit', authorize('employee', 'manager', 'admin'), ...ctrl.employeeSubmit);
+router.post('/:id/employee-submit', authorize('employee', 'manager', 'admin', 'sales_director'), ...ctrl.employeeSubmit);
 
 // Manager/admin reverts self-review back to editable (EMPLOYEE_SUBMITTED → COMMITMENT_APPROVED)
-router.post('/:id/revert-self-review', authorize('manager', 'senior_manager', 'admin'), ctrl.revertSelfReview);
+router.post('/:id/revert-self-review', authorize('manager', 'senior_manager', 'admin', 'sales_director'), ctrl.revertSelfReview);
 
 // Manager review — ctrl.managerReview is an array [multerMiddleware, handler]
-router.post('/:id/manager-review', authorize('manager', 'senior_manager', 'admin'), ...ctrl.managerReview);
+router.post('/:id/manager-review', authorize('manager', 'senior_manager', 'admin', 'sales_director'), ...ctrl.managerReview);
 
 // Attachment download endpoints
 router.get('/:id/employee-attachment', ctrl.getEmployeeAttachment);
-router.get('/:id/manager-attachment', authorize('manager', 'senior_manager', 'final_approver', 'admin'), ctrl.getManagerAttachment);
+router.get('/:id/manager-attachment', authorize('manager', 'senior_manager', 'final_approver', 'admin', 'sales_director'), ctrl.getManagerAttachment);
 
 // Per-item self-review attachment
-router.post('/:id/items/:itemId/attachment', authorize('employee', 'manager', 'admin'), ...ctrl.uploadItemAttachment);
+router.post('/:id/items/:itemId/attachment', authorize('employee', 'manager', 'admin', 'sales_director'), ...ctrl.uploadItemAttachment);
 router.get('/:id/items/:itemId/attachment', ctrl.getItemAttachment);
-router.delete('/:id/items/:itemId/attachment', authorize('employee', 'manager', 'admin'), ctrl.deleteItemAttachment);
+router.delete('/:id/items/:itemId/attachment', authorize('employee', 'manager', 'admin', 'sales_director'), ctrl.deleteItemAttachment);
 
 // NOTE: /final-review route is REMOVED — replaced by /api/final-approver/approvals/:id/submit
 // Kept as 410 Gone for any legacy clients

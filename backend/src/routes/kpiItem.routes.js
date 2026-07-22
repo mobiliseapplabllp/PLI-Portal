@@ -7,10 +7,8 @@ const { createItemValidator, updateItemValidator } = require('../validators/kpiI
 
 router.use(authenticate);
 
-// KPI items are now managed exclusively by HR Admin and Admin.
-// Managers no longer have create/edit/delete access.
-router.post('/', authorize('hr_admin', 'admin'), createItemValidator, validate, createItem);
-router.put('/:id', authorize('hr_admin', 'admin'), updateItemValidator, validate, updateItem);
-router.delete('/:id', authorize('hr_admin', 'admin'), deleteItem);
+router.post('/', authorize('hr_admin', 'admin', 'sales_director'), createItemValidator, validate, createItem);
+router.put('/:id', authorize('hr_admin', 'admin', 'sales_director'), updateItemValidator, validate, updateItem);
+router.delete('/:id', authorize('hr_admin', 'admin', 'sales_director'), deleteItem);
 
 module.exports = router;
