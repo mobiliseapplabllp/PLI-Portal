@@ -18,6 +18,7 @@ const { ValidationError } = require('../utils/errors');
 const { createAuditLog } = require('../middleware/auditLogger');
 const notificationService = require('./notification.service');
 const scoringConfigService = require('./scoringConfig.service');
+const AppraisalCycle = require('../models/AppraisalCycle');
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -499,13 +500,32 @@ const submitQuarterlyApproval = async (approvalId, body, user) => {
     throw err;
   }
 
+  // Enforce finalReviewDeadline — use last month of the quarter as the cycle month
+  if (user.role !== 'admin') {
+    const quarterMonths = QUARTER_MONTHS[approval.quarter];
+    const lastMonth = quarterMonths?.[quarterMonths.length - 1];
+    if (!lastMonth) throw new ValidationError(`Invalid quarter: ${approval.quarter}`);
+    const cycle = await AppraisalCycle.findOne({
+      where: { financialYear: approval.financialYear, month: lastMonth },
+      attributes: ['finalReviewDeadline'],
+    });
+    const deadline = cycle?.finalReviewDeadline;
+    if (!deadline) {
+      throw new ValidationError('Final approval is not allowed — the admin has not set a final review deadline for this cycle yet.');
+    }
+    // Compare against end-of-day IST so approvers can submit throughout the deadline date
+    const deadlineEnd = new Date(deadline);
+    deadlineEnd.setUTCHours(18, 29, 59, 999); // 23:59:59.999 IST = 18:29:59 UTC
+    if (new Date() > deadlineEnd) {
+      throw new ValidationError(`Final review deadline has passed (${new Date(deadline).toLocaleDateString('en-IN')}). No further approvals are allowed.`);
+    }
+  }
+
   const calcEarned = approval.items.reduce(
     (s, i) => s + parseFloat(i.month1_actual || 0) + parseFloat(i.month2_actual || 0) + parseFloat(i.month3_actual || 0),
     0
   );
-  if (overrideEarned != null && Math.abs(overrideEarned - calcEarned) > 0.001 && !overrideComment) {
-    throw new ValidationError('A comment is required when overriding the calculated quarterly earned weightage.');
-  }
+  // overrideComment is optional even when score differs
 
   const totalPossible = approval.items.reduce(
     (s, i) => s + parseFloat(i.monthlyWeightage || 0) * 3,

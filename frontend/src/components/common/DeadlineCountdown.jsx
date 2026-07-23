@@ -1,11 +1,20 @@
 /**
  * DeadlineCountdown — Compact urgency-coloured deadline strip.
- * Shows "Deadline: 3 days left" or "Overdue by 2 days" with colour coding.
+ * Shows "Deadline: 3 days left", "Overdue by 2 days", or "Not set" with colour coding.
+ * Pass showIfMissing to render a warning badge when deadline is null/undefined.
  */
 import { HiOutlineClock } from 'react-icons/hi';
 
-export default function DeadlineCountdown({ deadline, label = 'Deadline', className = '' }) {
-  if (!deadline) return null;
+export default function DeadlineCountdown({ deadline, label = 'Deadline', className = '', showIfMissing = false }) {
+  if (!deadline) {
+    if (!showIfMissing) return null;
+    return (
+      <div className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-orange-50 text-orange-700 border border-orange-200 ${className}`}>
+        <HiOutlineClock className="h-3.5 w-3.5 flex-shrink-0" />
+        <span>{label}: Not set by admin</span>
+      </div>
+    );
+  }
 
   const now = new Date();
   const deadlineDate = new Date(deadline);

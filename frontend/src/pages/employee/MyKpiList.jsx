@@ -86,6 +86,7 @@ export default function MyKpiList() {
   const achieveFileRef = useRef(null);
   const [itemAttachments, setItemAttachments] = useState({});
   const [uploadingItem, setUploadingItem] = useState(null);
+  const [appraisalCycle, setAppraisalCycle] = useState(null);
 
   const loadAssignments = useCallback(async () => {
     if (!user?._id) return;
@@ -106,12 +107,13 @@ export default function MyKpiList() {
   const currentAssignment = assignments.find((a) => a.month === selectedMonth) || null;
 
   const fetchItems = useCallback(async (assignmentId) => {
-    if (!assignmentId) { setItems([]); setEditMap({}); return; }
+    if (!assignmentId) { setItems([]); setEditMap({}); setAppraisalCycle(null); return; }
     setItemsLoading(true);
     try {
       const res = await getAssignmentByIdApi(assignmentId);
       const d = res.data.data || res.data;
       const fetched = d.items || [];
+      setAppraisalCycle(d.assignment?.appraisalCycle || null);
       setItems(fetched);
       const map = {};
       fetched.forEach((item) => {
@@ -150,6 +152,17 @@ export default function MyKpiList() {
   const rank = statusRank(status);
   const canCommit = status === KPI_STATUS.ASSIGNED;
   const canSelfReview = status === KPI_STATUS.COMMITMENT_APPROVED;
+
+  const getDeadlineStatus = (deadlineValue) => {
+    if (!deadlineValue) return { state: 'not_set', dateStr: null };
+    const end = new Date(deadlineValue);
+    end.setUTCHours(18, 29, 59, 999); // 23:59:59.999 IST
+    const dateStr = new Date(deadlineValue).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+    if (new Date() > end) return { state: 'passed', dateStr };
+    return { state: 'open', dateStr };
+  };
+  const commitDeadlineStatus = getDeadlineStatus(appraisalCycle?.commitmentDeadline);
+  const isCommitBlocked = canCommit && (commitDeadlineStatus.state === 'passed' || commitDeadlineStatus.state === 'not_set');
   const showCommitCol = rank >= statusRank(KPI_STATUS.ASSIGNED);
   const showSelfReviewCol = rank >= statusRank(KPI_STATUS.COMMITMENT_APPROVED);
   const showManagerCol = rank >= statusRank(KPI_STATUS.EMPLOYEE_SUBMITTED);
@@ -411,6 +424,20 @@ export default function MyKpiList() {
           <div className="px-6 py-1.5 text-xs font-semibold flex items-center gap-2 bg-red-50 text-red-600 border-b border-red-100">
             <span className="w-2 h-2 rounded-full flex-shrink-0 bg-red-400" />
             Commitment rejected — {currentAssignment.commitmentRejectionComment}. Please revise and resubmit.
+          </div>
+        )}
+
+        {/* Deadline warning banner for commitment */}
+        {canCommit && commitDeadlineStatus.state === 'passed' && (
+          <div className="px-6 py-2 text-xs font-semibold flex items-center gap-2 bg-red-50 text-red-700 border-b border-red-200">
+            <span className="w-2 h-2 rounded-full flex-shrink-0 bg-red-500" />
+            Commitment deadline has passed ({commitDeadlineStatus.dateStr}). Submission is no longer allowed.
+          </div>
+        )}
+        {canCommit && commitDeadlineStatus.state === 'not_set' && (
+          <div className="px-6 py-2 text-xs font-semibold flex items-center gap-2 bg-orange-50 text-orange-700 border-b border-orange-200">
+            <span className="w-2 h-2 rounded-full flex-shrink-0 bg-orange-400" />
+            Commitment deadline has not been set by admin. Submission is not allowed until a deadline is configured.
           </div>
         )}
 
@@ -830,8 +857,9 @@ export default function MyKpiList() {
                     {canCommit && (
                       <button
                         onClick={handleSubmitCommitment}
-                        disabled={submitting}
-                        className="btn-primary text-sm flex items-center gap-2 disabled:opacity-50"
+                        disabled={submitting || isCommitBlocked}
+                        title={isCommitBlocked ? (commitDeadlineStatus.state === 'passed' ? `Deadline passed (${commitDeadlineStatus.dateStr})` : 'No deadline set by admin') : undefined}
+                        className="btn-primary text-sm flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         {submitting
                           ? <HiOutlineRefresh className="w-4 h-4 animate-spin" />

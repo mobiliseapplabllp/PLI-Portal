@@ -326,7 +326,7 @@ function WorkbenchList() {
       const XLSX       = await import('xlsx');
       const qMonthKeys = QUARTER_MONTHS[quarter] || [];
       const today      = new Date().toISOString().slice(0, 10);
-      const allEmps    = data?.employees || [];
+      const allEmps    = employees;
 
       if (activeFilter === 'approved') {
         // ── Approved tab — existing format ────────────────────────────────────
@@ -521,7 +521,7 @@ function WorkbenchList() {
 
     if (st.score === '' || st.score == null) { setEmpField(empId, 'error', 'FA Final Score % is required'); return; }
     if (isNaN(faPct) || faPct < 0)          { setEmpField(empId, 'error', 'Enter a valid percentage (0 or above)'); return; }
-    if (scoreChanged && !st.comment?.trim()) { setEmpField(empId, 'error', 'Comment required when score differs from calculated'); return; }
+
 
     setEmpField(empId, 'submitting', true);
     setEmpField(empId, 'error', null);
@@ -726,10 +726,10 @@ function WorkbenchList() {
           {/* Download Excel — label, count, and format change per active tab */}
           {(() => {
             const tabMeta = {
-              all:      { label: 'Download All',     count: allEmployees.length,  tip: 'Download full status report for all employees' },
-              ready:    { label: 'Download Ready',   count: readyCount,           tip: 'Download ready-for-review report with monthly status' },
-              pending:  { label: 'Download Pending', count: pendingCount,         tip: 'Download pending report with monthly status' },
-              approved: { label: 'Download Excel',   count: data?.approvedCount || 0, tip: 'Download approved employees report' },
+              all:      { label: 'Download All',     count: employees.length,                                                                    tip: 'Download full status report for all employees' },
+              ready:    { label: 'Download Ready',   count: employees.filter((e) => e.allMonthsReviewed && e.quarterlyApproval?.status !== 'approved').length, tip: 'Download ready-for-review report with monthly status' },
+              pending:  { label: 'Download Pending', count: employees.filter((e) => !e.allMonthsReviewed).length,                                              tip: 'Download pending report with monthly status' },
+              approved: { label: 'Download Excel',   count: employees.filter((e) => e.quarterlyApproval?.status === 'approved').length,                        tip: 'Download approved employees report' },
             }[activeFilter] || { label: 'Download Excel', count: 0, tip: '' };
 
             const isDisabled = exporting || loading || tabMeta.count === 0;
@@ -1273,8 +1273,8 @@ function WorkbenchDetail({ employeeId, fy, quarter }) {
   const calculatedScore = parseFloat(approval?.calculatedQuarterlyScore);
   const overrideVal     = parseFloat(overrideScore);
   const scoreChanged    = !isNaN(overrideVal) && !isNaN(calculatedScore) && Math.abs(overrideVal - calculatedScore) > 0.001;
-  const needsComment    = scoreChanged && !overrideComment.trim();
-  const canSubmit       = overrideScore !== '' && !needsComment;
+  const needsComment    = false;
+  const canSubmit       = overrideScore !== '';
 
   const handleSubmit = async () => {
     setSubmitError(null);
@@ -1494,9 +1494,7 @@ function WorkbenchDetail({ employeeId, fy, quarter }) {
                     value={overrideScore}
                     onChange={(e) => setOverrideScore(e.target.value)}
                     className={`w-32 text-center text-lg font-bold font-mono border-2 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 ${
-                      needsComment
-                        ? 'border-red-400 ring-red-200 bg-red-50'
-                        : scoreChanged
+                      scoreChanged
                         ? 'border-amber-400 ring-amber-200 bg-amber-50'
                         : 'border-cyan-400 ring-cyan-200 bg-cyan-50'
                     }`}
@@ -1511,25 +1509,16 @@ function WorkbenchDetail({ employeeId, fy, quarter }) {
             {!isApproved && scoreChanged && (
               <div className="flex-1 max-w-sm">
                 <label className="block text-xs font-medium text-gray-600 mb-1">
-                  Override Reason <span className="text-red-500">*</span>
-                  <span className="text-gray-400 font-normal ml-1">(required when score differs from calculated)</span>
+                  Override Reason
+                  <span className="text-gray-400 font-normal ml-1">(optional)</span>
                 </label>
                 <textarea
                   rows={2}
                   value={overrideComment}
                   onChange={(e) => setOverrideComment(e.target.value)}
                   placeholder="Explain why the score differs from the system-calculated value…"
-                  className={`w-full border rounded-lg px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 ${
-                    needsComment
-                      ? 'border-red-400 ring-red-200 bg-red-50'
-                      : 'border-amber-300 ring-amber-200 focus:ring-amber-400'
-                  }`}
+                  className="w-full border rounded-lg px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 border-amber-300 ring-amber-200 focus:ring-amber-400"
                 />
-                {needsComment && (
-                  <p className="text-xs text-red-500 mt-0.5 flex items-center gap-1">
-                    <HiOutlineExclamation className="w-3.5 h-3.5" /> Comment is required
-                  </p>
-                )}
               </div>
             )}
 

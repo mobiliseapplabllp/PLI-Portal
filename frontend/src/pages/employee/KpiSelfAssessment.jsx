@@ -227,6 +227,21 @@ export default function KpiSelfAssessment() {
   const totalWt       = currentItems.reduce((s, i) => s + Number(i.weightage || 0), 0);
   const monthlyWt     = (Number(currentAssignment.totalWeightage || totalWt || 0) / 12).toFixed(2);
 
+  // ── Deadline status helpers ───────────────────────────────────────────────
+  const getDeadlineStatus = (deadlineValue) => {
+    if (!deadlineValue) return { state: 'not_set', dateStr: null };
+    const end = new Date(deadlineValue);
+    end.setUTCHours(18, 29, 59, 999); // end of day IST
+    const dateStr = new Date(deadlineValue).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+    if (new Date() > end) return { state: 'passed', dateStr };
+    return { state: 'open', dateStr };
+  };
+
+  const commitDeadlineStatus  = getDeadlineStatus(cycle?.commitmentDeadline);
+  const achieveDeadlineStatus = getDeadlineStatus(cycle?.employeeSubmissionDeadline);
+  const isCommitBlocked  = isCommitMode  && (commitDeadlineStatus.state === 'passed' || commitDeadlineStatus.state === 'not_set');
+  const isAchieveBlocked = isAchieveMode && (achieveDeadlineStatus.state === 'passed' || achieveDeadlineStatus.state === 'not_set');
+
   // Column counts for colspan in totals row
   const extraCols = isCommitMode || isPending ? 2 : isAchieveMode ? 4 : 4;
 
@@ -254,11 +269,11 @@ export default function KpiSelfAssessment() {
             <span className="text-violet-600 font-semibold">Monthly Wt: {monthlyWt}%</span>
           </p>
         </div>
-        {isCommitMode && cycle?.commitmentDeadline && (
-          <DeadlineCountdown deadline={cycle.commitmentDeadline} label="Commit by" />
+        {isCommitMode && (
+          <DeadlineCountdown deadline={cycle?.commitmentDeadline} label="Commit by" showIfMissing />
         )}
-        {isAchieveMode && cycle?.employeeSubmissionDeadline && (
-          <DeadlineCountdown deadline={cycle.employeeSubmissionDeadline} label="Submit by" />
+        {isAchieveMode && (
+          <DeadlineCountdown deadline={cycle?.employeeSubmissionDeadline} label="Submit by" showIfMissing />
         )}
       </div>
 
@@ -285,6 +300,52 @@ export default function KpiSelfAssessment() {
         <div className="bg-red-50 border border-red-200 rounded-xl px-5 py-4">
           <p className="font-semibold text-red-700">Commitment rejected — please revise and resubmit</p>
           <p className="text-sm text-red-600 mt-1">{currentAssignment.commitmentRejectionComment}</p>
+        </div>
+      )}
+
+      {/* ── Deadline warning banners ─────────────────────────────────────────── */}
+      {isCommitMode && commitDeadlineStatus.state === 'passed' && (
+        <div className="flex items-start gap-3 bg-red-50 border border-red-200 rounded-xl px-5 py-4">
+          <span className="text-red-500 text-lg leading-none mt-0.5">⚠</span>
+          <div>
+            <p className="font-semibold text-red-700">Commitment deadline has passed</p>
+            <p className="text-sm text-red-600 mt-0.5">
+              The deadline for submitting commitment was <strong>{commitDeadlineStatus.dateStr}</strong>. You can no longer submit for this month.
+            </p>
+          </div>
+        </div>
+      )}
+      {isCommitMode && commitDeadlineStatus.state === 'not_set' && (
+        <div className="flex items-start gap-3 bg-orange-50 border border-orange-200 rounded-xl px-5 py-4">
+          <span className="text-orange-500 text-lg leading-none mt-0.5">⚠</span>
+          <div>
+            <p className="font-semibold text-orange-700">Commitment deadline not set</p>
+            <p className="text-sm text-orange-600 mt-0.5">
+              The admin has not set a commitment deadline for this cycle. Submission is currently blocked. Please contact your admin.
+            </p>
+          </div>
+        </div>
+      )}
+      {isAchieveMode && achieveDeadlineStatus.state === 'passed' && (
+        <div className="flex items-start gap-3 bg-red-50 border border-red-200 rounded-xl px-5 py-4">
+          <span className="text-red-500 text-lg leading-none mt-0.5">⚠</span>
+          <div>
+            <p className="font-semibold text-red-700">Self-review deadline has passed</p>
+            <p className="text-sm text-red-600 mt-0.5">
+              The deadline for submitting self-review was <strong>{achieveDeadlineStatus.dateStr}</strong>. You can no longer submit for this month.
+            </p>
+          </div>
+        </div>
+      )}
+      {isAchieveMode && achieveDeadlineStatus.state === 'not_set' && (
+        <div className="flex items-start gap-3 bg-orange-50 border border-orange-200 rounded-xl px-5 py-4">
+          <span className="text-orange-500 text-lg leading-none mt-0.5">⚠</span>
+          <div>
+            <p className="font-semibold text-orange-700">Self-review deadline not set</p>
+            <p className="text-sm text-orange-600 mt-0.5">
+              The admin has not set a self-review deadline for this cycle. Submission is currently blocked. Please contact your admin.
+            </p>
+          </div>
         </div>
       )}
 
@@ -562,8 +623,9 @@ export default function KpiSelfAssessment() {
           </button>
           <button
             onClick={handleCommitSubmit}
-            disabled={submitting || !allFilled}
-            className="btn-primary"
+            disabled={submitting || !allFilled || isCommitBlocked}
+            title={isCommitBlocked ? (commitDeadlineStatus.state === 'passed' ? `Deadline passed on ${commitDeadlineStatus.dateStr}` : 'Deadline not set by admin') : undefined}
+            className="btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {submitting ? 'Submitting…' : `Submit Commitment (${filledCount}/${currentItems.length})`}
           </button>
@@ -613,8 +675,9 @@ export default function KpiSelfAssessment() {
             </button>
             <button
               onClick={handleAchieveSubmit}
-              disabled={submitting || !allFilled}
-              className="btn-primary bg-amber-500 hover:bg-amber-600 border-amber-500"
+              disabled={submitting || !allFilled || isAchieveBlocked}
+              title={isAchieveBlocked ? (achieveDeadlineStatus.state === 'passed' ? `Deadline passed on ${achieveDeadlineStatus.dateStr}` : 'Deadline not set by admin') : undefined}
+              className="btn-primary bg-amber-500 hover:bg-amber-600 border-amber-500 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {submitting ? 'Submitting…' : 'Submit Achievement'}
             </button>

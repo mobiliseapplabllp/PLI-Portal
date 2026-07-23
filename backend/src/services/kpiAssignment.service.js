@@ -23,6 +23,28 @@ const notificationService = require('./notification.service');
 const { findPlanForEmployee, applyPlanToAssignment } = require('./kpiPlan.service');
 // Lazy-required to avoid circular dependency: finalApprover → kpiAssignment → finalApprover
 const getFinalApproverService = () => require('./finalApprover.service');
+const AppraisalCycle = require('../models/AppraisalCycle');
+
+// ── Deadline enforcement ───────────────────────────────────────────────────────
+// deadlineField: 'commitmentDeadline' | 'employeeSubmissionDeadline' | 'managerReviewDeadline'
+// Admin is never blocked by deadlines.
+const assertDeadline = async (assignment, deadlineField, user) => {
+  if (user.role === 'admin') return;
+  const cycle = await AppraisalCycle.findOne({
+    where: { financialYear: assignment.financialYear, month: assignment.month },
+    attributes: [deadlineField],
+  });
+  const deadline = cycle?.[deadlineField];
+  if (!deadline) {
+    throw new ValidationError('Submission is not allowed — the admin has not set a deadline for this cycle yet.');
+  }
+  // Compare against end-of-day IST (UTC+5:30) so users can submit throughout the deadline date
+  const deadlineEnd = new Date(deadline);
+  deadlineEnd.setUTCHours(18, 29, 59, 999); // 23:59:59.999 IST = 18:29:59 UTC
+  if (new Date() > deadlineEnd) {
+    throw new ValidationError(`Submission deadline has passed (${new Date(deadline).toLocaleDateString('en-IN')}). No further submissions are allowed.`);
+  }
+};
 
 // Months that are the LAST month of their quarter: Q1→6, Q2→9, Q3→12, Q4→3
 const QUARTER_LAST_MONTHS = new Set([3, 6, 9, 12]);
@@ -174,6 +196,15 @@ const getAssignmentById = async (id, user) => {
 
   const assignmentPlain = withCurrentManager(assignment);
 
+  // Attach appraisal cycle deadlines so frontend can show deadline status
+  const cycle = await AppraisalCycle.findOne({
+    where: { financialYear: assignment.financialYear, month: assignment.month },
+    attributes: ['commitmentDeadline', 'employeeSubmissionDeadline', 'managerReviewDeadline', 'finalReviewDeadline'],
+  });
+  assignmentPlain.appraisalCycle = cycle
+    ? { commitmentDeadline: cycle.commitmentDeadline, employeeSubmissionDeadline: cycle.employeeSubmissionDeadline, managerReviewDeadline: cycle.managerReviewDeadline, finalReviewDeadline: cycle.finalReviewDeadline }
+    : null;
+
   // Add helper flags so frontend knows if attachments exist
   assignmentPlain.hasEmployeeAttachment = !!assignment.employeeAttachmentName;
   assignmentPlain.hasManagerAttachment = !!assignment.managerAttachmentName;
@@ -314,6 +345,8 @@ const commitKpi = async (id, itemsData, user) => {
       `Commitment can only be submitted when status is 'assigned'. Current status: '${assignment.status}'`
     );
   }
+
+  await assertDeadline(assignment, 'commitmentDeadline', user);
 
   const now = new Date();
   for (const item of itemsData) {
@@ -586,6 +619,8 @@ const employeeSubmit = async (id, itemsData, file, user) => {
     );
   }
 
+  await assertDeadline(assignment, 'employeeSubmissionDeadline', user);
+
   const now = new Date();
   for (const item of itemsData) {
     await KpiItem.update(
@@ -641,6 +676,8 @@ const managerReview = async (id, itemsData, file, user) => {
   }
 
   validateTransition(assignment.status, KPI_STATUS.MANAGER_REVIEWED);
+
+  await assertDeadline(assignment, 'managerReviewDeadline', user);
 
   const now = new Date();
   for (const item of itemsData) {
