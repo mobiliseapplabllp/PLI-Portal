@@ -38,7 +38,7 @@ export default function DailyLogHistory() {
 
   useEffect(() => { load(page); }, [id, page]);
 
-  const toggle = (logId) => setExpanded(p => ({ ...p, [logId]: !p[logId] }));
+  const toggle = (logId) => setExpanded(p => ({ ...p, [String(logId)]: !p[String(logId)] }));
 
   const today = new Date().toISOString().slice(0, 10);
 
@@ -79,15 +79,15 @@ export default function DailyLogHistory() {
       ) : (
         <div className="space-y-3">
           {logs.map(log => (
-            <div key={log.id} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+            <div key={log._id || log.id} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
               <button
-                onClick={() => toggle(log.id)}
+                onClick={() => toggle(log._id || log.id)}
                 className="w-full px-5 py-4 flex items-center gap-4 hover:bg-gray-50 transition-colors text-left"
               >
                 <div>
                   <p className="text-sm font-semibold text-gray-900">
                     {new Date(log.reportDate).toLocaleDateString('en-IN', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' })}
-                    {log.reportDate === today && <span className="ml-2 text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full">Today</span>}
+                    {log.reportDate?.slice(0, 10) === today && <span className="ml-2 text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full">Today</span>}
                   </p>
                   <p className="text-xs text-gray-400 mt-0.5">
                     {log.generatedBy === 'auto' ? 'Auto-generated' : `By ${log.createdBy?.name || 'Unknown'}`}
@@ -97,11 +97,11 @@ export default function DailyLogHistory() {
                   {log.overallStatus?.replace(/_/g, ' ')}
                 </span>
                 <div className="ml-auto">
-                  {expanded[log.id] ? <HiOutlineChevronUp className="w-4 h-4 text-gray-400" /> : <HiOutlineChevronDown className="w-4 h-4 text-gray-400" />}
+                  {expanded[String(log._id || log.id)] ? <HiOutlineChevronUp className="w-4 h-4 text-gray-400" /> : <HiOutlineChevronDown className="w-4 h-4 text-gray-400" />}
                 </div>
               </button>
 
-              {expanded[log.id] && (
+              {expanded[String(log._id || log.id)] && (
                 <div className="px-5 pb-5 border-t border-gray-100 pt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
                   {[
                     ['Completed Today', log.completedTasks, 'text-emerald-600'],

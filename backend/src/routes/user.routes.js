@@ -7,7 +7,7 @@ const { createUserValidator, updateUserValidator } = require('../validators/user
 
 router.use(authenticate);
 
-router.get('/', authorize('admin'), getUsers);
+router.get('/', authorize('admin', 'manager', 'senior_manager'), getUsers);
 router.post('/', authorize('admin'), createUserValidator, validate, createUser);
 router.get('/designations', authorize('hr_admin', 'admin'), getDesignations);
 router.get('/team/:managerId', authorize('admin', 'manager', 'senior_manager', 'sales_director'), getTeam);

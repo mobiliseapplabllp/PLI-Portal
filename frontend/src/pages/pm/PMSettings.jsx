@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import { getPmSettingsApi, updatePmSettingsApi } from '../../api/pm/pmSettings.api';
 
-const ALL_ROLES = ['admin', 'manager', 'senior_manager', 'hr_admin', 'final_approver', 'employee'];
+const ALL_ROLES = ['admin', 'manager', 'senior_manager', 'hr_admin', 'final_approver', 'employee', 'md', 'director'];
 
 export default function PMSettings() {
   const [settings, setSettings] = useState(null);

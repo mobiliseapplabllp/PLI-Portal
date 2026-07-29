@@ -2,8 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useSelector } from 'react-redux';
 import toast from 'react-hot-toast';
-import { getProjectsApi } from '../../api/pm/projects.api';
-import { getAllProjectTasksApi, updateTaskStatusApi } from '../../api/pm/tasks.api';
+import { getMyTasksApi, updateTaskStatusApi } from '../../api/pm/tasks.api';
 import { HiOutlineCheckCircle, HiOutlineClock, HiOutlineExclamation } from 'react-icons/hi';
 
 const STATUS_COLORS = {
@@ -24,22 +23,19 @@ export default function MyTasks() {
     const load = async () => {
       setLoading(true);
       try {
-        const pRes = await getProjectsApi();
-        const projects = pRes.data.data || [];
-        // Single request per project — no N+1 per milestone
-        const allTasks = [];
-        await Promise.all(projects.map(async (p) => {
-          const pid = p._id || p.id;
-          const tRes = await getAllProjectTasksApi(pid).catch(() => ({ data: { data: [] } }));
-          const tasks = (tRes.data.data || []).filter(t => t.assignedToId === user?._id || t.assignedToId === user?.id);
-          tasks.forEach(t => allTasks.push({ ...t, projectName: p.name, projectId: pid, milestoneName: t.milestone?.name || '—' }));
+        const res = await getMyTasksApi();
+        const tasks = (res.data.data || []).map(t => ({
+          ...t,
+          projectName: t.project?.name || '—',
+          projectId: String(t.project?._id || t.project?.id || t.projectId || ''),
+          milestoneName: t.milestone?.name || '—',
         }));
-        setMyTasks(allTasks);
+        setMyTasks(tasks);
       } catch { toast.error('Failed to load tasks'); }
       finally { setLoading(false); }
     };
     load();
-  }, [user]);
+  }, []);
 
   const filtered = statusFilter ? myTasks.filter(t => t.status === statusFilter) : myTasks;
   const today = new Date().toISOString().slice(0, 10);

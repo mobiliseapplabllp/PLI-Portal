@@ -78,7 +78,7 @@ app.listen(PORT, () => {
   const { startDeadlineReminderJob } = require('./src/jobs/deadlineReminder.job');
   startDeadlineReminderJob();
   const { startProjectDailyReportJob } = require('./src/jobs/projectDailyReport.job');
-  startProjectDailyReportJob();
+  startProjectDailyReportJob().catch(err => console.error('[PM DailyReport] Startup error:', err.message));
   const { startSurveyCron } = require('./src/jobs/surveyCron.job');
   startSurveyCron();
 });

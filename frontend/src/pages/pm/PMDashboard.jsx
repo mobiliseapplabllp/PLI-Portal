@@ -55,7 +55,7 @@ export default function PMDashboard() {
       if (!m.endDate || m.status === 'completed') return;
       const diff = Math.round((new Date(m.endDate) - new Date(today)) / 86400000);
       if (diff >= 0 && diff <= 14) {
-        upcomingMilestones.push({ ...m, projectName: p.name, projectId: p.id, daysLeft: diff });
+        upcomingMilestones.push({ ...m, projectName: p.name, projectId: p._id || p.id, daysLeft: diff });
       }
     });
   });
@@ -105,7 +105,7 @@ export default function PMDashboard() {
                       <div>
                         <p className="text-sm font-medium text-gray-900">{p.name}</p>
                         <p className="text-xs text-gray-500 mt-0.5">
-                          PM: {p.projectManager?.name || 'â€”'} Â· {milestones.length} milestones
+                          PM: {p.projectManager?.name || '—'} · {milestones.length} milestones
                         </p>
                       </div>
                       <div className="text-right">
@@ -192,9 +192,9 @@ export default function PMDashboard() {
                           {p.status?.replace(/_/g, ' ')}
                         </span>
                       </td>
-                      <td className="px-5 py-3 text-gray-600">{p.projectManager?.name || 'â€”'}</td>
+                      <td className="px-5 py-3 text-gray-600">{p.projectManager?.name || '—'}</td>
                       <td className="px-5 py-3 text-gray-600">
-                        {p.endDate ? new Date(p.endDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : 'â€”'}
+                        {p.endDate ? new Date(p.endDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}
                       </td>
                       <td className="px-5 py-3">
                         <div className="flex items-center gap-2">

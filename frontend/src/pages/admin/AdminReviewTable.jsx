@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { getAdminOverviewApi, lockAssignmentApi, unlockAssignmentApi } from '../../api/kpiAssignments.api';
+import { getAdminOverviewApi, lockAssignmentApi, unlockAssignmentApi, revertManagerReviewApi } from '../../api/kpiAssignments.api';
 import PageHeader from '../../components/common/PageHeader';
 import FilterBar from '../../components/common/FilterBar';
 import StatusBadge from '../../components/common/StatusBadge';
@@ -18,6 +18,7 @@ export default function AdminReviewTable() {
   const [loading, setLoading] = useState(false);
   const [expandedEmployee, setExpandedEmployee] = useState(null);
   const [confirmLock, setConfirmLock] = useState(null);
+  const [confirmRevertManager, setConfirmRevertManager] = useState(null);
 
   const loadData = () => {
     if (!filters.financialYear || !filters.month) return;
@@ -37,6 +38,17 @@ export default function AdminReviewTable() {
       loadData();
     } catch (err) {
       toast.error(err.response?.data?.error?.message || 'Lock failed');
+    }
+  };
+
+  const handleRevertManagerReview = async (assignmentId) => {
+    try {
+      await revertManagerReviewApi(assignmentId);
+      toast.success('Reverted to Employee Submitted — all data preserved');
+      setConfirmRevertManager(null);
+      loadData();
+    } catch (err) {
+      toast.error(err.response?.data?.error?.message || 'Revert failed');
     }
   };
 
@@ -89,6 +101,7 @@ export default function AdminReviewTable() {
         const canLock = [KPI_STATUS.FINAL_APPROVED, 'final_reviewed'].includes(assignment.status);
         const canUnlock = assignment.status === KPI_STATUS.LOCKED;
         const isLocked = assignment.status === KPI_STATUS.LOCKED;
+        const canRevertManager = assignment.status === KPI_STATUS.MANAGER_REVIEWED;
 
         return (
           <div key={assignment._id} className={`card mb-4 ${isLocked ? 'border-gray-300 bg-gray-50/30' : ''}`}>
@@ -112,6 +125,14 @@ export default function AdminReviewTable() {
                   <span className="text-sm font-bold text-primary-700 bg-primary-50 px-2 py-0.5 rounded">
                     Score: {formatScore(assignment.monthlyWeightedScore)}
                   </span>
+                )}
+                {canRevertManager && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setConfirmRevertManager(assignment._id); }}
+                    className="text-xs px-2 py-1 rounded bg-orange-50 text-orange-700 hover:bg-orange-100 border border-orange-200 font-medium"
+                  >
+                    Revert to Emp Submitted
+                  </button>
                 )}
                 {canLock && (
                   <button
@@ -231,6 +252,16 @@ export default function AdminReviewTable() {
         danger
         onConfirm={() => handleLock(confirmLock)}
         onCancel={() => setConfirmLock(null)}
+      />
+
+      <ConfirmDialog
+        open={!!confirmRevertManager}
+        title="Revert to Employee Submitted"
+        message="This will change status back to Employee Submitted. All employee and manager scores, comments, and attachments will be fully preserved. Only the status changes. Are you sure?"
+        confirmText="Revert"
+        danger
+        onConfirm={() => handleRevertManagerReview(confirmRevertManager)}
+        onCancel={() => setConfirmRevertManager(null)}
       />
     </div>
   );

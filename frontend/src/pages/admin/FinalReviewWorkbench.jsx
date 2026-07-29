@@ -4,7 +4,7 @@
  * Admin's role here is to lock/unlock after final_approved.
  */
 import { useEffect, useState, useMemo } from 'react';
-import { getAssignmentsApi, getAssignmentByIdApi, lockAssignmentApi, unlockAssignmentApi } from '../../api/kpiAssignments.api';
+import { getAssignmentsApi, getAssignmentByIdApi, lockAssignmentApi, unlockAssignmentApi, revertManagerReviewApi } from '../../api/kpiAssignments.api';
 import PageHeader from '../../components/common/PageHeader';
 import StatusBadge from '../../components/common/StatusBadge';
 import FilterBar from '../../components/common/FilterBar';
@@ -35,6 +35,7 @@ export default function FinalReviewWorkbench() {
   const [expandLoading, setExpandLoading] = useState(null);
   const [confirmLock, setConfirmLock] = useState(null);   // assignmentId
   const [confirmUnlock, setConfirmUnlock] = useState(null);
+  const [confirmRevertManager, setConfirmRevertManager] = useState(null);
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [bulkLocking, setBulkLocking] = useState(false);
 
@@ -43,7 +44,7 @@ export default function FinalReviewWorkbench() {
     setLoading(true);
     getAssignmentsApi({
       ...filters,
-      status: 'final_approved,locked,final_reviewed',
+      status: 'manager_reviewed,final_approved,locked,final_reviewed',
       limit: 200,
     })
       .then((res) => {
@@ -91,6 +92,18 @@ export default function FinalReviewWorkbench() {
       loadData();
     } catch (err) {
       toast.error(err.response?.data?.error?.message || 'Unlock failed');
+    }
+  };
+
+  const handleRevertManagerReview = async (id) => {
+    try {
+      await revertManagerReviewApi(id);
+      toast.success('Reverted to Employee Submitted — all data preserved');
+      setConfirmRevertManager(null);
+      setExpandedData((prev) => { const n = { ...prev }; delete n[id]; return n; });
+      loadData();
+    } catch (err) {
+      toast.error(err.response?.data?.error?.message || 'Revert failed');
     }
   };
 
@@ -203,6 +216,7 @@ export default function FinalReviewWorkbench() {
                 const id = row._id || row.id;
                 const isLocked = row.status === KPI_STATUS.LOCKED;
                 const canLock = [KPI_STATUS.FINAL_APPROVED, 'final_reviewed'].includes(row.status);
+                const canRevertManager = row.status === KPI_STATUS.MANAGER_REVIEWED;
                 const isExpanded = expandedId === id;
                 const detail = expandedData[id];
 
@@ -242,6 +256,15 @@ export default function FinalReviewWorkbench() {
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-2">
+                          {canRevertManager && (
+                            <button
+                              onClick={() => setConfirmRevertManager(id)}
+                              className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded bg-orange-50 text-orange-700 hover:bg-orange-100 border border-orange-200 font-medium"
+                            >
+                              <HiOutlineRefresh className="w-3.5 h-3.5" />
+                              Revert to Emp Submitted
+                            </button>
+                          )}
                           {canLock && (
                             <button
                               onClick={() => setConfirmLock(id)}
@@ -307,6 +330,16 @@ export default function FinalReviewWorkbench() {
         confirmText="Unlock"
         onConfirm={() => handleUnlock(confirmUnlock)}
         onCancel={() => setConfirmUnlock(null)}
+      />
+
+      <ConfirmDialog
+        open={!!confirmRevertManager}
+        title="Revert to Employee Submitted"
+        message="This will change status back to Employee Submitted. All employee and manager scores, comments, and attachments will be fully preserved. Only the status changes. Are you sure?"
+        confirmText="Revert"
+        danger
+        onConfirm={() => handleRevertManagerReview(confirmRevertManager)}
+        onCancel={() => setConfirmRevertManager(null)}
       />
     </div>
   );

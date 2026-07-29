@@ -338,6 +338,15 @@ const revertSelfReview = async (req, res, next) => {
   }
 };
 
+const revertManagerReview = async (req, res, next) => {
+  try {
+    const assignment = await kpiAssignmentService.revertManagerReview(req.params.id, req.user);
+    sendSuccess(res, assignment, 'Reverted to employee submitted successfully');
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   getAssignments,
   getAssignmentById,
@@ -361,6 +370,7 @@ module.exports = {
   bulkCloneKpis,
   bulkImportKpis,
   revertSelfReview,
+  revertManagerReview,
   getImportTemplate,
   getEmployeeAttachment,
   getManagerAttachment,

@@ -39,6 +39,7 @@ export const unlockAssignmentApi = (id) => api.post(`/kpi-assignments/${id}/unlo
 export const getTeamOverviewApi = (params) => api.get('/kpi-assignments/team-overview', { params });
 export const getAdminOverviewApi = (params) => api.get('/kpi-assignments/admin-overview', { params });
 export const reopenAssignmentApi = (id, targetStatus) => api.post(`/kpi-assignments/${id}/reopen`, { targetStatus });
+export const revertManagerReviewApi = (id) => api.post(`/kpi-assignments/${id}/revert-manager-review`);
 export const cloneKpisApi = (data) => api.post('/kpi-assignments/clone', data);
 export const bulkCloneKpisApi = (data) => api.post('/kpi-assignments/bulk-clone', data);
 export const bulkImportKpisApi = (formData) => api.post('/kpi-assignments/bulk-import', formData, { headers: { 'Content-Type': 'multipart/form-data' } });

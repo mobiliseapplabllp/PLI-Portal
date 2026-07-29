@@ -2,12 +2,14 @@ import { useEffect, useState, useCallback } from 'react';
 import { useSelector } from 'react-redux';
 import {
   getTeamOverviewApi,
+  getAssignmentsApi,
   getAssignmentByIdApi,
   reviewCommitmentApi,
   managerReviewApi,
   saveDraftApi,
   downloadItemAttachmentApi,
   revertSelfReviewApi,
+  revertManagerReviewApi,
 } from '../../api/kpiAssignments.api';
 import { getDepartmentsApi } from '../../api/departments.api';
 import { getUsersApi } from '../../api/users.api';
@@ -23,6 +25,8 @@ import {
   KPI_HEAD_LABELS,
   KPI_SUBMISSION_VALUES,
   ROLE_OPTIONS,
+  QUARTER_MAP,
+  QUARTER_MONTHS,
 } from '../../utils/constants';
 import { getMonthName } from '../../utils/formatters';
 import toast from 'react-hot-toast';
@@ -89,6 +93,10 @@ export default function ManagerTeamKpi() {
   const [activeHead, setActiveHead] = useState(KPI_HEADS[0]);
   const [revertModal, setRevertModal] = useState(false);
   const [reverting, setReverting] = useState(false);
+  const [revertMgrModal, setRevertMgrModal] = useState(false);
+  const [revertMgrMonths, setRevertMgrMonths] = useState([]);  // [{ month, assignmentId, status }]
+  const [revertMgrChecked, setRevertMgrChecked] = useState({});
+  const [revertMgrLoading, setRevertMgrLoading] = useState(false);
 
   // Admin-only: department / role / employee selectors
   const [adminDept, setAdminDept] = useState('');
@@ -328,6 +336,59 @@ export default function ManagerTeamKpi() {
       window.open(url, '_blank');
       setTimeout(() => URL.revokeObjectURL(url), 60000);
     } catch { toast.error('Could not download attachment'); }
+  };
+
+  const canRevertMgrReview = ['admin', 'final_approver'].includes(user?.role);
+
+  const openRevertMgrModal = async () => {
+    const empId = selectedMember?.employee?.id || selectedMember?.employee?._id;
+    if (!empId) return;
+    const quarter = QUARTER_MAP[selectedMonth];
+    const qMonths = QUARTER_MONTHS[quarter] || [];
+    setRevertMgrLoading(true);
+    setRevertMgrModal(true);
+    setRevertMgrChecked({});
+    try {
+      const res = await getAssignmentsApi({ financialYear: fy, employee: empId });
+      const all = res.data.data?.assignments || [];
+      const monthRows = qMonths
+        .map((m) => {
+          const a = all.find((x) => Number(x.month) === m);
+          return { month: m, assignmentId: a?.id || a?._id || null, status: a?.status || null };
+        })
+        .filter((r) => r.status === KPI_STATUS.MANAGER_REVIEWED);
+      setRevertMgrMonths(monthRows);
+      const initial = {};
+      monthRows.forEach((r) => { initial[r.month] = true; });
+      setRevertMgrChecked(initial);
+    } catch {
+      toast.error('Failed to load quarter months');
+      setRevertMgrModal(false);
+    } finally {
+      setRevertMgrLoading(false);
+    }
+  };
+
+  const handleConfirmRevertMgr = async () => {
+    const toRevert = revertMgrMonths.filter((r) => revertMgrChecked[r.month]);
+    if (!toRevert.length) { toast.error('Select at least one month'); return; }
+    setRevertMgrLoading(true);
+    let success = 0;
+    for (const r of toRevert) {
+      try {
+        await revertManagerReviewApi(r.assignmentId);
+        success++;
+      } catch (err) {
+        toast.error(`Month ${r.month}: ${err.response?.data?.error?.message || 'Failed'}`);
+      }
+    }
+    setRevertMgrLoading(false);
+    setRevertMgrModal(false);
+    if (success > 0) {
+      toast.success(`${success} month(s) reverted to Employee Submitted`);
+      // Reload team data to reflect new status (works for both admin and final_approver)
+      if (selectedEmployeeId) loadAdminData(selectedEmployeeId);
+    }
   };
 
   const handleRevertSelfReview = async () => {
@@ -931,9 +992,72 @@ export default function ManagerTeamKpi() {
                 </div>
               )}
             </div>
+
+            {/* Revert Manager Review — visible to admin / final_approver when status is manager_reviewed */}
+            {canRevertMgrReview && status === KPI_STATUS.MANAGER_REVIEWED && (
+              <div className="mt-4 pt-4 border-t border-gray-100 flex justify-end">
+                <button
+                  onClick={openRevertMgrModal}
+                  className="text-sm flex items-center gap-2 px-3 py-2 rounded-lg border border-orange-300 text-orange-600 hover:bg-orange-50 transition-colors"
+                >
+                  <HiOutlineRefresh className="w-4 h-4" />
+                  Revert Manager Review
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>
+
+      {/* Revert Manager Review Modal */}
+      {revertMgrModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md mx-4 p-6">
+            <h3 className="text-base font-semibold text-gray-800 mb-1">Revert Manager Review</h3>
+            <p className="text-sm text-gray-500 mb-4">
+              Select the months to revert from <strong>Manager Reviewed</strong> back to <strong>Employee Submitted</strong>. All scores and comments will be fully preserved — only the status changes.
+            </p>
+            {revertMgrLoading && !revertMgrMonths.length ? (
+              <p className="text-sm text-gray-400 text-center py-4">Loading quarter months…</p>
+            ) : revertMgrMonths.length === 0 ? (
+              <p className="text-sm text-gray-400 text-center py-4">No months in this quarter are at Manager Reviewed status.</p>
+            ) : (
+              <div className="space-y-2 mb-5">
+                {revertMgrMonths.map((r) => (
+                  <label key={r.month} className="flex items-center gap-3 p-3 rounded-lg border border-gray-200 hover:bg-gray-50 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={!!revertMgrChecked[r.month]}
+                      onChange={(e) => setRevertMgrChecked((prev) => ({ ...prev, [r.month]: e.target.checked }))}
+                      className="w-4 h-4 accent-orange-500"
+                    />
+                    <span className="text-sm font-medium text-gray-700">
+                      Month {r.month} — <span className="text-orange-600">Manager Reviewed</span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+            )}
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setRevertMgrModal(false)}
+                className="btn-secondary text-sm"
+                disabled={revertMgrLoading}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmRevertMgr}
+                disabled={revertMgrLoading || revertMgrMonths.length === 0 || !Object.values(revertMgrChecked).some(Boolean)}
+                className="text-sm flex items-center gap-2 px-4 py-2 rounded-lg bg-orange-500 text-white hover:bg-orange-600 disabled:opacity-50 transition-colors"
+              >
+                {revertMgrLoading ? <HiOutlineRefresh className="w-4 h-4 animate-spin" /> : <HiOutlineXCircle className="w-4 h-4" />}
+                {revertMgrLoading ? 'Reverting…' : 'Confirm Revert'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Revert Self-Review Modal */}
       {revertModal && (

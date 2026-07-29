@@ -160,6 +160,7 @@ const pmNavItems = {
   employee: [
     { to: '/pm/dashboard', label: 'PM Dashboard', icon: HiOutlineHome },
     { to: '/pm/projects', label: 'My Projects', icon: HiOutlineFolderOpen },
+    { to: '/pm/my-tasks', label: 'My Tasks', icon: HiOutlineCheckCircle },
   ],
   manager: [
     { to: '/pm/dashboard', label: 'PM Dashboard', icon: HiOutlineHome },

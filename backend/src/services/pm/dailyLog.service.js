@@ -10,7 +10,22 @@ function canSubmitLog(project, user) {
   return false;
 }
 
-const getLogs = async (projectId, query = {}) => {
+async function assertProjectVisible(projectId, user) {
+  if (['admin', 'md', 'director', 'hr_admin', 'final_approver'].includes(user.role)) return;
+  const project = await Project.findByPk(projectId, {
+    attributes: ['id', 'managerId', 'ownerId'],
+    include: [{ model: ProjectMember, as: 'members', attributes: ['userId'] }],
+  });
+  if (!project) throw new NotFoundError('Project');
+  const visible =
+    String(project.managerId) === String(user._id) ||
+    String(project.ownerId) === String(user._id) ||
+    (project.members || []).some(m => String(m.userId) === String(user._id));
+  if (!visible) throw new ForbiddenError('Access denied to this project');
+}
+
+const getLogs = async (projectId, query = {}, user) => {
+  await assertProjectVisible(projectId, user);
   const page = Math.max(1, Number(query.page) || 1);
   const limit = Math.min(50, Number(query.limit) || 20);
   const offset = (page - 1) * limit;
@@ -26,7 +41,8 @@ const getLogs = async (projectId, query = {}) => {
   return { logs: rows, pagination: { page, limit, total: count, pages: Math.ceil(count / limit) } };
 };
 
-const getLogById = async (projectId, logId) => {
+const getLogById = async (projectId, logId, user) => {
+  await assertProjectVisible(projectId, user);
   const log = await DailyStatusLog.findOne({
     where: { id: logId, projectId },
     include: [{ model: User, as: 'createdBy', attributes: ['id', 'name'] }],
@@ -36,10 +52,12 @@ const getLogById = async (projectId, logId) => {
 };
 
 const upsertTodayLog = async (projectId, data, user) => {
+  // Visibility gate first — user must be a project member, manager, or privileged role
+  await assertProjectVisible(projectId, user);
   const project = await Project.findByPk(projectId);
   if (!project) throw new NotFoundError('Project');
   if (!canSubmitLog(project, user)) {
-    // Also allow project members
+    // Also allow project members (assertProjectVisible already confirmed membership for non-privileged roles)
     const isMember = await ProjectMember.findOne({ where: { projectId, userId: user._id } });
     if (!isMember) throw new ForbiddenError('Only project members can submit daily logs');
   }
@@ -58,7 +76,8 @@ const upsertTodayLog = async (projectId, data, user) => {
   return log;
 };
 
-const getTodayLog = async (projectId) => {
+const getTodayLog = async (projectId, user) => {
+  await assertProjectVisible(projectId, user);
   const today = new Date().toISOString().slice(0, 10);
   return DailyStatusLog.findOne({
     where: { projectId, reportDate: today },

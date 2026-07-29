@@ -9,7 +9,7 @@ router.get('/', authorize(...ALL), ctrl.getMilestones);
 router.post('/', authorize(...MANAGERS), ctrl.createMilestone);
 router.put('/:milestoneId', authorize(...MANAGERS), ctrl.updateMilestone);
 router.delete('/:milestoneId', authorize(...MANAGERS), ctrl.deleteMilestone);
-router.patch('/:milestoneId/status', authorize(...MANAGERS), ctrl.updateStatus);
-router.patch('/:milestoneId/progress', authorize(...MANAGERS), ctrl.updateProgress);
+router.patch('/:milestoneId/status', authorize(...ALL), ctrl.updateStatus);
+router.patch('/:milestoneId/progress', authorize(...ALL), ctrl.updateProgress);
 
 module.exports = router;

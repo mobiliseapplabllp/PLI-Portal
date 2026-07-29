@@ -33,7 +33,7 @@ const getProjectSummary = async (req, res, next) => {
 
 // Members
 const getMembers = async (req, res, next) => {
-  try { sendSuccess(res, await projectService.getMembers(req.params.id)); }
+  try { sendSuccess(res, await projectService.getMembers(req.params.id, req.user)); }
   catch (e) { next(e); }
 };
 const addMember = async (req, res, next) => {
@@ -41,25 +41,25 @@ const addMember = async (req, res, next) => {
   catch (e) { next(e); }
 };
 const updateMember = async (req, res, next) => {
-  try { sendSuccess(res, await projectService.updateMember(req.params.id, req.params.memberId, req.body), 'Member updated'); }
+  try { sendSuccess(res, await projectService.updateMember(req.params.id, req.params.memberId, req.body, req.user), 'Member updated'); }
   catch (e) { next(e); }
 };
 const removeMember = async (req, res, next) => {
-  try { await projectService.removeMember(req.params.id, req.params.memberId); sendSuccess(res, null, 'Member removed'); }
+  try { await projectService.removeMember(req.params.id, req.params.memberId, req.user); sendSuccess(res, null, 'Member removed'); }
   catch (e) { next(e); }
 };
 
 // Recipients
 const getRecipients = async (req, res, next) => {
-  try { sendSuccess(res, await projectService.getRecipients(req.params.id)); }
+  try { sendSuccess(res, await projectService.getRecipients(req.params.id, req.user)); }
   catch (e) { next(e); }
 };
 const addRecipient = async (req, res, next) => {
-  try { sendSuccess(res, await projectService.addRecipient(req.params.id, req.body), 'Recipient added', 201); }
+  try { sendSuccess(res, await projectService.addRecipient(req.params.id, req.body, req.user), 'Recipient added', 201); }
   catch (e) { next(e); }
 };
 const removeRecipient = async (req, res, next) => {
-  try { await projectService.removeRecipient(req.params.id, req.params.recipientId); sendSuccess(res, null, 'Recipient removed'); }
+  try { await projectService.removeRecipient(req.params.id, req.params.recipientId, req.user); sendSuccess(res, null, 'Recipient removed'); }
   catch (e) { next(e); }
 };
 

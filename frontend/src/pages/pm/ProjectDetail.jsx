@@ -6,9 +6,10 @@ import toast from 'react-hot-toast';
 import {
   HiOutlineArrowLeft, HiOutlinePencil, HiOutlineUserAdd,
   HiOutlineFlag, HiOutlineChartBar, HiOutlineUsers, HiOutlineMail,
-  HiOutlineCalendar, HiOutlineClipboardList,
+  HiOutlineCalendar, HiOutlineClipboardList, HiOutlineViewBoards,
 } from 'react-icons/hi';
 import { updateProjectApi, addMemberApi, removeMemberApi } from '../../api/pm/projects.api';
+import { getTodayLogApi } from '../../api/pm/dailyLogs.api';
 import { getUsersApi } from '../../api/users.api';
 
 const STATUS_COLORS = {
@@ -41,6 +42,7 @@ export default function ProjectDetail() {
   const [addingMember, setAddingMember] = useState(false);
   const [memberForm, setMemberForm] = useState({ userId: '', role: '', responsibilities: '' });
   const [statusUpdating, setStatusUpdating] = useState(false);
+  const [todayLog, setTodayLog] = useState(null);
 
   useEffect(() => {
     dispatch(clearActiveProject());
@@ -49,9 +51,15 @@ export default function ProjectDetail() {
 
   useEffect(() => {
     if (MANAGER_ROLES.includes(user?.role)) {
-      getUsersApi({ isActive: true, limit: 200 }).then(res => setAllUsers(res.data?.data?.users || res.data?.data || [])).catch(() => {});
+      getUsersApi({ isActive: true, limit: 200 }).then(res => setAllUsers(res.data?.data?.users || res.data?.data || [])).catch(() => toast.error('Failed to load users list'));
     }
   }, [user]);
+
+  useEffect(() => {
+    if (activeTab === 'dailylog' && id) {
+      getTodayLogApi(id).then(res => setTodayLog(res.data?.data || null)).catch(() => setTodayLog(null));
+    }
+  }, [activeTab, id]);
 
   const canManage = MANAGER_ROLES.includes(user?.role) || (project && String(project.managerId) === String(user?._id));
 
@@ -153,22 +161,31 @@ export default function ProjectDetail() {
             )}
           </div>
           <div className="flex items-center gap-4 mt-1 text-sm text-gray-500 flex-wrap">
-            <span>PM: <strong className="text-gray-700">{project.projectManager?.name || 'â€”'}</strong></span>
-            <span>Owner: <strong className="text-gray-700">{project.owner?.name || 'â€”'}</strong></span>
+            <span>PM: <strong className="text-gray-700">{project.projectManager?.name || '—'}</strong></span>
+            <span>Owner: <strong className="text-gray-700">{project.owner?.name || '—'}</strong></span>
             {project.clientName && <span>Client: <strong className="text-gray-700">{project.clientName}</strong></span>}
             {project.endDate && <span>Due: <strong className="text-gray-700">{new Date(project.endDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</strong></span>}
           </div>
         </div>
 
-        {canManage && (
+        <div className="flex items-center gap-2">
           <button
-            onClick={() => navigate(`/pm/projects/${id}/milestones`)}
-            className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 transition-colors"
+            onClick={() => navigate(`/pm/projects/${id}/tasks`)}
+            className="flex items-center gap-2 px-4 py-2 border border-gray-200 text-gray-600 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors"
           >
-            <HiOutlineFlag className="w-4 h-4" />
-            Manage Milestones
+            <HiOutlineViewBoards className="w-4 h-4" />
+            Task Board
           </button>
-        )}
+          {canManage && (
+            <button
+              onClick={() => navigate(`/pm/projects/${id}/milestones`)}
+              className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 transition-colors"
+            >
+              <HiOutlineFlag className="w-4 h-4" />
+              Manage Milestones
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Progress Bar */}
@@ -221,9 +238,9 @@ export default function ProjectDetail() {
             )}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 pt-2">
               {[
-                ['Start Date', project.startDate ? new Date(project.startDate).toLocaleDateString('en-IN') : 'â€”'],
-                ['End Date', project.endDate ? new Date(project.endDate).toLocaleDateString('en-IN') : 'â€”'],
-                ['Client', project.clientName || 'â€”'],
+                ['Start Date', project.startDate ? new Date(project.startDate).toLocaleDateString('en-IN') : '—'],
+                ['End Date', project.endDate ? new Date(project.endDate).toLocaleDateString('en-IN') : '—'],
+                ['Client', project.clientName || '—'],
                 ['Notify Client', project.notifyClient ? 'Yes' : 'No'],
               ].map(([l, v]) => (
                 <div key={l}>
@@ -242,7 +259,7 @@ export default function ProjectDetail() {
                 onClick={() => navigate(`/pm/projects/${id}/gantt`)}
                 className="text-xs text-emerald-600 hover:underline"
               >
-                Full Gantt View â†’
+                Full Gantt View â†'
               </button>
             </div>
             {milestones.length === 0 ? (
@@ -309,11 +326,11 @@ export default function ProjectDetail() {
                           <p className="font-medium text-gray-900">{m.name}</p>
                           {m.description && <p className="text-xs text-gray-400 mt-0.5">{m.description}</p>}
                         </td>
-                        <td className="px-5 py-3 text-gray-600">{m.accountableUser?.name || 'â€”'}</td>
-                        <td className="px-5 py-3 text-gray-500 text-xs">{m.startDate ? new Date(m.startDate).toLocaleDateString('en-IN') : 'â€”'}</td>
+                        <td className="px-5 py-3 text-gray-600">{m.accountableUser?.name || '—'}</td>
+                        <td className="px-5 py-3 text-gray-500 text-xs">{m.startDate ? new Date(m.startDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}</td>
                         <td className={`px-5 py-3 text-xs ${isDelayed ? 'text-red-600 font-semibold' : 'text-gray-500'}`}>
-                          {m.endDate ? new Date(m.endDate).toLocaleDateString('en-IN') : 'â€”'}
-                          {isDelayed && ' âš ï¸'}
+                          {m.endDate ? new Date(m.endDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}
+                          {isDelayed && <span className="text-red-500 font-bold ml-1" title="Overdue">⚠</span>}
                         </td>
                         <td className="px-5 py-3">
                           <span className={`text-xs px-2 py-0.5 rounded-full font-medium capitalize ${MILESTONE_STATUS_COLORS[m.status] || 'bg-gray-100'}`}>
@@ -385,7 +402,7 @@ export default function ProjectDetail() {
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-gray-900">{m.user?.name}</p>
-                    <p className="text-xs text-gray-500">{m.user?.email} Â· {m.user?.role?.replace(/_/g, ' ')}</p>
+                    <p className="text-xs text-gray-500">{m.user?.email} · {m.user?.role?.replace(/_/g, ' ')}</p>
                     {m.role && <p className="text-xs text-emerald-700 mt-0.5">Project Role: {m.role}</p>}
                     {m.responsibilities && <p className="text-xs text-gray-400 mt-0.5">{m.responsibilities}</p>}
                   </div>
@@ -403,16 +420,57 @@ export default function ProjectDetail() {
       {activeTab === 'dailylog' && (
         <div className="space-y-4">
           <div className="flex justify-between items-center">
-            <p className="text-sm text-gray-500">Submit or view today's status report</p>
+            <p className="text-sm text-gray-500">Today's status report for this project</p>
             <div className="flex gap-2">
               <button onClick={() => navigate(`/pm/projects/${id}/daily-log`)} className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 transition-colors">
-                Update Today's Log
+                {todayLog ? 'Update Today\'s Log' : 'Submit Today\'s Log'}
               </button>
               <button onClick={() => navigate(`/pm/projects/${id}/daily-logs`)} className="px-4 py-2 border border-gray-200 text-gray-600 rounded-lg text-sm hover:bg-gray-50 transition-colors">
                 View History
               </button>
             </div>
           </div>
+
+          {todayLog ? (
+            <div className="bg-white rounded-xl border border-gray-200 p-5">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <p className="text-sm font-semibold text-gray-900">
+                    {new Date(todayLog.reportDate).toLocaleDateString('en-IN', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' })}
+                  </p>
+                  <p className="text-xs text-gray-400 mt-0.5">{todayLog.generatedBy === 'auto' ? 'Auto-generated' : `By ${todayLog.createdBy?.name || 'Unknown'}`}</p>
+                </div>
+                <span className={`text-xs font-semibold px-3 py-1 rounded-full capitalize ${
+                  todayLog.overallStatus === 'on_track' ? 'bg-emerald-100 text-emerald-700' :
+                  todayLog.overallStatus === 'at_risk' ? 'bg-yellow-100 text-yellow-700' :
+                  todayLog.overallStatus === 'delayed' ? 'bg-red-100 text-red-700' : 'bg-blue-100 text-blue-700'
+                }`}>{todayLog.overallStatus?.replace(/_/g, ' ')}</span>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {[
+                  ['Completed Today', todayLog.completedTasks, 'text-emerald-600'],
+                  ['Ongoing Tasks', todayLog.ongoingTasks, 'text-blue-600'],
+                  ['Blockers / Issues', todayLog.blockers, 'text-red-600'],
+                  ['Upcoming Work', todayLog.upcomingWork, 'text-orange-600'],
+                  ['Notes', todayLog.notes, 'text-gray-600'],
+                ].filter(([, val]) => val).map(([label, val, color]) => (
+                  <div key={label}>
+                    <p className={`text-xs font-semibold uppercase tracking-wider mb-1 ${color}`}>{label}</p>
+                    <p className="text-sm text-gray-700 whitespace-pre-wrap">{val}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="bg-white rounded-xl border border-dashed border-gray-300 p-10 text-center">
+              <HiOutlineClipboardList className="w-10 h-10 text-gray-300 mx-auto mb-3" />
+              <p className="text-gray-500 font-medium">No log submitted for today</p>
+              <p className="text-xs text-gray-400 mt-1">Submit a daily status update to keep the team informed</p>
+              <button onClick={() => navigate(`/pm/projects/${id}/daily-log`)} className="mt-4 px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 transition-colors">
+                Submit Now
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>

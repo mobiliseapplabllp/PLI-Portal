@@ -7,6 +7,7 @@ const DailyStatusLog = require('../../models/pm/DailyStatusLog');
 const ProjectNotificationRecipient = require('../../models/pm/ProjectNotificationRecipient');
 const User = require('../../models/User');
 const { NotFoundError, ForbiddenError } = require('../../utils/errors');
+const pmSettingsService = require('./pmSettings.service');
 
 const PROJECT_INCLUDE = [
   { model: User, as: 'owner', attributes: ['id', 'name', 'email', 'designation'] },
@@ -21,7 +22,6 @@ const PROJECT_INCLUDE = [
     model: Milestone, as: 'milestones',
     attributes: ['id', 'name', 'status', 'endDate', 'completionPercentage', 'order'],
     include: [{ model: User, as: 'accountableUser', attributes: ['id', 'name'] }],
-    order: [['order', 'ASC']],
   },
 ];
 
@@ -44,7 +44,10 @@ const getProjects = async (query, user) => {
   const projects = await Project.findAll({
     where,
     include: PROJECT_INCLUDE,
-    order: [['createdAt', 'DESC']],
+    order: [
+      ['createdAt', 'DESC'],
+      [{ model: Milestone, as: 'milestones' }, 'order', 'ASC'],
+    ],
   });
 
   // Filter by visibility for non-admin roles
@@ -55,9 +58,12 @@ const getProjects = async (query, user) => {
 };
 
 const getProjectById = async (id, user) => {
+  // Exclude the basic milestones include from PROJECT_INCLUDE (used for list views)
+  // and replace it with the full detail include (with tasks) for the project detail view
+  const baseIncludes = PROJECT_INCLUDE.filter(inc => inc.as !== 'milestones');
   const project = await Project.findByPk(id, {
     include: [
-      ...PROJECT_INCLUDE,
+      ...baseIncludes,
       {
         model: Milestone, as: 'milestones',
         include: [
@@ -67,12 +73,15 @@ const getProjectById = async (id, user) => {
             include: [{ model: User, as: 'assignedTo', attributes: ['id', 'name', 'email'] }],
           },
         ],
-        order: [['order', 'ASC']],
       },
       {
         model: ProjectNotificationRecipient, as: 'notificationRecipients',
         include: [{ model: User, as: 'user', attributes: ['id', 'name', 'email'] }],
       },
+    ],
+    order: [
+      [{ model: Milestone, as: 'milestones' }, 'order', 'ASC'],
+      [{ model: Milestone, as: 'milestones' }, { model: Task, as: 'tasks' }, 'order', 'ASC'],
     ],
   });
   if (!project) throw new NotFoundError('Project');
@@ -81,6 +90,10 @@ const getProjectById = async (id, user) => {
 };
 
 const createProject = async (data, user) => {
+  const settings = await pmSettingsService.getSettings();
+  const allowed = settings.allowedCreatorRoles || ['admin', 'manager', 'senior_manager'];
+  if (!allowed.includes(user.role))
+    throw new ForbiddenError(`Your role (${user.role}) is not permitted to create projects`);
   return Project.create({ ...data, createdById: user._id });
 };
 
@@ -123,7 +136,13 @@ const getProjectSummary = async (id, user) => {
 };
 
 // ── Members ───────────────────────────────────────────────────────────────────
-const getMembers = async (projectId) => {
+const getMembers = async (projectId, user) => {
+  const project = await Project.findByPk(projectId, {
+    attributes: ['id', 'managerId', 'ownerId'],
+    include: [{ model: ProjectMember, as: 'members', attributes: ['userId'] }],
+  });
+  if (!project) throw new NotFoundError('Project');
+  if (!isProjectVisible(project, user)) throw new ForbiddenError('Access denied to this project');
   return ProjectMember.findAll({
     where: { projectId },
     include: [{ model: User, as: 'user', attributes: ['id', 'name', 'email', 'designation', 'role'] }],
@@ -143,7 +162,11 @@ const addMember = async (projectId, data, user) => {
   return member;
 };
 
-const updateMember = async (projectId, memberId, data) => {
+const updateMember = async (projectId, memberId, data, user) => {
+  const project = await Project.findByPk(projectId);
+  if (!project) throw new NotFoundError('Project');
+  if (!canManageProject(user) && String(project.managerId) !== String(user._id))
+    throw new ForbiddenError('Only project manager or admin can update members');
   const member = await ProjectMember.findOne({ where: { id: memberId, projectId } });
   if (!member) throw new NotFoundError('Project Member');
   Object.assign(member, data);
@@ -151,25 +174,43 @@ const updateMember = async (projectId, memberId, data) => {
   return member;
 };
 
-const removeMember = async (projectId, memberId) => {
+const removeMember = async (projectId, memberId, user) => {
+  const project = await Project.findByPk(projectId);
+  if (!project) throw new NotFoundError('Project');
+  if (!canManageProject(user) && String(project.managerId) !== String(user._id))
+    throw new ForbiddenError('Only project manager or admin can remove members');
   const member = await ProjectMember.findOne({ where: { id: memberId, projectId } });
   if (!member) throw new NotFoundError('Project Member');
   await member.destroy();
 };
 
 // ── Notification Recipients ───────────────────────────────────────────────────
-const getRecipients = async (projectId) => {
+const getRecipients = async (projectId, user) => {
+  const project = await Project.findByPk(projectId, {
+    attributes: ['id', 'managerId', 'ownerId'],
+    include: [{ model: ProjectMember, as: 'members', attributes: ['userId'] }],
+  });
+  if (!project) throw new NotFoundError('Project');
+  if (!isProjectVisible(project, user)) throw new ForbiddenError('Access denied to this project');
   return ProjectNotificationRecipient.findAll({
     where: { projectId },
     include: [{ model: User, as: 'user', attributes: ['id', 'name', 'email'] }],
   });
 };
 
-const addRecipient = async (projectId, data) => {
+const addRecipient = async (projectId, data, user) => {
+  const project = await Project.findByPk(projectId, { attributes: ['id', 'managerId'] });
+  if (!project) throw new NotFoundError('Project');
+  if (!canManageProject(user) && String(project.managerId) !== String(user._id))
+    throw new ForbiddenError('Only project manager can manage recipients');
   return ProjectNotificationRecipient.create({ projectId, ...data });
 };
 
-const removeRecipient = async (projectId, recipientId) => {
+const removeRecipient = async (projectId, recipientId, user) => {
+  const project = await Project.findByPk(projectId, { attributes: ['id', 'managerId'] });
+  if (!project) throw new NotFoundError('Project');
+  if (!canManageProject(user) && String(project.managerId) !== String(user._id))
+    throw new ForbiddenError('Only project manager can manage recipients');
   const r = await ProjectNotificationRecipient.findOne({ where: { id: recipientId, projectId } });
   if (!r) throw new NotFoundError('Recipient');
   await r.destroy();

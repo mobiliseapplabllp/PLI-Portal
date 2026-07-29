@@ -2,7 +2,7 @@
 import { useParams, useNavigate } from 'react-router-dom';
 import { useSelector } from 'react-redux';
 import toast from 'react-hot-toast';
-import { getTasksApi, createTaskApi, updateTaskApi, deleteTaskApi, updateTaskStatusApi } from '../../api/pm/tasks.api';
+import { getAllProjectTasksApi, createTaskApi, updateTaskApi, deleteTaskApi, updateTaskStatusApi } from '../../api/pm/tasks.api';
 import { getMilestonesApi } from '../../api/pm/milestones.api';
 import { getProjectByIdApi } from '../../api/pm/projects.api';
 import { getUsersApi } from '../../api/users.api';
@@ -20,6 +20,9 @@ export default function TaskBoard() {
   const navigate = useNavigate();
   const { user } = useSelector(s => s.auth);
   const [project, setProject] = useState(null);
+  const userId = String(user?._id || user?.id || '');
+  const canManage = ['admin', 'manager', 'senior_manager'].includes(user?.role) ||
+    (project && userId && String(project.managerId) === userId);
   const [tasks, setTasks] = useState([]);
   const [milestones, setMilestones] = useState([]);
   const [users, setUsers] = useState([]);
@@ -35,20 +38,24 @@ export default function TaskBoard() {
     setLoading(true);
     try {
       const [pRes, mRes] = await Promise.all([getProjectByIdApi(id), getMilestonesApi(id)]);
-      setProject(pRes.data.data);
+      const proj = pRes.data.data;
+      setProject(proj);
       const ms = mRes.data.data || [];
       setMilestones(ms);
-      // Load all tasks across all milestones
-      const taskArrays = await Promise.all(ms.map(m => getTasksApi(id, m._id || m.id).then(r => r.data.data || []).catch(() => [])));
-      setTasks(taskArrays.flat());
+      const tRes = await getAllProjectTasksApi(id);
+      setTasks(tRes.data.data || []);
+      // Load users if current user can manage tasks for this project
+      const uid = String(user?._id || user?.id || '');
+      const isManager = ['admin', 'manager', 'senior_manager'].includes(user?.role) ||
+        (proj && uid && String(proj.managerId) === uid);
+      if (isManager) {
+        getUsersApi({ isActive: true, limit: 200 }).then(r => setUsers(r.data?.data?.users || r.data?.data || [])).catch(() => {});
+      }
     } catch { toast.error('Failed to load tasks'); }
     finally { setLoading(false); }
   };
 
-  useEffect(() => {
-    load();
-    getUsersApi({ isActive: true, limit: 200 }).then(r => setUsers(r.data?.data?.users || r.data?.data || [])).catch(() => {});
-  }, [id]);
+  useEffect(() => { load(); }, [id]);
 
   const set = (f, v) => setForm(p => ({ ...p, [f]: v }));
 
@@ -58,7 +65,6 @@ export default function TaskBoard() {
     setSaving(true);
     try {
       if (editingTask) {
-        // Always route via the original milestoneId â€” the task is stored under that milestone in the DB
         await updateTaskApi(id, editingTask.milestoneId, editingTask._id || editingTask.id, form);
         toast.success('Task updated');
       } else {
@@ -90,8 +96,8 @@ export default function TaskBoard() {
   const inputClass = "w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500";
 
   const filteredTasks = tasks.filter(t => {
-    if (milestoneFilter && t.milestoneId !== milestoneFilter) return false;
-    if (assigneeFilter && t.assignedToId !== assigneeFilter) return false;
+    if (milestoneFilter && String(t.milestoneId) !== String(milestoneFilter)) return false;
+    if (assigneeFilter && String(t.assignedToId) !== String(assigneeFilter)) return false;
     return true;
   });
 
@@ -107,12 +113,14 @@ export default function TaskBoard() {
           <h1 className="text-2xl font-bold text-gray-900">Task Board</h1>
           <p className="text-sm text-gray-500">{project?.name || '...'}</p>
         </div>
-        <button
-          onClick={() => { setForm({ milestoneId: '', title: '', assignedToId: '', dueDate: '', notes: '', status: 'todo' }); setEditingTask(null); setShowForm(true); }}
-          className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 transition-colors"
-        >
-          <HiOutlinePlus className="w-4 h-4" /> Add Task
-        </button>
+        {canManage && (
+          <button
+            onClick={() => { setForm({ milestoneId: '', title: '', assignedToId: '', dueDate: '', notes: '', status: 'todo' }); setEditingTask(null); setShowForm(true); }}
+            className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 transition-colors"
+          >
+            <HiOutlinePlus className="w-4 h-4" /> Add Task
+          </button>
+        )}
       </div>
 
       {/* Filters */}
@@ -192,7 +200,7 @@ export default function TaskBoard() {
                   {colTasks.map(task => (
                     <div key={task._id || task.id} className="bg-white rounded-lg border border-gray-200 p-3 shadow-sm">
                       <p className="text-sm font-medium text-gray-900 leading-snug">{task.title}</p>
-                      <p className="text-xs text-gray-400 mt-1">{task.milestone?.name || 'â€”'}</p>
+                      <p className="text-xs text-gray-400 mt-1">{task.milestone?.name || '—'}</p>
                       {task.assignedTo && (
                         <div className="flex items-center gap-1.5 mt-2">
                           <div className="w-5 h-5 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center text-[10px] font-bold">
@@ -207,22 +215,30 @@ export default function TaskBoard() {
                         </p>
                       )}
                       <div className="flex items-center gap-1 mt-2 pt-2 border-t border-gray-50">
-                        <select
-                          value={task.status}
-                          onChange={e => handleStatusChange(task, e.target.value)}
-                          className="flex-1 text-[10px] border border-gray-200 rounded px-1.5 py-0.5 text-gray-600 cursor-pointer"
-                        >
-                          {COLUMNS.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
-                        </select>
-                        <button
-                          onClick={() => { setForm({ milestoneId: task.milestoneId, title: task.title, assignedToId: task.assignedToId || '', dueDate: task.dueDate || '', notes: task.notes || '', status: task.status }); setEditingTask(task); setShowForm(true); }}
-                          className="p-1 hover:bg-gray-100 rounded text-gray-400 hover:text-gray-700"
-                        >
-                          <HiOutlinePencil className="w-3 h-3" />
-                        </button>
-                        <button onClick={() => handleDelete(task)} className="p-1 hover:bg-red-50 rounded text-gray-400 hover:text-red-600">
-                          <HiOutlineTrash className="w-3 h-3" />
-                        </button>
+                        {(canManage || String(task.assignedToId) === String(user?._id || user?.id)) ? (
+                          <select
+                            value={task.status}
+                            onChange={e => handleStatusChange(task, e.target.value)}
+                            className="flex-1 text-[10px] border border-gray-200 rounded px-1.5 py-0.5 text-gray-600 cursor-pointer"
+                          >
+                            {COLUMNS.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+                          </select>
+                        ) : (
+                          <span className="flex-1 text-[10px] text-gray-500 capitalize">{task.status?.replace(/_/g, ' ')}</span>
+                        )}
+                        {canManage && (
+                          <>
+                            <button
+                              onClick={() => { setForm({ milestoneId: task.milestoneId, title: task.title, assignedToId: task.assignedToId || '', dueDate: task.dueDate || '', notes: task.notes || '', status: task.status }); setEditingTask(task); setShowForm(true); }}
+                              className="p-1 hover:bg-gray-100 rounded text-gray-400 hover:text-gray-700"
+                            >
+                              <HiOutlinePencil className="w-3 h-3" />
+                            </button>
+                            <button onClick={() => handleDelete(task)} className="p-1 hover:bg-red-50 rounded text-gray-400 hover:text-red-600">
+                              <HiOutlineTrash className="w-3 h-3" />
+                            </button>
+                          </>
+                        )}
                       </div>
                     </div>
                   ))}

@@ -2,7 +2,7 @@ const milestoneService = require('../../services/pm/milestone.service');
 const { sendSuccess } = require('../../utils/response');
 
 const getMilestones = async (req, res, next) => {
-  try { sendSuccess(res, await milestoneService.getMilestones(req.params.id)); }
+  try { sendSuccess(res, await milestoneService.getMilestones(req.params.id, req.user)); }
   catch (e) { next(e); }
 };
 const createMilestone = async (req, res, next) => {

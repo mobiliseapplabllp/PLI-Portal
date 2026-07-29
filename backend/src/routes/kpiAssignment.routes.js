@@ -70,6 +70,9 @@ router.post('/:id/final-review', (req, res) => {
   });
 });
 
+// Admin / Final Approver: revert manager_reviewed → employee_submitted (STATUS ONLY — all data preserved)
+router.post('/:id/revert-manager-review', authorize('admin', 'final_approver'), ctrl.revertManagerReview);
+
 router.post('/:id/lock', authorize('admin'), ctrl.lockAssignment);
 router.post('/:id/unlock', authorize('admin'), ctrl.unlockAssignment);
 router.post('/:id/reopen', authorize('admin'), ctrl.reopenAssignment);

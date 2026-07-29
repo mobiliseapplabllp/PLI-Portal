@@ -23,26 +23,30 @@ function Field({ label, required, children }) {
 export default function CreateProject() {
   const navigate = useNavigate();
   const { user } = useSelector(s => s.auth);
+  const isAdmin = user?.role === 'admin';
+  const userId = user?._id || user?.id || '';
   const [users, setUsers] = useState([]);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({
     name: '',
     description: '',
     purpose: '',
-    ownerId: user?._id || '',
+    ownerId: isAdmin ? '' : userId,
     clientName: '',
     clientEmail: '',
     notifyClient: false,
-    managerId: '',
+    managerId: isAdmin ? '' : userId,
     status: 'planning',
     startDate: '',
     endDate: '',
   });
 
   useEffect(() => {
-    getUsersApi({ isActive: true, limit: 200 }).then(res => {
-      setUsers(res.data?.data?.users || res.data?.data || []);
-    }).catch(() => toast.error('Failed to load users list — check connection'));
+    if (isAdmin) {
+      getUsersApi({ isActive: true, limit: 200 }).then(res => {
+        setUsers(res.data?.data?.users || res.data?.data || []);
+      }).catch(() => toast.error('Failed to load users list — check connection'));
+    }
   }, []);
 
   const set = (field, val) => setForm(f => ({ ...f, [field]: val }));
@@ -98,22 +102,26 @@ export default function CreateProject() {
             </select>
           </Field>
 
-          <Field label="Project Owner">
-            <select value={form.ownerId} onChange={e => set('ownerId', e.target.value)} className={inputClass}>
-              <option value="">Select owner</option>
-              {users.map(u => <option key={u._id || u.id} value={u._id || u.id}>{u.name} ({u.role})</option>)}
-            </select>
-          </Field>
+          {isAdmin && (
+            <Field label="Project Owner">
+              <select value={form.ownerId} onChange={e => set('ownerId', e.target.value)} className={inputClass}>
+                <option value="">Select owner</option>
+                {users.map(u => <option key={u._id || u.id} value={u._id || u.id}>{u.name} ({u.role})</option>)}
+              </select>
+            </Field>
+          )}
         </div>
 
-        <Field label="Project Manager">
-          <select value={form.managerId} onChange={e => set('managerId', e.target.value)} className={inputClass}>
-            <option value="">Select project manager</option>
-            {users.filter(u => ['manager', 'senior_manager', 'admin'].includes(u.role)).map(u => (
-              <option key={u._id || u.id} value={u._id || u.id}>{u.name}</option>
-            ))}
-          </select>
-        </Field>
+        {isAdmin && (
+          <Field label="Project Manager">
+            <select value={form.managerId} onChange={e => set('managerId', e.target.value)} className={inputClass}>
+              <option value="">Select project manager</option>
+              {users.filter(u => ['manager', 'senior_manager', 'admin'].includes(u.role)).map(u => (
+                <option key={u._id || u.id} value={u._id || u.id}>{u.name}</option>
+              ))}
+            </select>
+          </Field>
+        )}
 
         <div className="grid grid-cols-2 gap-4">
           <Field label="Start Date">

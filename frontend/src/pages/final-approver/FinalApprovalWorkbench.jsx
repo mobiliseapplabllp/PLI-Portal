@@ -21,7 +21,7 @@ import {
 } from '../../api/finalApprover.api';
 import { getUsersApi, getTeamApi } from '../../api/users.api';
 import { getDepartmentsApi } from '../../api/departments.api';
-import { getAssignmentByIdApi } from '../../api/kpiAssignments.api';
+import { getAssignmentByIdApi, revertManagerReviewApi } from '../../api/kpiAssignments.api';
 import { getCurrentFinancialYear, MONTHS, QUARTER_MONTHS, KPI_HEAD_LABELS } from '../../utils/constants';
 import StatusBadge from '../../components/common/StatusBadge';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
@@ -201,6 +201,11 @@ function WorkbenchList() {
 
   const [recalculating, setRecalculating] = useState(false);
   const [exporting, setExporting]         = useState(false);
+
+  // Revert Manager Review modal
+  const [revertMgrModal, setRevertMgrModal]   = useState(null);  // { emp, qMonths } | null
+  const [revertMgrChecked, setRevertMgrChecked] = useState({});
+  const [revertMgrLoading, setRevertMgrLoading] = useState(false);
 
   // Per-employee FA override state: { [empId]: { score: string, comment: string, submitting: bool, error: string } }
   const [faState, setFaState] = useState({});
@@ -572,6 +577,40 @@ function WorkbenchList() {
     } catch (e) {
       setEmpField(empId, 'error', e.response?.data?.error?.message || 'Submission failed');
       setEmpField(empId, 'submitting', false);
+    }
+  };
+
+  const openRevertMgrModal = (emp) => {
+    // emp.months = [{ month, status }]; emp.assignmentIds = { [month]: id }
+    const monthStatusMap = {};
+    (emp.months || []).forEach(({ month, status }) => { monthStatusMap[month] = status; });
+    const monthRows = (emp.months || [])
+      .filter((r) => r.status === 'manager_reviewed' && emp.assignmentIds?.[r.month])
+      .map((r) => ({ month: r.month, assignmentId: emp.assignmentIds[r.month], status: r.status }));
+    setRevertMgrModal({ emp, monthRows });
+    const initial = {};
+    monthRows.forEach((r) => { initial[r.month] = true; });
+    setRevertMgrChecked(initial);
+  };
+
+  const handleConfirmRevertMgr = async () => {
+    if (!revertMgrModal) return;
+    const toRevert = revertMgrModal.monthRows.filter((r) => revertMgrChecked[r.month]);
+    if (!toRevert.length) { alert('Select at least one month'); return; }
+    setRevertMgrLoading(true);
+    let success = 0;
+    for (const r of toRevert) {
+      try {
+        await revertManagerReviewApi(r.assignmentId);
+        success++;
+      } catch (err) {
+        alert(`Month ${r.month}: ${err.response?.data?.error?.message || 'Failed'}`);
+      }
+    }
+    setRevertMgrLoading(false);
+    setRevertMgrModal(null);
+    if (success > 0) {
+      await fetchData();
     }
   };
 
@@ -1173,6 +1212,17 @@ function WorkbenchList() {
                               <span className="text-[10px] text-gray-400 uppercase tracking-wide">Pending</span>
                             </div>
                           )}
+                          {/* Revert Manager Review — only when at least one month is manager_reviewed */}
+                          {!isApproved && (emp.months || []).some((r) => r.status === 'manager_reviewed') && (
+                            <button
+                              onClick={() => openRevertMgrModal(emp)}
+                              title="Revert selected months from Manager Reviewed to Employee Submitted"
+                              className="mt-1 text-[10px] flex items-center gap-1 px-2 py-1 rounded border border-orange-300 text-orange-600 hover:bg-orange-50 transition-colors font-medium"
+                            >
+                              <HiOutlineRefresh className="w-3 h-3" />
+                              Revert
+                            </button>
+                          )}
                         </td>
                       </tr>
 
@@ -1212,6 +1262,57 @@ function WorkbenchList() {
           monthLabel={drillDown.monthLabel}
           onClose={() => setDrillDown(null)}
         />
+      )}
+
+      {/* Revert Manager Review modal */}
+      {revertMgrModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md mx-4 p-6">
+            <h3 className="text-base font-semibold text-gray-800 mb-1">Revert Manager Review</h3>
+            <p className="text-sm text-gray-500 mb-1">
+              Employee: <strong>{revertMgrModal.emp?.employee?.name}</strong>
+            </p>
+            <p className="text-sm text-gray-500 mb-4">
+              Select months to revert from <strong>Manager Reviewed</strong> → <strong>Employee Submitted</strong>. All scores and comments are fully preserved.
+            </p>
+            {revertMgrModal.monthRows.length === 0 ? (
+              <p className="text-sm text-gray-400 text-center py-4">No months at Manager Reviewed status.</p>
+            ) : (
+              <div className="space-y-2 mb-5">
+                {revertMgrModal.monthRows.map((r) => (
+                  <label key={r.month} className="flex items-center gap-3 p-3 rounded-lg border border-gray-200 hover:bg-gray-50 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={!!revertMgrChecked[r.month]}
+                      onChange={(e) => setRevertMgrChecked((prev) => ({ ...prev, [r.month]: e.target.checked }))}
+                      className="w-4 h-4 accent-orange-500"
+                    />
+                    <span className="text-sm font-medium text-gray-700">
+                      Month {r.month} — <span className="text-orange-600 font-semibold">Manager Reviewed</span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+            )}
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setRevertMgrModal(null)}
+                className="px-4 py-2 text-sm rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors"
+                disabled={revertMgrLoading}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmRevertMgr}
+                disabled={revertMgrLoading || revertMgrModal.monthRows.length === 0 || !Object.values(revertMgrChecked).some(Boolean)}
+                className="flex items-center gap-2 px-4 py-2 text-sm rounded-lg bg-orange-500 text-white hover:bg-orange-600 disabled:opacity-50 transition-colors font-medium"
+              >
+                <HiOutlineRefresh className={`w-4 h-4 ${revertMgrLoading ? 'animate-spin' : ''}`} />
+                {revertMgrLoading ? 'Reverting…' : 'Confirm Revert'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

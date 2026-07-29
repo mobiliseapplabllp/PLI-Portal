@@ -2,7 +2,10 @@ import api from '../axios';
 
 const base = (pid, mid) => `/pm/projects/${pid}/milestones/${mid}/tasks`;
 
-// All tasks for a project (flat) — used by MyTasks to avoid N+1
+// All tasks assigned to the current user across all projects — single-query endpoint
+export const getMyTasksApi = () => api.get('/pm/my-tasks');
+
+// All tasks for a project (flat) — used to avoid N+1
 export const getAllProjectTasksApi = (projectId) => api.get(`/pm/projects/${projectId}/tasks`);
 
 export const getTasksApi = (projectId, milestoneId) => api.get(base(projectId, milestoneId));

@@ -58,7 +58,7 @@ export default function GanttView() {
     return (
       <div className="space-y-4">
         <div className="flex items-center gap-3">
-          <button onClick={() => navigate(`/pm/projects/${id}/milestones`)} className="p-2 hover:bg-gray-100 rounded-lg text-gray-500">
+          <button onClick={() => navigate(`/pm/projects/${id}`)} className="p-2 hover:bg-gray-100 rounded-lg text-gray-500">
             <HiOutlineArrowLeft className="w-5 h-5" />
           </button>
           <div>
@@ -111,11 +111,12 @@ export default function GanttView() {
   }
 
   const todayOffset = daysBetween(chartStart, today);
+  const todayStr = today.toISOString().slice(0, 10);
 
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-3">
-        <button onClick={() => navigate(`/pm/projects/${id}/milestones`)} className="p-2 hover:bg-gray-100 rounded-lg text-gray-500 transition-colors">
+        <button onClick={() => navigate(`/pm/projects/${id}`)} className="p-2 hover:bg-gray-100 rounded-lg text-gray-500 transition-colors">
           <HiOutlineArrowLeft className="w-5 h-5" />
         </button>
         <div className="flex-1">
@@ -186,13 +187,21 @@ export default function GanttView() {
 
             {/* Milestone rows */}
             {milestones.map((m, rowIdx) => {
-              const today2 = new Date().toISOString().slice(0, 10);
-              const isDelayed = m.endDate && m.endDate < today2 && m.status !== 'completed';
+              const isDelayed = m.endDate && m.endDate.slice(0, 10) < todayStr && m.status !== 'completed';
               const color = isDelayed ? STATUS_COLORS.delayed : STATUS_COLORS[m.status] || STATUS_COLORS.not_started;
 
-              const barStart = m.startDate ? Math.max(0, daysBetween(chartStart, new Date(m.startDate))) : null;
-              const barEnd = m.endDate ? Math.min(totalDays - 1, daysBetween(chartStart, new Date(m.endDate))) : barStart;
-              const barWidth = barStart !== null ? Math.max(1, (barEnd - barStart + 1)) * DAY_WIDTH : 0;
+              const hasStart = Boolean(m.startDate);
+              const hasEnd = Boolean(m.endDate);
+              // For deadline-only milestones show a diamond marker at endDate instead of a bar
+              const isPointMilestone = !hasStart && hasEnd;
+
+              const barStart = hasStart
+                ? Math.max(0, daysBetween(chartStart, new Date(m.startDate)))
+                : hasEnd
+                  ? Math.max(0, daysBetween(chartStart, new Date(m.endDate)))
+                  : null;
+              const barEnd = hasEnd ? Math.min(totalDays - 1, daysBetween(chartStart, new Date(m.endDate))) : barStart;
+              const barWidth = (barStart !== null && !isPointMilestone) ? Math.max(1, (barEnd - barStart + 1)) * DAY_WIDTH : 0;
 
               return (
                 <div key={m._id || m.id} className={`flex border-b border-gray-50 ${rowIdx % 2 === 0 ? 'bg-white' : 'bg-gray-50/40'}`} style={{ height: ROW_HEIGHT }}>
@@ -216,8 +225,27 @@ export default function GanttView() {
                       <div key={wm.offset} style={{ position: 'absolute', left: wm.offset * DAY_WIDTH, top: 0, bottom: 0, width: 1, backgroundColor: '#f3f4f6' }} />
                     ))}
 
+                    {/* Diamond marker for deadline-only milestones */}
+                    {isPointMilestone && barStart !== null && (
+                      <div
+                        style={{
+                          position: 'absolute',
+                          left: barStart * DAY_WIDTH - 8,
+                          top: '50%',
+                          transform: 'translateY(-50%) rotate(45deg)',
+                          width: 16,
+                          height: 16,
+                          backgroundColor: color,
+                          cursor: 'pointer',
+                          zIndex: 2,
+                        }}
+                        onMouseEnter={(e) => setTooltip({ m, x: e.clientX, y: e.clientY })}
+                        onMouseLeave={() => setTooltip(null)}
+                      />
+                    )}
+
                     {/* Milestone bar */}
-                    {barStart !== null && (
+                    {!isPointMilestone && barStart !== null && (
                       <div
                         style={{
                           position: 'absolute',

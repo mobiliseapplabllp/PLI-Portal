@@ -14,7 +14,8 @@ const STATUS_COLORS = {
 
 const STATUS_OPTIONS = ['', 'planning', 'active', 'on_hold', 'completed', 'cancelled'];
 
-const CREATOR_ROLES = ['admin', 'manager', 'senior_manager'];
+// Roles that can create projects by default — backend enforces allowedCreatorRoles from PMSettings
+const CREATOR_ROLES = ['admin', 'manager', 'senior_manager', 'md', 'director'];
 
 export default function ProjectList() {
   const dispatch = useDispatch();

@@ -1617,6 +1617,38 @@ const revertSelfReview = async (assignmentId, revertComment, user) => {
   return assignment;
 };
 
+const revertManagerReview = async (assignmentId, user) => {
+  const assignment = await KpiAssignment.findByPk(assignmentId);
+  if (!assignment) throw new NotFoundError('KPI Assignment');
+  if (assignment.status !== KPI_STATUS.MANAGER_REVIEWED) {
+    throw new ValidationError('Can only revert when status is manager_reviewed');
+  }
+  if (!['admin', 'final_approver'].includes(user.role)) throw new ForbiddenError('Only admin or final approver can revert manager review');
+
+  // STATUS-ONLY change — ALL employee and manager data fully preserved
+  await assignment.update({ status: KPI_STATUS.EMPLOYEE_SUBMITTED });
+
+  await notificationService.create({
+    recipient: assignment.employeeId,
+    type: 'record_unlocked',
+    title: 'KPI Sent Back for Re-Review',
+    message: `Your KPI assessment for ${assignment.financialYear} Month ${assignment.month} has been sent back to Employee Submitted stage.`,
+    referenceType: 'kpi_assignment',
+    referenceId: assignment.id,
+  });
+
+  await createAuditLog({
+    entityType: 'kpi_assignment',
+    entityId: assignment.id,
+    action: AUDIT_ACTIONS.REOPENED,
+    changedBy: user._id,
+    oldValue: { status: KPI_STATUS.MANAGER_REVIEWED },
+    newValue: { status: KPI_STATUS.EMPLOYEE_SUBMITTED },
+  });
+
+  return assignment;
+};
+
 module.exports = {
   getAssignments,
   getAssignmentById,
@@ -1644,4 +1676,5 @@ module.exports = {
   getItemAttachmentData,
   deleteItemAttachment,
   revertSelfReview,
+  revertManagerReview,
 };

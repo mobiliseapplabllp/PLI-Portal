@@ -5,7 +5,7 @@ import toast from 'react-hot-toast';
 import { getMilestonesApi, createMilestoneApi, updateMilestoneApi, deleteMilestoneApi, updateMilestoneStatusApi, updateMilestoneProgressApi } from '../../api/pm/milestones.api';
 import { getProjectByIdApi } from '../../api/pm/projects.api';
 import { getUsersApi } from '../../api/users.api';
-import { HiOutlineArrowLeft, HiOutlinePlus, HiOutlineTrash, HiOutlinePencil, HiOutlineFlag } from 'react-icons/hi';
+import { HiOutlineArrowLeft, HiOutlinePlus, HiOutlineTrash, HiOutlinePencil, HiOutlineFlag, HiOutlineExclamation } from 'react-icons/hi';
 
 const STATUS_OPTIONS = ['not_started', 'in_progress', 'completed', 'delayed', 'on_hold', 'cancelled'];
 const STATUS_COLORS = {
@@ -33,7 +33,8 @@ export default function MilestoneBoard() {
   const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
 
-  const canManage = MANAGER_ROLES.includes(user?.role);
+  const canManage = MANAGER_ROLES.includes(user?.role) ||
+    (project && String(project.managerId) === String(user?._id || user?.id));
 
   const load = async () => {
     setLoading(true);
@@ -46,14 +47,44 @@ export default function MilestoneBoard() {
   };
 
   useEffect(() => {
-    load();
-    getUsersApi({ isActive: true, limit: 200 }).then(res => setUsers(res.data?.data?.users || res.data?.data || [])).catch(() => {});
+    const init = async () => {
+      setLoading(true);
+      try {
+        const [pRes, mRes] = await Promise.all([getProjectByIdApi(id), getMilestonesApi(id)]);
+        const proj = pRes.data.data;
+        setProject(proj);
+        setMilestones(mRes.data.data || []);
+        // Load users if this user can manage milestones (role-based OR designated project manager)
+        const uid = String(user?._id || user?.id || '');
+        const isManager = MANAGER_ROLES.includes(user?.role) ||
+          (proj && uid && String(proj.managerId) === uid);
+        if (isManager) {
+          getUsersApi({ isActive: true, limit: 200 })
+            .then(res => setUsers(res.data?.data?.users || res.data?.data || []))
+            .catch(() => toast.error('Failed to load users list'));
+        }
+      } catch { toast.error('Failed to load milestones'); }
+      finally { setLoading(false); }
+    };
+    init(); // eslint-disable-line react-hooks/exhaustive-deps
   }, [id]);
 
   const set = (f, v) => setForm(prev => ({ ...prev, [f]: v }));
 
   const openCreate = () => { setForm(EMPTY_FORM); setEditingId(null); setShowForm(true); };
-  const openEdit = (m) => { setForm({ name: m.name, description: m.description || '', startDate: m.startDate || '', endDate: m.endDate || '', accountableUserId: m.accountableUserId || '', status: m.status, completionPercentage: m.completionPercentage || 0 }); setEditingId(m._id || m.id); setShowForm(true); };
+  const openEdit = (m) => {
+    setForm({
+      name: m.name,
+      description: m.description || '',
+      startDate: m.startDate ? m.startDate.slice(0, 10) : '',
+      endDate: m.endDate ? m.endDate.slice(0, 10) : '',
+      accountableUserId: m.accountableUserId || '',
+      status: m.status,
+      completionPercentage: m.completionPercentage || 0,
+    });
+    setEditingId(m._id || m.id);
+    setShowForm(true);
+  };
 
   const handleSave = async () => {
     if (!form.name.trim()) return toast.error('Milestone name is required');
@@ -203,11 +234,11 @@ export default function MilestoneBoard() {
                       <p className="font-medium text-gray-900">{m.name}</p>
                       {m.description && <p className="text-xs text-gray-400 mt-0.5">{m.description}</p>}
                     </td>
-                    <td className="px-5 py-3 text-gray-600">{m.accountableUser?.name || 'â€”'}</td>
-                    <td className="px-5 py-3 text-gray-500 text-xs">{m.startDate ? new Date(m.startDate).toLocaleDateString('en-IN') : 'â€”'}</td>
+                    <td className="px-5 py-3 text-gray-600">{m.accountableUser?.name || '—'}</td>
+                    <td className="px-5 py-3 text-gray-500 text-xs">{m.startDate ? new Date(m.startDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}</td>
                     <td className={`px-5 py-3 text-xs ${isDelayed ? 'text-red-600 font-semibold' : 'text-gray-500'}`}>
-                      {m.endDate ? new Date(m.endDate).toLocaleDateString('en-IN') : 'â€”'}
-                      {isDelayed && ' âš ï¸'}
+                      {m.endDate ? new Date(m.endDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}
+                      {isDelayed && <span className="text-red-500 font-bold ml-1" title="Overdue">⚠</span>}
                     </td>
                     <td className="px-5 py-3">
                       {canManage ? (
