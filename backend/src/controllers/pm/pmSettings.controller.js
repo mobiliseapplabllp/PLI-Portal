@@ -1,5 +1,6 @@
 const pmSettingsService = require('../../services/pm/pmSettings.service');
 const { rescheduleProjectDailyReportJob } = require('../../jobs/projectDailyReport.job');
+const { runAllDailyReports, runConsolidatedDailyReport } = require('../../services/pm/dailyReport.service');
 const { sendSuccess } = require('../../utils/response');
 
 const getSettings = async (req, res, next) => {
@@ -19,4 +20,17 @@ const updateSettings = async (req, res, next) => {
   catch (e) { next(e); }
 };
 
-module.exports = { getSettings, updateSettings };
+// Manually trigger the daily report (admin only, for testing)
+const triggerReport = async (req, res, next) => {
+  try {
+    const settings = await pmSettingsService.getSettings();
+    if (settings.consolidatedReport) {
+      await runConsolidatedDailyReport();
+    } else {
+      await runAllDailyReports();
+    }
+    sendSuccess(res, null, 'Daily report triggered and sent successfully');
+  } catch (e) { next(e); }
+};
+
+module.exports = { getSettings, updateSettings, triggerReport };

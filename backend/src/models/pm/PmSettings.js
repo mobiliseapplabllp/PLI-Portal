@@ -11,6 +11,8 @@ const PmSettings = sequelize.define(
     },
     dailyReportTime: { type: DataTypes.STRING(8), defaultValue: '09:00' },
     dailyReportEnabled: { type: DataTypes.BOOLEAN, defaultValue: true },
+    reportCcEmails: { type: DataTypes.JSON, defaultValue: ['veervikram.singh@mobilise.co.in'] },
+    consolidatedReport: { type: DataTypes.BOOLEAN, defaultValue: false },
   },
   { tableName: 'pm_settings' }
 );

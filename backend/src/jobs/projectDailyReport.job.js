@@ -1,5 +1,5 @@
 const cron = require('node-cron');
-const { runAllDailyReports } = require('../services/pm/dailyReport.service');
+const { runAllDailyReports, runConsolidatedDailyReport } = require('../services/pm/dailyReport.service');
 const pmSettingsService = require('../services/pm/pmSettings.service');
 
 let currentTask = null;
@@ -19,7 +19,11 @@ async function runJob() {
       console.log('[PM DailyReport] Disabled in settings — skipping');
       return;
     }
-    await runAllDailyReports();
+    if (settings.consolidatedReport) {
+      await runConsolidatedDailyReport();
+    } else {
+      await runAllDailyReports();
+    }
   } catch (err) {
     console.error('[PM DailyReport] Job error:', err.message);
   }
