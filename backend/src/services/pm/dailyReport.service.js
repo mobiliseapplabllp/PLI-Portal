@@ -737,14 +737,14 @@ async function runConsolidatedDailyReport() {
 
     const today = new Date().toISOString().slice(0, 10);
 
-    // ── GROUP A: MD + Director + CC emails → ALL projects ──
+    // ── GROUP A: Admin + MD + Director + Senior Manager + CC emails → ALL projects ──
     // Normalise all to lowercase to prevent case-mismatch duplicates
     const groupAEmails = new Set((settings.reportCcEmails || []).map(e => e.toLowerCase()));
-    const mdDirectors = await User.findAll({
-      where: { role: ['md', 'director'], isActive: true },
+    const groupAUsers = await User.findAll({
+      where: { role: ['admin', 'md', 'director', 'senior_manager'], isActive: true },
       attributes: ['email'],
     });
-    mdDirectors.forEach(u => { if (u.email) groupAEmails.add(u.email.toLowerCase()); });
+    groupAUsers.forEach(u => { if (u.email) groupAEmails.add(u.email.toLowerCase()); });
 
     if (groupAEmails.size > 0) {
       const html = await buildConsolidatedEmailHtml(projects, 'MD / Director / Management');

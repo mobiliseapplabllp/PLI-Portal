@@ -2,6 +2,7 @@
  * Migration 007 — Add 'paragraph' to survey_questions.questionType ENUM
  * Run: node backend/src/migrations/007_add_paragraph_question_type.js
  */
+require('dotenv').config({ path: require('path').resolve(__dirname, '../../.env') });
 const sequelize = require('../config/database');
 
 async function up() {
