@@ -1,8 +1,10 @@
+import { lazy, Suspense } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { useSelector } from 'react-redux';
 import PrivateRoute from './PrivateRoute';
 import RoleRoute from './RoleRoute';
 import AppLayout from '../components/layout/AppLayout';
+import LoadingSpinner from '../components/common/LoadingSpinner';
 
 // Auth pages
 import LoginPage from '../pages/auth/LoginPage';
@@ -71,12 +73,27 @@ import DailyLogHistory from '../pages/pm/DailyLogHistory';
 import MyTasks from '../pages/pm/MyTasks';
 import PMSettings from '../pages/pm/PMSettings';
 
+// Helpdesk pages (lazy-loaded)
+const HdDashboard          = lazy(() => import('../pages/helpdesk/HdDashboard'));
+const TicketList           = lazy(() => import('../pages/helpdesk/TicketList'));
+const CreateTicket         = lazy(() => import('../pages/helpdesk/CreateTicket'));
+const TicketDetail         = lazy(() => import('../pages/helpdesk/TicketDetail'));
+const KnowledgeBase        = lazy(() => import('../pages/helpdesk/KnowledgeBase'));
+const HdGroups             = lazy(() => import('../pages/helpdesk/HdGroups'));
+const HdAnnouncements      = lazy(() => import('../pages/helpdesk/HdAnnouncements'));
+const HdSettings           = lazy(() => import('../pages/helpdesk/HdSettings'));
+const TicketApprovalRespond = lazy(() => import('../pages/helpdesk/TicketApprovalRespond'));
+const PublicWidget          = lazy(() => import('../pages/helpdesk/PublicWidget'));
+const SolutionDetail        = lazy(() => import('../pages/helpdesk/SolutionDetail'));
+const HdReports             = lazy(() => import('../pages/helpdesk/HdReports'));
+
 // Common
 import ProfilePage from '../pages/common/ProfilePage';
 import NotFoundPage from '../pages/common/NotFoundPage';
 
 const ALL_ROLES = ['admin', 'manager', 'senior_manager', 'employee', 'hr_admin', 'final_approver', 'md', 'director', 'sales_director'];
 const PM_CREATORS = ['admin', 'manager', 'senior_manager'];
+const HD_MANAGER_ROLES = ['admin', 'manager', 'senior_manager'];
 
 function HomeRedirect() {
   const { user } = useSelector((state) => state.auth);
@@ -97,101 +114,120 @@ function HomeRedirect() {
 
 export default function AppRoutes() {
   return (
-    <Routes>
-      {/* Fully public — no auth, no layout */}
-      <Route path="/survey/:token" element={<PublicSurveyPage />} />
+    <Suspense fallback={<LoadingSpinner size="lg" />}>
+      <Routes>
+        {/* Fully public — no auth, no layout */}
+        <Route path="/survey/:token" element={<PublicSurveyPage />} />
 
-      {/* Auth-protected but NO sidebar/header — admin sees the exact client view */}
-      <Route
-        path="/csat/surveys/:surveyId/preview"
-        element={
-          <PrivateRoute>
-            <SurveyPreviewPage />
-          </PrivateRoute>
-        }
-      />
+        {/* Helpdesk public routes — no auth, no layout */}
+        <Route path="/helpdesk/approvals/respond" element={<TicketApprovalRespond />} />
+        <Route path="/widget/:token" element={<PublicWidget />} />
 
-      {/* Public */}
-      <Route path="/login" element={<LoginPage />} />
+        {/* Auth-protected but NO sidebar/header — admin sees the exact client view */}
+        <Route
+          path="/csat/surveys/:surveyId/preview"
+          element={
+            <PrivateRoute>
+              <SurveyPreviewPage />
+            </PrivateRoute>
+          }
+        />
 
-      {/* Protected routes inside layout */}
-      <Route
-        element={
-          <PrivateRoute>
-            <AppLayout />
-          </PrivateRoute>
-        }
-      >
-        <Route path="/" element={<HomeRedirect />} />
-        <Route path="/change-password" element={<ChangePasswordPage />} />
-        <Route path="/profile" element={<ProfilePage />} />
+        {/* Public */}
+        <Route path="/login" element={<LoginPage />} />
 
-        {/* Employee routes */}
-        <Route path="/employee/dashboard" element={<RoleRoute roles={['employee', 'manager', 'senior_manager', 'admin', 'sales_director']}><EmployeeDashboard /></RoleRoute>} />
-        <Route path="/employee/kpis" element={<RoleRoute roles={['employee', 'manager', 'senior_manager', 'admin', 'sales_director']}><MyKpiList /></RoleRoute>} />
-        <Route path="/employee/kpis/:assignmentId" element={<RoleRoute roles={['employee', 'manager', 'senior_manager', 'admin', 'sales_director']}><KpiSelfAssessment /></RoleRoute>} />
-        <Route path="/employee/quarterly" element={<RoleRoute roles={['employee', 'manager', 'senior_manager', 'admin', 'sales_director']}><QuarterlySummary /></RoleRoute>} />
+        {/* Protected routes inside layout */}
+        <Route
+          element={
+            <PrivateRoute>
+              <AppLayout />
+            </PrivateRoute>
+          }
+        >
+          <Route path="/" element={<HomeRedirect />} />
+          <Route path="/change-password" element={<ChangePasswordPage />} />
+          <Route path="/profile" element={<ProfilePage />} />
 
-        {/* Manager routes */}
-        <Route path="/manager/dashboard" element={<RoleRoute roles={['manager', 'senior_manager', 'admin', 'sales_director']}><ManagerDashboard /></RoleRoute>} />
-        <Route path="/manager/team" element={<RoleRoute roles={['manager', 'senior_manager', 'admin', 'sales_director']}><TeamList /></RoleRoute>} />
-        <Route path="/manager/assign-kpis" element={<RoleRoute roles={['manager', 'senior_manager', 'admin', 'sales_director']}><AssignKpis /></RoleRoute>} />
-        <Route path="/manager/review/:assignmentId" element={<RoleRoute roles={['manager', 'senior_manager', 'admin', 'sales_director']}><ReviewTeamKpi /></RoleRoute>} />
-        <Route path="/manager/team-review" element={<RoleRoute roles={['manager', 'senior_manager', 'admin', 'sales_director']}><TeamKpiReviewTable /></RoleRoute>} />
-        <Route path="/manager/team-kpi" element={<RoleRoute roles={['manager', 'senior_manager', 'admin', 'sales_director']}><ManagerTeamKpi /></RoleRoute>} />
+          {/* Employee routes */}
+          <Route path="/employee/dashboard" element={<RoleRoute roles={['employee', 'manager', 'senior_manager', 'admin', 'sales_director']}><EmployeeDashboard /></RoleRoute>} />
+          <Route path="/employee/kpis" element={<RoleRoute roles={['employee', 'manager', 'senior_manager', 'admin', 'sales_director']}><MyKpiList /></RoleRoute>} />
+          <Route path="/employee/kpis/:assignmentId" element={<RoleRoute roles={['employee', 'manager', 'senior_manager', 'admin', 'sales_director']}><KpiSelfAssessment /></RoleRoute>} />
+          <Route path="/employee/quarterly" element={<RoleRoute roles={['employee', 'manager', 'senior_manager', 'admin', 'sales_director']}><QuarterlySummary /></RoleRoute>} />
 
-        {/* HR Admin routes */}
-        <Route path="/hr-admin/dashboard" element={<RoleRoute roles={['hr_admin', 'admin']}><HrAdminDashboard /></RoleRoute>} />
-        <Route path="/hr-admin/kpi-plans" element={<RoleRoute roles={['hr_admin', 'admin', 'sales_director']}><KpiPlanManagement /></RoleRoute>} />
-        <Route path="/hr-admin/kpi-plans/create" element={<RoleRoute roles={['hr_admin', 'admin', 'sales_director']}><CreateKpiPlan /></RoleRoute>} />
-        <Route path="/admin/kpi-templates" element={<RoleRoute roles={['hr_admin', 'admin']}><KpiTemplates /></RoleRoute>} />
+          {/* Manager routes */}
+          <Route path="/manager/dashboard" element={<RoleRoute roles={['manager', 'senior_manager', 'admin', 'sales_director']}><ManagerDashboard /></RoleRoute>} />
+          <Route path="/manager/team" element={<RoleRoute roles={['manager', 'senior_manager', 'admin', 'sales_director']}><TeamList /></RoleRoute>} />
+          <Route path="/manager/assign-kpis" element={<RoleRoute roles={['manager', 'senior_manager', 'admin', 'sales_director']}><AssignKpis /></RoleRoute>} />
+          <Route path="/manager/review/:assignmentId" element={<RoleRoute roles={['manager', 'senior_manager', 'admin', 'sales_director']}><ReviewTeamKpi /></RoleRoute>} />
+          <Route path="/manager/team-review" element={<RoleRoute roles={['manager', 'senior_manager', 'admin', 'sales_director']}><TeamKpiReviewTable /></RoleRoute>} />
+          <Route path="/manager/team-kpi" element={<RoleRoute roles={['manager', 'senior_manager', 'admin', 'sales_director']}><ManagerTeamKpi /></RoleRoute>} />
 
-        {/* Final Approver routes */}
-        <Route path="/final-approver/dashboard" element={<RoleRoute roles={['final_approver', 'admin']}><FinalApproverDashboard /></RoleRoute>} />
-        <Route path="/final-approver/workbench" element={<RoleRoute roles={['final_approver', 'admin']}><FinalApprovalWorkbench /></RoleRoute>} />
-        <Route path="/final-approver/workbench/:employeeId/:fy/:quarter" element={<RoleRoute roles={['final_approver', 'admin']}><FinalApprovalWorkbench /></RoleRoute>} />
+          {/* HR Admin routes */}
+          <Route path="/hr-admin/dashboard" element={<RoleRoute roles={['hr_admin', 'admin']}><HrAdminDashboard /></RoleRoute>} />
+          <Route path="/hr-admin/kpi-plans" element={<RoleRoute roles={['hr_admin', 'admin', 'sales_director']}><KpiPlanManagement /></RoleRoute>} />
+          <Route path="/hr-admin/kpi-plans/create" element={<RoleRoute roles={['hr_admin', 'admin', 'sales_director']}><CreateKpiPlan /></RoleRoute>} />
+          <Route path="/admin/kpi-templates" element={<RoleRoute roles={['hr_admin', 'admin']}><KpiTemplates /></RoleRoute>} />
 
-        {/* Admin routes */}
-        <Route path="/admin/dashboard" element={<RoleRoute roles={['admin']}><AdminDashboard /></RoleRoute>} />
-        <Route path="/admin/employees" element={<RoleRoute roles={['admin']}><EmployeeManagement /></RoleRoute>} />
-        <Route path="/admin/departments" element={<RoleRoute roles={['admin']}><DepartmentManagement /></RoleRoute>} />
-        <Route path="/admin/cycles" element={<RoleRoute roles={['admin']}><CycleManagement /></RoleRoute>} />
-        <Route path="/admin/final-review" element={<RoleRoute roles={['admin']}><FinalReviewWorkbench /></RoleRoute>} />
-        <Route path="/admin/final-review/:assignmentId" element={<RoleRoute roles={['admin']}><FinalReviewWorkbench /></RoleRoute>} />
-        <Route path="/admin/review-table" element={<RoleRoute roles={['admin']}><AdminReviewTable /></RoleRoute>} />
-        <Route path="/admin/pli-rules" element={<RoleRoute roles={['admin']}><PliRuleConfig /></RoleRoute>} />
-        <Route path="/admin/scoring-config" element={<RoleRoute roles={['admin']}><ScoringConfigPage /></RoleRoute>} />
-        <Route path="/admin/reports" element={<RoleRoute roles={['hr_admin', 'final_approver', 'admin', 'manager', 'senior_manager', 'sales_director']}><Reports /></RoleRoute>} />
-        <Route path="/admin/audit-logs" element={<RoleRoute roles={['admin']}><AuditLogs /></RoleRoute>} />
+          {/* Final Approver routes */}
+          <Route path="/final-approver/dashboard" element={<RoleRoute roles={['final_approver', 'admin']}><FinalApproverDashboard /></RoleRoute>} />
+          <Route path="/final-approver/workbench" element={<RoleRoute roles={['final_approver', 'admin']}><FinalApprovalWorkbench /></RoleRoute>} />
+          <Route path="/final-approver/workbench/:employeeId/:fy/:quarter" element={<RoleRoute roles={['final_approver', 'admin']}><FinalApprovalWorkbench /></RoleRoute>} />
 
-        {/* PM routes — accessible to all roles */}
-        <Route path="/pm/dashboard" element={<RoleRoute roles={ALL_ROLES}><PMDashboard /></RoleRoute>} />
-        <Route path="/pm/projects" element={<RoleRoute roles={ALL_ROLES}><ProjectList /></RoleRoute>} />
-        <Route path="/pm/projects/create" element={<RoleRoute roles={PM_CREATORS}><CreateProject /></RoleRoute>} />
-        <Route path="/pm/projects/:id" element={<RoleRoute roles={ALL_ROLES}><ProjectDetail /></RoleRoute>} />
-        <Route path="/pm/projects/:id/milestones" element={<RoleRoute roles={ALL_ROLES}><MilestoneBoard /></RoleRoute>} />
-        <Route path="/pm/projects/:id/gantt" element={<RoleRoute roles={ALL_ROLES}><GanttView /></RoleRoute>} />
-        <Route path="/pm/projects/:id/tasks" element={<RoleRoute roles={ALL_ROLES}><TaskBoard /></RoleRoute>} />
-        <Route path="/pm/projects/:id/daily-log" element={<RoleRoute roles={ALL_ROLES}><DailyLogForm /></RoleRoute>} />
-        <Route path="/pm/projects/:id/daily-logs" element={<RoleRoute roles={ALL_ROLES}><DailyLogHistory /></RoleRoute>} />
-        <Route path="/pm/my-tasks" element={<RoleRoute roles={ALL_ROLES}><MyTasks /></RoleRoute>} />
-        <Route path="/pm/settings" element={<RoleRoute roles={['admin']}><PMSettings /></RoleRoute>} />
+          {/* Admin routes */}
+          <Route path="/admin/dashboard" element={<RoleRoute roles={['admin']}><AdminDashboard /></RoleRoute>} />
+          <Route path="/admin/employees" element={<RoleRoute roles={['admin']}><EmployeeManagement /></RoleRoute>} />
+          <Route path="/admin/departments" element={<RoleRoute roles={['admin']}><DepartmentManagement /></RoleRoute>} />
+          <Route path="/admin/cycles" element={<RoleRoute roles={['admin']}><CycleManagement /></RoleRoute>} />
+          <Route path="/admin/final-review" element={<RoleRoute roles={['admin']}><FinalReviewWorkbench /></RoleRoute>} />
+          <Route path="/admin/final-review/:assignmentId" element={<RoleRoute roles={['admin']}><FinalReviewWorkbench /></RoleRoute>} />
+          <Route path="/admin/review-table" element={<RoleRoute roles={['admin']}><AdminReviewTable /></RoleRoute>} />
+          <Route path="/admin/pli-rules" element={<RoleRoute roles={['admin']}><PliRuleConfig /></RoleRoute>} />
+          <Route path="/admin/scoring-config" element={<RoleRoute roles={['admin']}><ScoringConfigPage /></RoleRoute>} />
+          <Route path="/admin/reports" element={<RoleRoute roles={['hr_admin', 'final_approver', 'admin', 'manager', 'senior_manager', 'sales_director']}><Reports /></RoleRoute>} />
+          <Route path="/admin/audit-logs" element={<RoleRoute roles={['admin']}><AuditLogs /></RoleRoute>} />
 
-        {/* CSAT routes */}
-        <Route path="/csat/client-organisations" element={<RoleRoute roles={['admin', 'manager', 'senior_manager']}><ClientOrgsPage /></RoleRoute>} />
-        <Route path="/csat/client-organisations/:orgId/employees" element={<RoleRoute roles={['admin', 'manager', 'senior_manager']}><ClientEmployeesPage /></RoleRoute>} />
-        <Route path="/csat/dashboard" element={<RoleRoute roles={ALL_ROLES}><CsatDashboardPage /></RoleRoute>} />
-        <Route path="/csat/surveys" element={<RoleRoute roles={['admin']}><SurveyBuilderPage /></RoleRoute>} />
-        <Route path="/csat/send" element={<RoleRoute roles={['admin', 'manager', 'senior_manager']}><SendSurveyPage /></RoleRoute>} />
-        <Route path="/csat/send/:dispatchId/revise" element={<RoleRoute roles={['manager', 'senior_manager']}><SendSurveyPage /></RoleRoute>} />
-        <Route path="/csat/responses" element={<RoleRoute roles={['admin', 'manager', 'senior_manager', 'hr_admin', 'final_approver']}><SurveyResponsesPage /></RoleRoute>} />
-        <Route path="/csat/responses/:dispatchId/recipient/:recipientId" element={<RoleRoute roles={['admin', 'manager', 'senior_manager', 'hr_admin', 'final_approver']}><RecipientResponsePage /></RoleRoute>} />
-        <Route path="/csat/approval-inbox" element={<RoleRoute roles={['admin']}><SurveyApprovalInboxPage /></RoleRoute>} />
-        <Route path="/csat/approval/:approvalId" element={<RoleRoute roles={['admin', 'manager', 'senior_manager']}><SurveyApprovalDetailPage /></RoleRoute>} />
-        <Route path="/csat/my-requests" element={<RoleRoute roles={['manager', 'senior_manager']}><MyApprovalRequestsPage /></RoleRoute>} />
-      </Route>
+          {/* PM routes — accessible to all roles */}
+          <Route path="/pm/dashboard" element={<RoleRoute roles={ALL_ROLES}><PMDashboard /></RoleRoute>} />
+          <Route path="/pm/projects" element={<RoleRoute roles={ALL_ROLES}><ProjectList /></RoleRoute>} />
+          <Route path="/pm/projects/create" element={<RoleRoute roles={PM_CREATORS}><CreateProject /></RoleRoute>} />
+          <Route path="/pm/projects/:id" element={<RoleRoute roles={ALL_ROLES}><ProjectDetail /></RoleRoute>} />
+          <Route path="/pm/projects/:id/milestones" element={<RoleRoute roles={ALL_ROLES}><MilestoneBoard /></RoleRoute>} />
+          <Route path="/pm/projects/:id/gantt" element={<RoleRoute roles={ALL_ROLES}><GanttView /></RoleRoute>} />
+          <Route path="/pm/projects/:id/tasks" element={<RoleRoute roles={ALL_ROLES}><TaskBoard /></RoleRoute>} />
+          <Route path="/pm/projects/:id/daily-log" element={<RoleRoute roles={ALL_ROLES}><DailyLogForm /></RoleRoute>} />
+          <Route path="/pm/projects/:id/daily-logs" element={<RoleRoute roles={ALL_ROLES}><DailyLogHistory /></RoleRoute>} />
+          <Route path="/pm/my-tasks" element={<RoleRoute roles={ALL_ROLES}><MyTasks /></RoleRoute>} />
+          <Route path="/pm/settings" element={<RoleRoute roles={['admin']}><PMSettings /></RoleRoute>} />
 
-      <Route path="*" element={<NotFoundPage />} />
-    </Routes>
+          {/* CSAT routes */}
+          <Route path="/csat/client-organisations" element={<RoleRoute roles={['admin', 'manager', 'senior_manager']}><ClientOrgsPage /></RoleRoute>} />
+          <Route path="/csat/client-organisations/:orgId/employees" element={<RoleRoute roles={['admin', 'manager', 'senior_manager']}><ClientEmployeesPage /></RoleRoute>} />
+          <Route path="/csat/dashboard" element={<RoleRoute roles={ALL_ROLES}><CsatDashboardPage /></RoleRoute>} />
+          <Route path="/csat/surveys" element={<RoleRoute roles={['admin']}><SurveyBuilderPage /></RoleRoute>} />
+          <Route path="/csat/send" element={<RoleRoute roles={['admin', 'manager', 'senior_manager']}><SendSurveyPage /></RoleRoute>} />
+          <Route path="/csat/send/:dispatchId/revise" element={<RoleRoute roles={['manager', 'senior_manager']}><SendSurveyPage /></RoleRoute>} />
+          <Route path="/csat/responses" element={<RoleRoute roles={['admin', 'manager', 'senior_manager', 'hr_admin', 'final_approver']}><SurveyResponsesPage /></RoleRoute>} />
+          <Route path="/csat/responses/:dispatchId/recipient/:recipientId" element={<RoleRoute roles={['admin', 'manager', 'senior_manager', 'hr_admin', 'final_approver']}><RecipientResponsePage /></RoleRoute>} />
+          <Route path="/csat/approval-inbox" element={<RoleRoute roles={['admin']}><SurveyApprovalInboxPage /></RoleRoute>} />
+          <Route path="/csat/approval/:approvalId" element={<RoleRoute roles={['admin', 'manager', 'senior_manager']}><SurveyApprovalDetailPage /></RoleRoute>} />
+          <Route path="/csat/my-requests" element={<RoleRoute roles={['manager', 'senior_manager']}><MyApprovalRequestsPage /></RoleRoute>} />
+
+          {/* Helpdesk routes */}
+          <Route path="/helpdesk" element={<Navigate to="/helpdesk/dashboard" replace />} />
+          <Route path="/helpdesk/dashboard" element={<RoleRoute roles={ALL_ROLES}><HdDashboard /></RoleRoute>} />
+          <Route path="/helpdesk/tickets" element={<RoleRoute roles={ALL_ROLES}><TicketList /></RoleRoute>} />
+          <Route path="/helpdesk/tickets/new" element={<RoleRoute roles={ALL_ROLES}><CreateTicket /></RoleRoute>} />
+          <Route path="/helpdesk/tickets/:id" element={<RoleRoute roles={ALL_ROLES}><TicketDetail /></RoleRoute>} />
+          <Route path="/helpdesk/knowledge-base" element={<RoleRoute roles={ALL_ROLES}><KnowledgeBase /></RoleRoute>} />
+          <Route path="/helpdesk/solutions/:id" element={<SolutionDetail />} />
+          <Route path="/helpdesk/groups" element={<RoleRoute roles={HD_MANAGER_ROLES}><HdGroups /></RoleRoute>} />
+          <Route path="/helpdesk/announcements" element={<RoleRoute roles={ALL_ROLES}><HdAnnouncements /></RoleRoute>} />
+          <Route path="/helpdesk/settings" element={<RoleRoute roles={['admin', 'senior_manager']}><HdSettings /></RoleRoute>} />
+          <Route path="/helpdesk/reports" element={<RoleRoute roles={HD_MANAGER_ROLES}><HdReports /></RoleRoute>} />
+        </Route>
+
+        <Route path="*" element={<NotFoundPage />} />
+      </Routes>
+    </Suspense>
   );
 }

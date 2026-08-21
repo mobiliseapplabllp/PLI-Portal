@@ -31,6 +31,12 @@ const User = sequelize.define(
     mustChangePassword: { type: DataTypes.BOOLEAN, defaultValue: true },
     kpiReviewApplicable: { type: DataTypes.BOOLEAN, defaultValue: true },
     lastLogin: { type: DataTypes.DATE, allowNull: true },
+    hdGroupId: {
+      type:      DataTypes.INTEGER,
+      allowNull: true,
+      field:     'hd_group_id',
+      comment:   'Helpdesk group assignment — used in helpdesk module only',
+    },
   },
   {
     tableName: 'users',

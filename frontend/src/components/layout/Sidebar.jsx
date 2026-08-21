@@ -31,6 +31,9 @@ import {
   HiOutlineAnnotation,
   HiOutlineInbox,
   HiOutlineClipboardCheck as HiOutlineMyRequests,
+  HiOutlineTicket,
+  HiOutlineBookOpen,
+  HiOutlineSpeakerphone,
 } from 'react-icons/hi';
 import { ROLE_CONFIG } from '../../utils/constants';
 
@@ -259,6 +262,48 @@ pmNavItems.manager       = [...pmNavItems.manager,       ...csatManagerItems];
 pmNavItems.senior_manager = [...pmNavItems.senior_manager, ...csatManagerItems];
 pmNavItems.hr_admin      = [...pmNavItems.hr_admin,      ...csatReadOnlyItems];
 pmNavItems.final_approver = [...pmNavItems.final_approver, ...csatReadOnlyItems];
+
+// ── Helpdesk Nav Items ────────────────────────────────────────────────────────
+const hdBaseItems = [
+  { section: 'Helpdesk' },
+  { to: '/helpdesk/dashboard',     label: 'Dashboard',     icon: HiOutlineHome },
+  { to: '/helpdesk/tickets',        label: 'Tickets',       icon: HiOutlineTicket },
+  { to: '/helpdesk/knowledge-base', label: 'Knowledge Base', icon: HiOutlineBookOpen },
+  { to: '/helpdesk/announcements',  label: 'Announcements', icon: HiOutlineSpeakerphone },
+];
+
+const hdWithGroups = [
+  ...hdBaseItems,
+  { to: '/helpdesk/reports', label: 'Reports',  icon: HiOutlineChartBar },
+  { to: '/helpdesk/groups',  label: 'Groups',   icon: HiOutlineUserGroup },
+];
+
+const hdWithSettings = [
+  ...hdWithGroups,
+  { to: '/helpdesk/settings', label: 'Settings', icon: HiOutlineCog },
+];
+
+// Inject Helpdesk section into KPI nav items
+kpiNavItems.employee      = [...kpiNavItems.employee,       ...hdBaseItems];
+kpiNavItems.manager       = [...kpiNavItems.manager,        ...hdWithGroups];
+kpiNavItems.senior_manager = [...kpiNavItems.senior_manager, ...hdWithGroups];
+kpiNavItems.hr_admin      = [...kpiNavItems.hr_admin,       ...hdBaseItems];
+kpiNavItems.final_approver = [...kpiNavItems.final_approver, ...hdBaseItems];
+kpiNavItems.admin         = [...kpiNavItems.admin,          ...hdWithSettings];
+kpiNavItems.sales_director = [...kpiNavItems.sales_director, ...hdBaseItems];
+kpiNavItems.md            = [...kpiNavItems.md,             ...hdBaseItems];
+kpiNavItems.director      = [...kpiNavItems.director,       ...hdBaseItems];
+
+// Inject Helpdesk section into PM nav items
+pmNavItems.employee       = [...pmNavItems.employee,        ...hdBaseItems];
+pmNavItems.manager        = [...pmNavItems.manager,         ...hdWithGroups];
+pmNavItems.senior_manager = [...pmNavItems.senior_manager,  ...hdWithGroups];
+pmNavItems.hr_admin       = [...pmNavItems.hr_admin,        ...hdBaseItems];
+pmNavItems.final_approver = [...pmNavItems.final_approver,  ...hdBaseItems];
+pmNavItems.admin          = [...pmNavItems.admin,           ...hdWithSettings];
+pmNavItems.sales_director = [...pmNavItems.sales_director,  ...hdBaseItems];
+pmNavItems.md             = [...pmNavItems.md,              ...hdBaseItems];
+pmNavItems.director       = [...pmNavItems.director,        ...hdBaseItems];
 
 export default function Sidebar({ collapsed, onToggle, onNavClick }) {
   const { user } = useSelector((state) => state.auth);

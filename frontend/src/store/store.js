@@ -6,6 +6,7 @@ import kpiReducer from './kpiSlice';
 import notificationsReducer from './notificationsSlice';
 import appReducer from './appSlice';
 import pmReducer from './pmSlice';
+import helpdeskReducer from './helpdeskSlice';
 
 export const store = configureStore({
   reducer: {
@@ -16,5 +17,6 @@ export const store = configureStore({
     notifications: notificationsReducer,
     app: appReducer,
     pm: pmReducer,
+    helpdesk: helpdeskReducer,
   },
 });
