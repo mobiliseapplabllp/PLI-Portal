@@ -11,6 +11,7 @@ import {
 import { updateProjectApi, addMemberApi, removeMemberApi } from '../../api/pm/projects.api';
 import { getTodayLogApi } from '../../api/pm/dailyLogs.api';
 import { getUsersApi } from '../../api/users.api';
+import { formatDate } from '../../utils/formatters';
 
 const STATUS_COLORS = {
   planning: 'bg-gray-100 text-gray-700',
@@ -62,6 +63,16 @@ export default function ProjectDetail() {
   }, [activeTab, id]);
 
   const canManage = MANAGER_ROLES.includes(user?.role) || (project && String(project.managerId) === String(user?._id));
+
+  const handleBillableChange = async (isBillable) => {
+    try {
+      await updateProjectApi(id, { isBillable });
+      toast.success(isBillable ? 'Marked billable' : 'Billable flag removed');
+      dispatch(fetchProjectById(id));
+    } catch (err) {
+      toast.error(err.response?.data?.error?.message || 'Failed to update billing flag');
+    }
+  };
 
   const handleStatusChange = async (status) => {
     setStatusUpdating(true);
@@ -202,6 +213,74 @@ export default function ProjectDetail() {
           <span><strong className="text-emerald-600">{completed}</strong> Completed</span>
           <span><strong className="text-blue-600">{milestones.filter(m => m.status === 'in_progress').length}</strong> In Progress</span>
           <span><strong className="text-red-600">{delayed}</strong> Delayed</span>
+        </div>
+      </div>
+
+      {/* Billing — manager sets billable, Finance records the invoice */}
+      <div className="bg-white rounded-xl border border-gray-200 p-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-medium text-gray-700 mb-1">Billing</p>
+            {project.isBilled ? (
+              <p className="text-xs text-gray-500">
+                Invoiced as <span className="font-mono text-gray-700">{project.invoiceNumber}</span>
+                {project.billedDate ? ` on ${formatDate(project.billedDate)}` : ''}
+                {project.billedBy?.name ? ` by ${project.billedBy.name}` : ''}
+              </p>
+            ) : project.isBillable ? (
+              <p className="text-xs text-gray-500">
+                {project.status === 'completed'
+                  ? 'Completed and billable — waiting with the Finance team to invoice.'
+                  : 'Billable. It reaches the Finance billing register once marked Completed.'}
+              </p>
+            ) : (
+              <p className="text-xs text-gray-500">Not marked billable — it will not appear in the Finance register.</p>
+            )}
+          </div>
+
+          <div className="flex items-center gap-3">
+            {project.isBilled ? (
+              <span className="text-xs px-2.5 py-1 rounded-full font-medium bg-emerald-100 text-emerald-700">Billed</span>
+            ) : project.isBillable && project.status === 'completed' ? (
+              <span className="text-xs px-2.5 py-1 rounded-full font-medium bg-amber-100 text-amber-700">Ready to bill</span>
+            ) : project.isBillable ? (
+              <span className="text-xs px-2.5 py-1 rounded-full font-medium bg-blue-50 text-blue-600">Billable</span>
+            ) : (
+              <span className="text-xs px-2.5 py-1 rounded-full font-medium bg-gray-100 text-gray-500">Not billable</span>
+            )}
+
+            {canManage && !project.isBilled && (
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-gray-500">Billable?</span>
+                <div className="inline-flex rounded-lg border border-gray-200 overflow-hidden">
+                  {[
+                    { value: true, label: 'Yes' },
+                    { value: false, label: 'No' },
+                  ].map((opt) => (
+                    <button
+                      key={String(opt.value)}
+                      type="button"
+                      onClick={() => project.isBillable !== opt.value && handleBillableChange(opt.value)}
+                      className={`px-3 py-1 text-xs font-semibold transition ${
+                        !!project.isBillable === opt.value
+                          ? opt.value
+                            ? 'bg-emerald-600 text-white'
+                            : 'bg-gray-500 text-white'
+                          : 'bg-white text-gray-500 hover:bg-gray-50'
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {canManage && project.isBilled && (
+              <span className="text-xs text-gray-400" title="Reverse the invoice in the Billing Register to change this">
+                Locked — already invoiced
+              </span>
+            )}
+          </div>
         </div>
       </div>
 

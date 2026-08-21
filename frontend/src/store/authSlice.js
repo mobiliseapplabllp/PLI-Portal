@@ -1,15 +1,25 @@
 import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
-import { loginApi, getMeApi, logoutApi, changePasswordApi } from '../api/auth.api';
+import { getMeApi, logoutApi, requestOtpApi, verifyOtpApi } from '../api/auth.api';
 
-export const loginUser = createAsyncThunk('auth/login', async (credentials, { rejectWithValue }) => {
+// Sign-in is email-OTP only: request a code, then verify it.
+export const requestOtp = createAsyncThunk('auth/requestOtp', async (identifier, { rejectWithValue }) => {
   try {
-    const res = await loginApi(credentials);
-    const { token, refreshToken, user } = res.data.data;
+    const res = await requestOtpApi(identifier);
+    return res.data.data;
+  } catch (err) {
+    return rejectWithValue(err.response?.data?.error?.message || 'Could not send the code');
+  }
+});
+
+export const verifyOtp = createAsyncThunk('auth/verifyOtp', async ({ identifier, code }, { rejectWithValue }) => {
+  try {
+    const res = await verifyOtpApi(identifier, code);
+    const { token, user } = res.data.data;
     localStorage.setItem('token', token);
     localStorage.setItem('user', JSON.stringify(user));
     return { token, user };
   } catch (err) {
-    return rejectWithValue(err.response?.data?.error?.message || 'Login failed');
+    return rejectWithValue(err.response?.data?.error?.message || 'Invalid code');
   }
 });
 
@@ -33,21 +43,21 @@ export const logoutUser = createAsyncThunk('auth/logout', async () => {
   }
 });
 
-export const changePassword = createAsyncThunk('auth/changePassword', async (data, { rejectWithValue }) => {
+// A corrupt localStorage entry must not take the whole app down at import time
+const readStoredUser = () => {
   try {
-    const res = await changePasswordApi(data);
-    return res.data.message;
-  } catch (err) {
-    return rejectWithValue(err.response?.data?.error?.message || 'Failed');
+    const raw = localStorage.getItem('user');
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    localStorage.removeItem('user');
+    return null;
   }
-});
-
-const storedUser = localStorage.getItem('user');
+};
 
 const authSlice = createSlice({
   name: 'auth',
   initialState: {
-    user: storedUser ? JSON.parse(storedUser) : null,
+    user: readStoredUser(),
     token: localStorage.getItem('token') || null,
     loading: false,
     error: null,
@@ -56,26 +66,20 @@ const authSlice = createSlice({
     clearError: (state) => {
       state.error = null;
     },
-    clearMustChangePassword: (state) => {
-      if (state.user) {
-        state.user.mustChangePassword = false;
-        localStorage.setItem('user', JSON.stringify(state.user));
-      }
-    },
   },
   extraReducers: (builder) => {
     builder
-      // Login
-      .addCase(loginUser.pending, (state) => {
+      // OTP verification is the only sign-in path
+      .addCase(verifyOtp.pending, (state) => {
         state.loading = true;
         state.error = null;
       })
-      .addCase(loginUser.fulfilled, (state, action) => {
+      .addCase(verifyOtp.fulfilled, (state, action) => {
         state.loading = false;
         state.user = action.payload.user;
         state.token = action.payload.token;
       })
-      .addCase(loginUser.rejected, (state, action) => {
+      .addCase(verifyOtp.rejected, (state, action) => {
         state.loading = false;
         state.error = action.payload;
       })
@@ -100,5 +104,5 @@ const authSlice = createSlice({
   },
 });
 
-export const { clearError, clearMustChangePassword } = authSlice.actions;
+export const { clearError } = authSlice.actions;
 export default authSlice.reducer;

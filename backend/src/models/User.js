@@ -14,7 +14,9 @@ const User = sequelize.define(
     employeeCode: { type: DataTypes.STRING(32), allowNull: false, unique: true },
     name: { type: DataTypes.STRING(255), allowNull: false },
     email: { type: DataTypes.STRING(255), allowNull: false, unique: true },
-    passwordHash: { type: DataTypes.STRING(255), allowNull: false },
+    // Retained for legacy rows only — authentication is email-OTP only and
+    // nothing reads this column any more (see migration 013).
+    passwordHash: { type: DataTypes.STRING(255), allowNull: true },
     phone: { type: DataTypes.STRING(32), allowNull: true },
     departmentId: { type: DataTypes.UUID, allowNull: true },
     designation: { type: DataTypes.STRING(128), allowNull: true },
@@ -24,12 +26,15 @@ const User = sequelize.define(
       // Hardcoded ENUM string to match the DB column after migration script runs.
       // Do NOT use DataTypes.ENUM(...Object.values(ROLES)) because Sequelize alter
       // would drop+recreate the ENUM and lose legacy 'final_reviewed' value.
-      type: DataTypes.ENUM('employee', 'manager', 'senior_manager', 'hr_admin', 'final_approver', 'admin', 'md', 'director', 'sales_director'),
+      type: DataTypes.ENUM('employee', 'manager', 'senior_manager', 'hr_admin', 'final_approver', 'admin', 'md', 'director', 'sales_director', 'finance'),
       defaultValue: ROLES.EMPLOYEE,
     },
     isActive: { type: DataTypes.BOOLEAN, defaultValue: true },
     mustChangePassword: { type: DataTypes.BOOLEAN, defaultValue: true },
     kpiReviewApplicable: { type: DataTypes.BOOLEAN, defaultValue: true },
+    // Saturday rostering applicability — column added by migration 011 (users table
+    // is at the 64-index cap so sync({alter:true}) cannot add it).
+    rosterApplicable: { type: DataTypes.BOOLEAN, defaultValue: true },
     lastLogin: { type: DataTypes.DATE, allowNull: true },
   },
   {

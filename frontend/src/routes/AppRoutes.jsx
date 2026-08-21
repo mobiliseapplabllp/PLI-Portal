@@ -6,7 +6,6 @@ import AppLayout from '../components/layout/AppLayout';
 
 // Auth pages
 import LoginPage from '../pages/auth/LoginPage';
-import ChangePasswordPage from '../pages/auth/ChangePasswordPage';
 
 // Employee pages
 import EmployeeDashboard from '../pages/employee/EmployeeDashboard';
@@ -70,12 +69,21 @@ import DailyLogForm from '../pages/pm/DailyLogForm';
 import DailyLogHistory from '../pages/pm/DailyLogHistory';
 import MyTasks from '../pages/pm/MyTasks';
 import PMSettings from '../pages/pm/PMSettings';
+import BillingRegister from '../pages/pm/BillingRegister';
+
+// Rostering pages
+import RosterDashboard from '../pages/roster/RosterDashboard';
+import RosterBoard from '../pages/roster/RosterBoard';
+import MySaturdays from '../pages/roster/MySaturdays';
+import RosterCoverage from '../pages/roster/RosterCoverage';
+import SwapApprovals from '../pages/roster/SwapApprovals';
 
 // Common
 import ProfilePage from '../pages/common/ProfilePage';
 import NotFoundPage from '../pages/common/NotFoundPage';
 
-const ALL_ROLES = ['admin', 'manager', 'senior_manager', 'employee', 'hr_admin', 'final_approver', 'md', 'director', 'sales_director'];
+const ALL_ROLES = ['admin', 'manager', 'senior_manager', 'employee', 'hr_admin', 'final_approver', 'md', 'director', 'sales_director', 'finance'];
+const BILLING_VIEWERS = ['finance', 'admin', 'md', 'director', 'senior_manager'];
 const PM_CREATORS = ['admin', 'manager', 'senior_manager'];
 
 function HomeRedirect() {
@@ -123,7 +131,6 @@ export default function AppRoutes() {
         }
       >
         <Route path="/" element={<HomeRedirect />} />
-        <Route path="/change-password" element={<ChangePasswordPage />} />
         <Route path="/profile" element={<ProfilePage />} />
 
         {/* Employee routes */}
@@ -176,6 +183,7 @@ export default function AppRoutes() {
         <Route path="/pm/projects/:id/daily-logs" element={<RoleRoute roles={ALL_ROLES}><DailyLogHistory /></RoleRoute>} />
         <Route path="/pm/my-tasks" element={<RoleRoute roles={ALL_ROLES}><MyTasks /></RoleRoute>} />
         <Route path="/pm/settings" element={<RoleRoute roles={['admin']}><PMSettings /></RoleRoute>} />
+        <Route path="/pm/billing" element={<RoleRoute roles={BILLING_VIEWERS}><BillingRegister /></RoleRoute>} />
 
         {/* CSAT routes */}
         <Route path="/csat/client-organisations" element={<RoleRoute roles={['admin', 'manager', 'senior_manager']}><ClientOrgsPage /></RoleRoute>} />
@@ -189,6 +197,13 @@ export default function AppRoutes() {
         <Route path="/csat/approval-inbox" element={<RoleRoute roles={['admin']}><SurveyApprovalInboxPage /></RoleRoute>} />
         <Route path="/csat/approval/:approvalId" element={<RoleRoute roles={['admin', 'manager', 'senior_manager']}><SurveyApprovalDetailPage /></RoleRoute>} />
         <Route path="/csat/my-requests" element={<RoleRoute roles={['manager', 'senior_manager']}><MyApprovalRequestsPage /></RoleRoute>} />
+
+        {/* Saturday Rostering */}
+        <Route path="/roster/dashboard" element={<RoleRoute roles={ALL_ROLES}><RosterDashboard /></RoleRoute>} />
+        <Route path="/roster/board" element={<RoleRoute roles={ALL_ROLES}><RosterBoard /></RoleRoute>} />
+        <Route path="/roster/my" element={<RoleRoute roles={ALL_ROLES}><MySaturdays /></RoleRoute>} />
+        <Route path="/roster/coverage" element={<RoleRoute roles={['manager', 'senior_manager', 'sales_director', 'admin', 'hr_admin']}><RosterCoverage /></RoleRoute>} />
+        <Route path="/roster/swaps" element={<RoleRoute roles={['manager', 'senior_manager', 'sales_director', 'admin', 'hr_admin']}><SwapApprovals /></RoleRoute>} />
       </Route>
 
       <Route path="*" element={<NotFoundPage />} />

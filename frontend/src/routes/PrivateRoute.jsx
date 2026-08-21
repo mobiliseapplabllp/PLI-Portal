@@ -18,10 +18,7 @@ export default function PrivateRoute({ children }) {
     );
   }
 
-  // Force password change redirect (but don't redirect if already on /change-password)
-  if (user?.mustChangePassword && location.pathname !== '/change-password') {
-    return <Navigate to="/change-password" replace />;
-  }
+  // No forced password-change step — sign-in is email-OTP only, there is no password.
 
   return children;
 }

@@ -9,6 +9,7 @@ const ROLES = {
   MD: 'md',
   DIRECTOR: 'director',
   SALES_DIRECTOR: 'sales_director',
+  FINANCE: 'finance',
 };
 
 // KPI Assignment statuses
@@ -114,6 +115,8 @@ const NOTIFICATION_TYPES = {
   PM_PROJECT_ASSIGNED: 'pm_project_assigned',
   PM_MILESTONE_UPDATED: 'pm_milestone_updated',
   PM_DAILY_LOG: 'pm_daily_log',
+  PM_PROJECT_READY_TO_BILL: 'pm_project_ready_to_bill',
+  PM_PROJECT_BILLED: 'pm_project_billed',
   // Scoring config
   SCORING_CONFIG_UPDATED: 'scoring_config_updated',
   // CSAT
@@ -189,7 +192,44 @@ const PM_OVERALL_STATUS = {
 };
 
 // Roles that can see Project Management module
-const PM_VIEWER_ROLES = ['admin', 'manager', 'senior_manager', 'employee', 'hr_admin', 'final_approver', 'md', 'director'];
+const PM_VIEWER_ROLES = ['admin', 'manager', 'senior_manager', 'employee', 'hr_admin', 'final_approver', 'md', 'director', 'finance'];
+
+// Only these roles may mark a project as billed
+const PM_BILLING_ROLES = ['finance', 'admin'];
+
+// ── OTP login ─────────────────────────────────────────────────────────────────
+const OTP_CONFIG = {
+  LENGTH: 6,
+  TTL_MINUTES: 10,
+  MAX_ATTEMPTS: 5,          // wrong guesses before the code is burned
+  RESEND_COOLDOWN_SECONDS: 60,
+  MAX_REQUESTS_PER_HOUR: 5, // per-account budget — survives IP rotation
+  LOCKOUT_MINUTES: 15,      // cooldown after a code is burned by wrong guesses
+};
+
+// ── Saturday Rostering ────────────────────────────────────────────────────────
+const ROSTER_STATUS = {
+  WORKING: 'working',
+  OFF: 'off',
+};
+
+const ROSTER_SWAP_STATUS = {
+  PENDING_PEER: 'pending_peer',
+  PENDING_MANAGER: 'pending_manager',
+  APPROVED: 'approved',
+  REJECTED: 'rejected',
+  CANCELLED: 'cancelled',
+};
+
+const ROSTER_COMP_OFF_STATUS = {
+  EARNED: 'earned',
+  AVAILED: 'availed',
+  CANCELLED: 'cancelled',
+};
+
+// Roles that manage their own team's roster (admin/hr_admin manage all teams)
+const ROSTER_TEAM_MANAGER_ROLES = ['manager', 'senior_manager', 'sales_director'];
+const ROSTER_ADMIN_ROLES = ['admin', 'hr_admin'];
 
 // Quarter mapping: month number -> quarter
 const QUARTER_MAP = {
@@ -232,4 +272,11 @@ module.exports = {
   PM_TASK_STATUS,
   PM_OVERALL_STATUS,
   PM_VIEWER_ROLES,
+  PM_BILLING_ROLES,
+  OTP_CONFIG,
+  ROSTER_STATUS,
+  ROSTER_SWAP_STATUS,
+  ROSTER_COMP_OFF_STATUS,
+  ROSTER_TEAM_MANAGER_ROLES,
+  ROSTER_ADMIN_ROLES,
 };

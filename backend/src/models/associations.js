@@ -13,6 +13,7 @@ const PliSlab = require('./PliSlab');
 const Notification = require('./Notification');
 const AuditLog = require('./AuditLog');
 const KpiTemplate = require('./KpiTemplate');
+const LoginOtp = require('./LoginOtp');
 
 // ── PM Models ─────────────────────────────────────────────────────────────────
 const Project = require('./pm/Project');
@@ -81,6 +82,10 @@ Notification.belongsTo(User, { foreignKey: 'recipientId', as: 'recipient' });
 // ── AuditLog ──────────────────────────────────────────────────────────────────
 AuditLog.belongsTo(User, { foreignKey: 'changedById', as: 'changedBy' });
 
+// ── LoginOtp ──────────────────────────────────────────────────────────────────
+LoginOtp.belongsTo(User, { foreignKey: 'userId', as: 'user' });
+User.hasMany(LoginOtp, { foreignKey: 'userId', as: 'loginOtps', onDelete: 'CASCADE' });
+
 // ── KpiTemplate ───────────────────────────────────────────────────────────────
 KpiTemplate.belongsTo(User, { foreignKey: 'createdById', as: 'createdBy' });
 
@@ -88,6 +93,7 @@ KpiTemplate.belongsTo(User, { foreignKey: 'createdById', as: 'createdBy' });
 Project.belongsTo(User, { foreignKey: 'ownerId', as: 'owner' });
 Project.belongsTo(User, { foreignKey: 'managerId', as: 'projectManager' });
 Project.belongsTo(User, { foreignKey: 'createdById', as: 'createdBy' });
+Project.belongsTo(User, { foreignKey: 'billedById', as: 'billedBy' });
 Project.hasMany(ProjectMember, { foreignKey: 'projectId', as: 'members', onDelete: 'CASCADE' });
 Project.hasMany(Milestone, { foreignKey: 'projectId', as: 'milestones', onDelete: 'CASCADE' });
 Project.hasMany(Task, { foreignKey: 'projectId', as: 'tasks', onDelete: 'CASCADE' });
@@ -167,6 +173,32 @@ SurveyDispatchApproval.hasMany(SurveyDispatchApprovalFeedback, { foreignKey: 'su
 SurveyDispatchApprovalFeedback.belongsTo(SurveyDispatchApproval, { foreignKey: 'surveyDispatchApprovalId', as: 'approval' });
 SurveyDispatchApprovalFeedback.belongsTo(SurveyQuestion, { foreignKey: 'surveyQuestionId', as: 'question' });
 
+// ── Rostering Models ──────────────────────────────────────────────────────────
+const RosterWeek = require('./roster/RosterWeek');
+const RosterEntry = require('./roster/RosterEntry');
+const RosterCompOff = require('./roster/RosterCompOff');
+const RosterSwapRequest = require('./roster/RosterSwapRequest');
+
+RosterWeek.belongsTo(User, { foreignKey: 'createdById', as: 'createdBy' });
+RosterWeek.hasMany(RosterEntry, { foreignKey: 'rosterWeekId', as: 'entries', onDelete: 'CASCADE' });
+
+RosterEntry.belongsTo(RosterWeek, { foreignKey: 'rosterWeekId', as: 'week' });
+RosterEntry.belongsTo(User, { foreignKey: 'employeeId', as: 'employee' });
+RosterEntry.belongsTo(User, { foreignKey: 'managerId', as: 'manager' });
+RosterEntry.belongsTo(User, { foreignKey: 'changedById', as: 'changedBy' });
+RosterEntry.belongsTo(User, { foreignKey: 'publishedById', as: 'publishedBy' });
+
+RosterCompOff.belongsTo(User, { foreignKey: 'employeeId', as: 'employee' });
+RosterCompOff.belongsTo(User, { foreignKey: 'grantedById', as: 'grantedBy' });
+RosterCompOff.belongsTo(RosterEntry, { foreignKey: 'rosterEntryId', as: 'rosterEntry' });
+
+RosterSwapRequest.belongsTo(RosterWeek, { foreignKey: 'rosterWeekId', as: 'week' });
+RosterSwapRequest.belongsTo(User, { foreignKey: 'requesterId', as: 'requester' });
+RosterSwapRequest.belongsTo(User, { foreignKey: 'targetId', as: 'target' });
+RosterSwapRequest.belongsTo(User, { foreignKey: 'decidedById', as: 'decidedBy' });
+RosterSwapRequest.belongsTo(RosterEntry, { foreignKey: 'requesterEntryId', as: 'requesterEntry' });
+RosterSwapRequest.belongsTo(RosterEntry, { foreignKey: 'targetEntryId', as: 'targetEntry' });
+
 // Export PM models so other files can import from associations
 module.exports = {
   Project, ProjectMember, Milestone, Task, DailyStatusLog, ProjectNotificationRecipient, PmSettings,
@@ -174,4 +206,8 @@ module.exports = {
   ClientOrganisation, ClientEmployee, Survey, SurveyQuestion,
   SurveyDispatch, SurveyRecipient, SurveyResponse,
   SurveyDispatchApproval, SurveyDispatchApprovalFeedback,
+  // Rostering
+  RosterWeek, RosterEntry, RosterCompOff, RosterSwapRequest,
+  // Auth
+  LoginOtp,
 };

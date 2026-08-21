@@ -41,7 +41,7 @@ export default function EmployeeManagement() {
   const openCreate = () => {
     setEditingUser(null);
     setManagerSearch('');
-    reset({ name: '', email: '', employeeCode: '', password: '', role: 'employee', phone: '', designation: '', department: '', manager: '', kpiReviewApplicable: true });
+    reset({ name: '', email: '', employeeCode: '', role: 'employee', phone: '', designation: '', department: '', manager: '', kpiReviewApplicable: true, rosterApplicable: true });
     setShowModal(true);
   };
 
@@ -59,6 +59,7 @@ export default function EmployeeManagement() {
       manager: user.manager?._id || '',
       isActive: user.isActive,
       kpiReviewApplicable: user.kpiReviewApplicable !== false,
+      rosterApplicable: user.rosterApplicable !== false,
     });
     setShowModal(true);
   };
@@ -67,7 +68,7 @@ export default function EmployeeManagement() {
     const cleaned = { ...data };
     if (!cleaned.department) delete cleaned.department;
     if (!cleaned.manager) delete cleaned.manager;
-    if (!cleaned.password) delete cleaned.password;
+    delete cleaned.password; // passwords no longer exist — OTP sign-in only
 
     let result;
     if (editingUser) {
@@ -124,6 +125,15 @@ export default function EmployeeManagement() {
         {r.kpiReviewApplicable !== false ? 'Applicable' : 'Not Applicable'}
       </span>
     )},
+    { key: 'rosterApplicable', label: 'Roster', render: (r) => (
+      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
+        r.rosterApplicable !== false
+          ? 'bg-blue-100 text-blue-700'
+          : 'bg-gray-200 text-gray-500'
+      }`}>
+        {r.rosterApplicable !== false ? 'Rostered' : 'Not in Roster'}
+      </span>
+    )},
     { key: 'actions', label: '', render: (r) => (
       <button onClick={(e) => { e.stopPropagation(); openEdit(r); }} className="text-primary-600 text-sm hover:underline">Edit</button>
     )},
@@ -165,9 +175,8 @@ export default function EmployeeManagement() {
             <input type="email" {...register('email', { required: 'Required' })} className="input-field" />
           </div>
           {!editingUser && (
-            <div>
-              <label className="label-text">Password *</label>
-              <input type="password" {...register('password', { required: !editingUser ? 'Required' : false })} className="input-field" />
+            <div className="md:col-span-2 text-xs text-gray-500 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
+              No password is needed — this employee signs in with a one-time code sent to their email address.
             </div>
           )}
           <div>
@@ -182,6 +191,7 @@ export default function EmployeeManagement() {
               <option value="md">MD (Managing Director)</option>
               <option value="director">Director</option>
               <option value="sales_director">Sales Director</option>
+              <option value="finance">Finance</option>
             </select>
           </div>
           <div>
@@ -265,6 +275,17 @@ export default function EmployeeManagement() {
             />
             <label htmlFor="kpiReviewApplicable" className={`text-sm ${editingUser && watchIsActive === false ? 'text-gray-400' : 'text-gray-700'}`}>
               KPI Review Applicable
+            </label>
+          </div>
+          <div className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              id="rosterApplicable"
+              {...register('rosterApplicable')}
+              className="rounded"
+            />
+            <label htmlFor="rosterApplicable" className="text-sm text-gray-700">
+              Saturday Roster Applicable
             </label>
           </div>
           {editingUser && watchIsActive === false && (

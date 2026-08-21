@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const helmet = require('helmet');
 const morgan = require('morgan');
 const path = require('path');
 require('dotenv').config({ path: require('path').join(__dirname, '.env') });
@@ -10,11 +11,43 @@ const { errorHandler } = require('./src/middleware/errorHandler');
 const routes = require('./src/routes');
 const logger = require('./src/utils/logger');
 
+// Fail fast rather than serving traffic with unsigned/forgeable tokens.
+for (const key of ['JWT_SECRET', 'JWT_REFRESH_SECRET']) {
+  if (!process.env[key] || process.env[key].length < 32) {
+    console.error(`FATAL: ${key} is missing or shorter than 32 characters. Refusing to start.`);
+    process.exit(1);
+  }
+}
+
 const app = express();
 const PORT = process.env.PORT || 5105;
 
-// Middleware
-app.use(cors());
+// Behind Apache/nginx — required for req.ip (and therefore rate limiting) to
+// reflect the real client rather than the proxy.
+app.set('trust proxy', 1);
+app.disable('x-powered-by');
+
+// Security headers. CSP is left to the reverse proxy/frontend build; the API
+// itself serves JSON, so the strict defaults here are safe.
+app.use(helmet({ crossOriginResourcePolicy: { policy: 'same-site' } }));
+
+// CORS: allow-list driven. CORS_ORIGINS is a comma-separated list; with none set
+// we fall back to same-origin only (the SPA is served by this process in prod).
+const allowedOrigins = (process.env.CORS_ORIGINS || '')
+  .split(',')
+  .map((o) => o.trim())
+  .filter(Boolean);
+app.use(
+  cors({
+    origin(origin, cb) {
+      if (!origin) return cb(null, true); // same-origin, curl, server-to-server
+      if (allowedOrigins.length === 0 || allowedOrigins.includes(origin)) return cb(null, true);
+      return cb(new Error('Not allowed by CORS'));
+    },
+    credentials: true,
+  })
+);
+
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
@@ -52,6 +85,11 @@ app.use('/api', (req, res, next) => {
 // API Routes
 app.use('/api', routes);
 
+// Unknown API paths must answer JSON, never the SPA shell
+app.use('/api', (req, res) => {
+  res.status(404).json({ success: false, error: { message: 'Route not found' } });
+});
+
 // Global error handler
 app.use(errorHandler);
 
@@ -71,7 +109,7 @@ if (require('fs').existsSync(frontendBuildPath)) {
 }
 
 app.listen(PORT, () => {
-  logger.success(`PLI Portal API  →  http://localhost:${PORT}  (${process.env.NODE_ENV || 'development'})`);
+  logger.success(`Lakshya Portal API  →  http://localhost:${PORT}  (${process.env.NODE_ENV || 'development'})`);
   // Connect to DB after HTTP server is up — retries indefinitely until success
   connectDB();
   // Start scheduled jobs after DB is available
@@ -81,6 +119,8 @@ app.listen(PORT, () => {
   startProjectDailyReportJob().catch(err => console.error('[PM DailyReport] Startup error:', err.message));
   const { startSurveyCron } = require('./src/jobs/surveyCron.job');
   startSurveyCron();
+  const { startRosterMailerJob } = require('./src/jobs/rosterMailer.job');
+  startRosterMailerJob();
 });
 
 module.exports = app;

@@ -71,14 +71,17 @@ const getUserById = async (id) => {
 };
 
 const mapCreateBody = (data) => {
-  const { department, manager, password, ...rest } = data;
+  // `password` is accepted and discarded — sign-in is email-OTP only, so new
+  // users are created without any password at all (see migration 013).
+  const { department, manager, password, passwordHash, ...rest } = data;
   return {
     ...rest,
     email: data.email?.toLowerCase?.() || data.email,
     employeeCode: data.employeeCode?.toUpperCase?.() || data.employeeCode,
     departmentId: department || null,
     managerId: manager || null,
-    passwordHash: password,
+    passwordHash: null,
+    mustChangePassword: false,
   };
 };
 
@@ -154,11 +157,11 @@ const updateUser = async (id, data, updatedBy) => {
   };
 
   const patch = { ...data };
-  if (patch.password) {
-    patch.passwordHash = patch.password;
-    patch.mustChangePassword = true;
-    delete patch.password;
-  }
+  // Passwords no longer exist — drop any that a stale client still sends so they
+  // can never be written to the row or leak into the audit log below.
+  delete patch.password;
+  delete patch.passwordHash;
+  delete patch.mustChangePassword;
   if (patch.department !== undefined) {
     patch.departmentId = patch.department;
     delete patch.department;
@@ -257,7 +260,9 @@ const updateUser = async (id, data, updatedBy) => {
     action: 'updated',
     changedBy: updatedBy,
     oldValue,
-    newValue: data,
+    // `patch` is the sanitised payload — never `data`, which may still carry
+    // secrets sent by an old client that we must not persist to the audit trail.
+    newValue: patch,
   });
 
   const full = await User.findByPk(user.id, {

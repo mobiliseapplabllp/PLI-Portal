@@ -31,8 +31,11 @@ import {
   HiOutlineAnnotation,
   HiOutlineInbox,
   HiOutlineClipboardCheck as HiOutlineMyRequests,
+  HiOutlineSwitchHorizontal,
+  HiOutlineCurrencyRupee,
 } from 'react-icons/hi';
 import { ROLE_CONFIG } from '../../utils/constants';
+import LakshyaLogo from '../common/LakshyaLogo';
 
 // ── KPI Nav Items ─────────────────────────────────────────────────────────────
 const kpiNavItems = {
@@ -213,9 +216,32 @@ const pmNavItems = {
       ],
     },
     { to: '/pm/my-tasks', label: 'My Tasks', icon: HiOutlineCheckCircle },
+    { to: '/pm/billing', label: 'Billing Register', icon: HiOutlineCurrencyRupee },
     { to: '/pm/settings', label: 'PM Settings', icon: HiOutlineCog },
-    { section: 'Client Surveys' },
-    { to: '/csat/dashboard', label: 'CSAT Dashboard', icon: HiOutlineChartBar },
+  ],
+};
+
+// CSAT items appended to manager/senior_manager/hr_admin/final_approver PM nav
+// Sales Director has no PM module access
+pmNavItems.sales_director = [];
+
+// ── Billing (Finance) ─────────────────────────────────────────────────────────
+// Finance lives inside the PM module: projects are what get billed.
+const billingItem = { to: '/pm/billing', label: 'Billing Register', icon: HiOutlineCurrencyRupee };
+pmNavItems.finance = [
+  { to: '/pm/dashboard', label: 'PM Dashboard', icon: HiOutlineHome },
+  { to: '/pm/projects', label: 'All Projects', icon: HiOutlineFolderOpen },
+  billingItem,
+];
+pmNavItems.md = [...pmNavItems.md, billingItem];
+pmNavItems.director = [...pmNavItems.director, billingItem];
+pmNavItems.senior_manager = [...pmNavItems.senior_manager, billingItem];
+
+// ── CSAT Nav Items ────────────────────────────────────────────────────────────
+// Client Surveys is its own application, not a section of Project Management.
+const csatNavItems = {
+  admin: [
+    { to: '/csat/dashboard', label: 'CSAT Dashboard', icon: HiOutlineHome },
     { to: '/csat/client-organisations', label: 'Client Orgs', icon: HiOutlineOfficeBuilding },
     { to: '/csat/approval-inbox', label: 'Approval Inbox', icon: HiOutlineInbox },
     {
@@ -228,37 +254,61 @@ const pmNavItems = {
       ],
     },
   ],
+  manager: [
+    { to: '/csat/dashboard', label: 'CSAT Dashboard', icon: HiOutlineHome },
+    { to: '/csat/client-organisations', label: 'Client Orgs', icon: HiOutlineOfficeBuilding },
+    { to: '/csat/send', label: 'Send Survey', icon: HiOutlinePaperAirplane },
+    { to: '/csat/my-requests', label: 'My Requests', icon: HiOutlineMyRequests },
+    { to: '/csat/responses', label: 'Survey Responses', icon: HiOutlineChartBar },
+  ],
+  // Read-only audiences
+  hr_admin: [
+    { to: '/csat/dashboard', label: 'CSAT Dashboard', icon: HiOutlineHome },
+    { to: '/csat/responses', label: 'Survey Responses', icon: HiOutlineChartBar },
+  ],
 };
+csatNavItems.senior_manager = csatNavItems.manager;
+csatNavItems.final_approver = csatNavItems.hr_admin;
+// Roles with no client-survey remit
+csatNavItems.employee = [];
+csatNavItems.md = [];
+csatNavItems.director = [];
+csatNavItems.sales_director = [];
+csatNavItems.finance = [];
 
-// CSAT items appended to manager/senior_manager/hr_admin/final_approver PM nav
-const csatManagerItems = [
-  { section: 'Client Surveys' },
-  { to: '/csat/dashboard', label: 'CSAT Dashboard', icon: HiOutlineChartBar },
-  {
-    label: 'Surveys',
-    icon: HiOutlineAnnotation,
-    children: [
-      { to: '/csat/send', label: 'Send Survey', icon: HiOutlinePaperAirplane },
-      { to: '/csat/my-requests', label: 'My Requests', icon: HiOutlineMyRequests },
-      { to: '/csat/responses', label: 'Survey Responses', icon: HiOutlineChartBar },
-    ],
-  },
+// ── Rostering Nav Items ───────────────────────────────────────────────────────
+// Roster managers (manager/senior_manager/sales_director) plan their own team;
+// admin + hr_admin see every team; everyone else gets their personal view only.
+// The Saturday Trend matrix lives as a tab inside the Saturday Roster page,
+// so it needs no nav entry of its own.
+const rosterSelfItems = [
+  { to: '/roster/dashboard', label: 'Roster Dashboard', icon: HiOutlineHome },
+  { to: '/roster/my', label: 'My Saturdays', icon: HiOutlineCalendar },
+  { to: '/roster/board', label: 'Saturday Trend', icon: HiOutlineTable },
 ];
 
-const csatReadOnlyItems = [
-  { section: 'Client Surveys' },
-  { to: '/csat/dashboard', label: 'CSAT Dashboard', icon: HiOutlineChartBar },
-  { to: '/csat/responses', label: 'Survey Responses', icon: HiOutlineChartBar },
+const rosterManagerItems = [
+  { to: '/roster/dashboard', label: 'Roster Dashboard', icon: HiOutlineHome },
+  { to: '/roster/board', label: 'Saturday Roster', icon: HiOutlineCalendar },
+  { to: '/roster/swaps', label: 'Swaps & Comp-Offs', icon: HiOutlineSwitchHorizontal },
+  { to: '/roster/coverage', label: 'Coverage', icon: HiOutlineChartBar },
+  { to: '/roster/my', label: 'My Saturdays', icon: HiOutlineClipboardCheck },
 ];
 
-// Sales Director has no PM module access
-pmNavItems.sales_director = [];
+// Admin/HR administer the roster but are not rostered themselves
+const rosterAdminItems = rosterManagerItems.filter((i) => i.to !== '/roster/my');
 
-// Inject CSAT into pm nav items for non-admin roles
-pmNavItems.manager       = [...pmNavItems.manager,       ...csatManagerItems];
-pmNavItems.senior_manager = [...pmNavItems.senior_manager, ...csatManagerItems];
-pmNavItems.hr_admin      = [...pmNavItems.hr_admin,      ...csatReadOnlyItems];
-pmNavItems.final_approver = [...pmNavItems.final_approver, ...csatReadOnlyItems];
+const rosterNavItems = {
+  employee: rosterSelfItems,
+  manager: rosterManagerItems,
+  senior_manager: rosterManagerItems,
+  sales_director: rosterManagerItems,
+  admin: rosterAdminItems,
+  hr_admin: rosterAdminItems,
+  final_approver: rosterSelfItems,
+  md: rosterSelfItems,
+  director: rosterSelfItems,
+};
 
 export default function Sidebar({ collapsed, onToggle, onNavClick }) {
   const { user } = useSelector((state) => state.auth);
@@ -268,7 +318,8 @@ export default function Sidebar({ collapsed, onToggle, onNavClick }) {
 
   if (!user) return null;
 
-  const navMap = activeModule === 'pm' ? pmNavItems : kpiNavItems;
+  const navMapByModule = { pm: pmNavItems, roster: rosterNavItems, csat: csatNavItems, kpi: kpiNavItems };
+  const navMap = navMapByModule[activeModule] || kpiNavItems;
   const items = navMap[user.role] || navMap.employee || [];
   const roleConfig = ROLE_CONFIG[user.role] || ROLE_CONFIG.employee;
 
@@ -284,10 +335,15 @@ export default function Sidebar({ collapsed, onToggle, onNavClick }) {
         : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
     }`;
 
-  // PM module gets a different accent
-  const pmAccentClass = 'from-emerald-600 to-emerald-700';
-  const headerAccent = activeModule === 'pm' ? pmAccentClass : roleConfig.accentClass;
-  const headerLabel = activeModule === 'pm' ? 'Project Mgmt' : roleConfig.label;
+  // Each module carries its own header accent so the shell reads as a distinct app
+  const moduleAccent = {
+    pm: 'from-emerald-600 to-emerald-700',
+    roster: 'from-violet-600 to-violet-700',
+    csat: 'from-amber-600 to-amber-700',
+  };
+  const moduleLabel = { pm: 'Project Mgmt', roster: 'Rostering', csat: 'Client Surveys' };
+  const headerAccent = moduleAccent[activeModule] || roleConfig.accentClass;
+  const headerLabel = moduleLabel[activeModule] || roleConfig.label;
 
   return (
     <aside
@@ -296,10 +352,10 @@ export default function Sidebar({ collapsed, onToggle, onNavClick }) {
       {/* Role-accented header */}
       <div className={`h-16 flex items-center justify-between px-4 border-b border-gray-200 bg-gradient-to-r ${headerAccent}`}>
         <div className={`flex items-center ${collapsed ? 'justify-center w-full' : ''}`}>
-          <HiOutlineCollection className="w-7 h-7 text-white flex-shrink-0" />
+          <LakshyaLogo className="w-7 h-7 text-white flex-shrink-0" />
           {!collapsed && (
             <div className="ml-2">
-              <div className="text-xs text-white/70 leading-none">PLI Portal</div>
+              <div className="text-xs text-white/70 leading-none">Lakshya Portal</div>
               <div className="text-sm font-bold text-white leading-tight whitespace-nowrap">{headerLabel}</div>
             </div>
           )}

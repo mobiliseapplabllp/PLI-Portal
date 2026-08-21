@@ -125,7 +125,7 @@ const exportPdf = async (req, res, next) => {
       ]);
     }
 
-    const buffer = await generatePdf(`PLI Portal - ${reportType} Report`, headers, rows);
+    const buffer = await generatePdf(`Lakshya Portal - ${reportType} Report`, headers, rows);
 
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename=${reportType}_report.pdf`);

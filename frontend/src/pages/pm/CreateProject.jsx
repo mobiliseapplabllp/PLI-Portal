@@ -35,6 +35,7 @@ export default function CreateProject() {
     clientName: '',
     clientEmail: '',
     notifyClient: false,
+    isBillable: null, // must be answered explicitly before the project can be created
     managerId: isAdmin ? '' : userId,
     status: 'planning',
     startDate: '',
@@ -54,6 +55,8 @@ export default function CreateProject() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!form.name.trim()) return toast.error('Project name is required');
+    // Billable is a deliberate commercial decision — no silent default
+    if (form.isBillable === null) return toast.error('Please choose whether this project is billable');
     setSaving(true);
     try {
       const res = await createProjectApi(form);
@@ -148,6 +151,40 @@ export default function CreateProject() {
           <input type="checkbox" checked={form.notifyClient} onChange={e => set('notifyClient', e.target.checked)} className="w-4 h-4 rounded border-gray-300 text-emerald-600" />
           <span className="text-sm text-gray-600">Send daily status reports to client</span>
         </label>
+
+        {/* Billing — the manager declares billability; Finance records the invoice */}
+        <div className="border-t border-gray-100 pt-4">
+          <Field label="Is this project billable to the client?" required>
+            <div className="flex gap-2">
+              {[
+                { value: true, label: 'Yes — billable' },
+                { value: false, label: 'No — not billable' },
+              ].map((opt) => (
+                <button
+                  key={String(opt.value)}
+                  type="button"
+                  onClick={() => set('isBillable', opt.value)}
+                  className={`px-4 py-2 text-sm font-medium rounded-lg border transition ${
+                    form.isBillable === opt.value
+                      ? opt.value
+                        ? 'bg-emerald-600 border-emerald-600 text-white'
+                        : 'bg-gray-600 border-gray-600 text-white'
+                      : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </Field>
+          <p className="text-xs text-gray-400 mt-1">
+            {form.isBillable === true
+              ? 'Once marked Completed, this project reaches the Finance billing register. Only Finance can record the invoice.'
+              : form.isBillable === false
+                ? 'This project will not appear in the Finance billing register.'
+                : 'Required — you can change this later from the project page.'}
+          </p>
+        </div>
 
         <div className="flex justify-end gap-3 pt-2">
           <button type="button" onClick={() => navigate('/pm/projects')} className="px-4 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">

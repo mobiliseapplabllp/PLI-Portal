@@ -1,11 +1,21 @@
 const authService = require('../services/auth.service');
-const { sendSuccess, sendError } = require('../utils/response');
+const { sendSuccess } = require('../utils/response');
 
-const login = async (req, res, next) => {
+const clientIp = (req) => req.ip || req.connection?.remoteAddress;
+
+const requestOtp = async (req, res, next) => {
   try {
-    const { identifier, password } = req.body;
-    const ip = req.ip || req.connection.remoteAddress;
-    const result = await authService.login(identifier, password, ip);
+    const result = await authService.requestLoginOtp(req.body.identifier, clientIp(req));
+    // Deliberately generic — never reveals whether the account exists
+    sendSuccess(res, result, 'If the account exists, a sign-in code has been sent to its registered email.');
+  } catch (error) {
+    next(error);
+  }
+};
+
+const verifyOtp = async (req, res, next) => {
+  try {
+    const result = await authService.verifyLoginOtp(req.body.identifier, req.body.code, clientIp(req));
     sendSuccess(res, result, 'Login successful');
   } catch (error) {
     next(error);
@@ -21,14 +31,4 @@ const getMe = async (req, res) => {
   sendSuccess(res, req.user, 'User profile');
 };
 
-const changePassword = async (req, res, next) => {
-  try {
-    const { currentPassword, newPassword } = req.body;
-    await authService.changePassword(req.user._id, currentPassword, newPassword);
-    sendSuccess(res, null, 'Password changed successfully');
-  } catch (error) {
-    next(error);
-  }
-};
-
-module.exports = { login, logout, getMe, changePassword };
+module.exports = { logout, getMe, requestOtp, verifyOtp };
