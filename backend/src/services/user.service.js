@@ -5,7 +5,7 @@ const Department = require('../models/Department');
 const KpiAssignment = require('../models/KpiAssignment');
 const KpiItem = require('../models/KpiItem');
 const { KPI_STATUS } = require('../config/constants');
-const { NotFoundError } = require('../utils/errors');
+const { NotFoundError, ForbiddenError } = require('../utils/errors');
 const { createAuditLog } = require('../middleware/auditLogger');
 const { findPlanForEmployee, applyPlanToAssignment } = require('./kpiPlan.service');
 const { getFinancialYear, getQuarterFromMonth } = require('../utils/quarterHelper');
@@ -61,12 +61,32 @@ const getUsers = async (query = {}) => {
   };
 };
 
-const getUserById = async (id) => {
+// Roles allowed to look up any colleague's record
+const DIRECTORY_ROLES = ['admin', 'hr_admin', 'manager', 'senior_manager', 'sales_director', 'md', 'director', 'final_approver'];
+
+/**
+ * Fetch one user.
+ *
+ * `requester` scopes the lookup: a plain employee may only read their own
+ * record, or their own manager's. Without this an employee could enumerate the
+ * whole directory — name, email, phone, designation and reporting line — by
+ * walking UUIDs against this endpoint.
+ */
+const getUserById = async (id, requester) => {
   const user = await User.findByPk(id, {
     attributes: { exclude: ['passwordHash'] },
     include: userIncludes,
   });
   if (!user) throw new NotFoundError('User');
+
+  if (requester && !DIRECTORY_ROLES.includes(requester.role)) {
+    const isSelf = String(user.id) === String(requester._id);
+    const isOwnManager = String(requester.managerId || '') === String(user.id);
+    if (!isSelf && !isOwnManager) {
+      throw new ForbiddenError('You can only view your own profile');
+    }
+  }
+
   return user;
 };
 

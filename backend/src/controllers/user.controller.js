@@ -12,7 +12,7 @@ const getUsers = async (req, res, next) => {
 
 const getUserById = async (req, res, next) => {
   try {
-    const user = await userService.getUserById(req.params.id);
+    const user = await userService.getUserById(req.params.id, req.user);
     sendSuccess(res, user);
   } catch (error) {
     next(error);

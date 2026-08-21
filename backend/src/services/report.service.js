@@ -60,8 +60,14 @@ const getQuarterlyReport = async (query) => {
   const { financialYear, quarter } = query;
   const months = getMonthsInQuarter(quarter);
 
+  // `employee` was previously destructured away and never applied, so the
+  // controller's per-employee scoping was a no-op and this endpoint returned
+  // every employee's quarterly score and PLI payout percentage to any caller.
+  const where = { financialYear, month: { [Op.in]: months } };
+  if (query.employee) where.employeeId = query.employee;
+
   const allAssignments = await KpiAssignment.findAll({
-    where: { financialYear, month: { [Op.in]: months } },
+    where,
     include: assignmentIncludes,
   });
 

@@ -130,14 +130,25 @@ const getAssignments = async (query = {}, user) => {
   }
 
   if (user.role === 'employee') {
-    where.employeeId = user._id;
+    where.employeeId = user._id; // hard override — ignores any ?employee= given
   } else if (['manager', 'sales_director'].includes(user.role)) {
-    if (!query.employee) {
-      const teamMembers = await User.findAll({
-        where: { managerId: user._id },
-        attributes: ['id'],
-      });
-      where.employeeId = { [Op.in]: teamMembers.map((m) => m.id) };
+    // Team scoping must apply even when ?employee= is supplied. Previously the
+    // filter was only added when the caller omitted it, so passing any user id
+    // returned that person's assignments regardless of who managed them.
+    const teamMembers = await User.findAll({
+      where: { managerId: user._id },
+      attributes: ['id'],
+    });
+    const allowed = teamMembers.map((m) => String(m.id));
+    allowed.push(String(user._id)); // managers are appraised too
+
+    if (query.employee) {
+      if (!allowed.includes(String(query.employee))) {
+        throw new ForbiddenError('You can only view assignments for your own team');
+      }
+      where.employeeId = query.employee;
+    } else {
+      where.employeeId = { [Op.in]: allowed };
     }
   }
 
