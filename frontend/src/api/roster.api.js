@@ -14,7 +14,8 @@ export const exportRosterWeekApi = (weekId) =>
 export const updateRosterEntryApi = (entryId, status, reason) =>
   api.put(`/roster/entries/${entryId}`, { status, reason });
 
-// ── Self / history / coverage ─────────────────────────────────────────────────
+// ── Dashboard / self / history / coverage ─────────────────────────────────────
+export const getRosterDashboardApi = () => api.get('/roster/dashboard');
 export const getMyRosterApi = () => api.get('/roster/my');
 export const getRosterHistoryApi = (employeeId, params) => api.get(`/roster/history/${employeeId}`, { params });
 export const getRosterCoverageApi = (params) => api.get('/roster/coverage', { params });

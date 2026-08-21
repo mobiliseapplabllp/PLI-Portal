@@ -17,7 +17,8 @@ router.use(authenticate);
 const MANAGERS = ['manager', 'senior_manager', 'sales_director', 'admin', 'hr_admin'];
 const ALL = ['employee', 'manager', 'senior_manager', 'sales_director', 'hr_admin', 'final_approver', 'admin', 'md', 'director'];
 
-// Self-view — every authenticated role
+// Module landing page + self-view — every authenticated role
+router.get('/dashboard', authorize(...ALL), ctrl.getDashboard);
 router.get('/my', authorize(...ALL), ctrl.getMyRoster);
 
 // Weeks

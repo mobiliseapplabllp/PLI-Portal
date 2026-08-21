@@ -7,7 +7,7 @@ import NotificationBell from './NotificationBell';
 import {
   HiOutlineLogout, HiOutlineUser, HiOutlineMenuAlt2,
   HiOutlineChevronDown, HiOutlineLightningBolt, HiOutlineClipboardList,
-  HiCheck,
+  HiOutlineCalendar, HiCheck,
 } from 'react-icons/hi';
 
 const MODULES = [
@@ -26,6 +26,14 @@ const MODULES = [
     defaultRoute: '/pm/dashboard',
     color: 'text-emerald-600',
     bg: 'bg-emerald-50',
+  },
+  {
+    id: 'roster',
+    label: 'Rostering',
+    icon: HiOutlineCalendar,
+    defaultRoute: '/roster/dashboard',
+    color: 'text-violet-600',
+    bg: 'bg-violet-50',
   },
 ];
 
@@ -54,13 +62,15 @@ export default function Header({ onToggleSidebar }) {
     setDropdownOpen(false);
     if (mod.id === activeModule) return;
     dispatch(setActiveModule(mod.id));
-    if (mod.id === 'pm') navigate('/pm/dashboard');
-    else {
-      // Route based on role
+    if (mod.defaultRoute) {
+      navigate(mod.defaultRoute);
+    } else {
+      // KPI module has no single home — route based on role
       const roleRoutes = {
         employee: '/employee/dashboard',
         manager: '/manager/dashboard',
         senior_manager: '/manager/dashboard',
+        sales_director: '/manager/dashboard',
         hr_admin: '/hr-admin/dashboard',
         final_approver: '/final-approver/dashboard',
         admin: '/admin/dashboard',

@@ -1,5 +1,5 @@
 const { Op } = require('sequelize');
-const { RosterWeek, RosterEntry, RosterCompOff } = require('../../models/associations');
+const { RosterWeek, RosterEntry, RosterCompOff, RosterSwapRequest } = require('../../models/associations');
 const User = require('../../models/User');
 const Department = require('../../models/Department');
 const { NotFoundError, ForbiddenError, ValidationError } = require('../../utils/errors');
@@ -392,6 +392,60 @@ const getMyRoster = async (user) => {
   };
 };
 
+// ── Module dashboard ──────────────────────────────────────────────────────────
+/**
+ * Landing page for the Rostering module. Works for every role: everyone gets
+ * their own Saturday + comp-off balance; roster managers additionally get the
+ * upcoming week's team picture and anything waiting on them.
+ */
+const getRosterDashboard = async (user) => {
+  const saturdayDate = nextSaturdayStr();
+  const canManage = isRosterAdmin(user) || isTeamManager(user);
+
+  const me = await getMyRoster(user);
+
+  // Swaps waiting on this user: as the colleague who must accept, or — for
+  // managers — as the approver once both parties have agreed.
+  const swapWhere = canManage
+    ? {
+        [Op.or]: [
+          { targetId: user._id, status: 'pending_peer' },
+          { status: 'pending_manager' },
+        ],
+      }
+    : { targetId: user._id, status: 'pending_peer' };
+
+  let pendingSwaps = await RosterSwapRequest.count({ where: swapWhere });
+
+  let team = null;
+  if (canManage) {
+    const week = await RosterWeek.findOne({ where: { saturdayDate } });
+    if (week) {
+      const employeeWhere = { isActive: true };
+      if (!isRosterAdmin(user)) employeeWhere.managerId = user._id;
+      const entries = await RosterEntry.findAll({
+        where: { rosterWeekId: week.id },
+        include: [{ model: User, as: 'employee', where: employeeWhere, attributes: ['id'] }],
+        attributes: ['id', 'finalStatus', 'isPublished', 'plannedStatus'],
+      });
+      team = {
+        weekId: week.id,
+        label: week.label,
+        total: entries.length,
+        working: entries.filter((e) => e.finalStatus === ROSTER_STATUS.WORKING).length,
+        off: entries.filter((e) => e.finalStatus === ROSTER_STATUS.OFF).length,
+        published: entries.filter((e) => e.isPublished).length,
+        unpublished: entries.filter((e) => !e.isPublished).length,
+        changed: entries.filter((e) => e.isPublished && e.plannedStatus !== e.finalStatus).length,
+      };
+    } else {
+      team = { weekId: null, label: weekLabel(saturdayDate), total: 0, working: 0, off: 0, published: 0, unpublished: 0, changed: 0 };
+    }
+  }
+
+  return { saturdayDate, canManage, me, team, pendingSwaps };
+};
+
 // ── History (manager/admin view of one employee) ──────────────────────────────
 const getEmployeeHistory = async (employeeId, user, query = {}) => {
   assertRosterManager(user);
@@ -535,6 +589,7 @@ module.exports = {
   updateEntry,
   publishWeek,
   getMyRoster,
+  getRosterDashboard,
   getEmployeeHistory,
   getCoverage,
   exportWeekExcel,

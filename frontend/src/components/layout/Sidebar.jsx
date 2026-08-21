@@ -157,29 +157,6 @@ const kpiNavItems = {
   director: [],
 };
 
-// ── Saturday Rostering nav — injected into the KPI module shell ───────────────
-const rosterManagerItems = [
-  { section: 'Rostering' },
-  { to: '/roster/board', label: 'Saturday Roster', icon: HiOutlineCalendar },
-  { to: '/roster/swaps', label: 'Swaps & Comp-Offs', icon: HiOutlineSwitchHorizontal },
-  { to: '/roster/coverage', label: 'Roster Coverage', icon: HiOutlineChartBar },
-  { to: '/roster/my', label: 'My Saturdays', icon: HiOutlineClipboardCheck },
-];
-kpiNavItems.manager.push(...rosterManagerItems);
-kpiNavItems.senior_manager.push(...rosterManagerItems);
-kpiNavItems.sales_director.push(...rosterManagerItems);
-// Admin/HR are typically not rostered themselves — no "My Saturdays"
-kpiNavItems.admin.push(...rosterManagerItems.filter((i) => i.to !== '/roster/my'));
-kpiNavItems.hr_admin.push(
-  { section: 'Rostering' },
-  { to: '/roster/board', label: 'Saturday Roster', icon: HiOutlineCalendar },
-  { to: '/roster/coverage', label: 'Roster Coverage', icon: HiOutlineChartBar },
-);
-kpiNavItems.employee.push(
-  { section: 'Rostering' },
-  { to: '/roster/my', label: 'My Saturdays', icon: HiOutlineCalendar },
-);
-
 // ── PM Nav Items ──────────────────────────────────────────────────────────────
 const pmNavItems = {
   employee: [
@@ -285,6 +262,37 @@ pmNavItems.senior_manager = [...pmNavItems.senior_manager, ...csatManagerItems];
 pmNavItems.hr_admin      = [...pmNavItems.hr_admin,      ...csatReadOnlyItems];
 pmNavItems.final_approver = [...pmNavItems.final_approver, ...csatReadOnlyItems];
 
+// ── Rostering Nav Items ───────────────────────────────────────────────────────
+// Roster managers (manager/senior_manager/sales_director) plan their own team;
+// admin + hr_admin see every team; everyone else gets their personal view only.
+const rosterSelfItems = [
+  { to: '/roster/dashboard', label: 'Roster Dashboard', icon: HiOutlineHome },
+  { to: '/roster/my', label: 'My Saturdays', icon: HiOutlineCalendar },
+];
+
+const rosterManagerItems = [
+  { to: '/roster/dashboard', label: 'Roster Dashboard', icon: HiOutlineHome },
+  { to: '/roster/board', label: 'Saturday Roster', icon: HiOutlineCalendar },
+  { to: '/roster/swaps', label: 'Swaps & Comp-Offs', icon: HiOutlineSwitchHorizontal },
+  { to: '/roster/coverage', label: 'Coverage', icon: HiOutlineChartBar },
+  { to: '/roster/my', label: 'My Saturdays', icon: HiOutlineClipboardCheck },
+];
+
+// Admin/HR administer the roster but are not rostered themselves
+const rosterAdminItems = rosterManagerItems.filter((i) => i.to !== '/roster/my');
+
+const rosterNavItems = {
+  employee: rosterSelfItems,
+  manager: rosterManagerItems,
+  senior_manager: rosterManagerItems,
+  sales_director: rosterManagerItems,
+  admin: rosterAdminItems,
+  hr_admin: rosterAdminItems,
+  final_approver: rosterSelfItems,
+  md: rosterSelfItems,
+  director: rosterSelfItems,
+};
+
 export default function Sidebar({ collapsed, onToggle, onNavClick }) {
   const { user } = useSelector((state) => state.auth);
   const { activeModule } = useSelector((state) => state.app);
@@ -293,7 +301,8 @@ export default function Sidebar({ collapsed, onToggle, onNavClick }) {
 
   if (!user) return null;
 
-  const navMap = activeModule === 'pm' ? pmNavItems : kpiNavItems;
+  const navMapByModule = { pm: pmNavItems, roster: rosterNavItems, kpi: kpiNavItems };
+  const navMap = navMapByModule[activeModule] || kpiNavItems;
   const items = navMap[user.role] || navMap.employee || [];
   const roleConfig = ROLE_CONFIG[user.role] || ROLE_CONFIG.employee;
 
@@ -309,10 +318,11 @@ export default function Sidebar({ collapsed, onToggle, onNavClick }) {
         : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
     }`;
 
-  // PM module gets a different accent
-  const pmAccentClass = 'from-emerald-600 to-emerald-700';
-  const headerAccent = activeModule === 'pm' ? pmAccentClass : roleConfig.accentClass;
-  const headerLabel = activeModule === 'pm' ? 'Project Mgmt' : roleConfig.label;
+  // Each module carries its own header accent so the shell reads as a distinct app
+  const moduleAccent = { pm: 'from-emerald-600 to-emerald-700', roster: 'from-violet-600 to-violet-700' };
+  const moduleLabel = { pm: 'Project Mgmt', roster: 'Rostering' };
+  const headerAccent = moduleAccent[activeModule] || roleConfig.accentClass;
+  const headerLabel = moduleLabel[activeModule] || roleConfig.label;
 
   return (
     <aside

@@ -52,6 +52,12 @@ const getMyRoster = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
+const getDashboard = async (req, res, next) => {
+  try {
+    sendSuccess(res, await rosterService.getRosterDashboard(req.user));
+  } catch (err) { next(err); }
+};
+
 const getEmployeeHistory = async (req, res, next) => {
   try {
     sendSuccess(res, await rosterService.getEmployeeHistory(req.params.employeeId, req.user, req.query));
@@ -116,6 +122,7 @@ module.exports = {
   exportWeek,
   updateEntry,
   getMyRoster,
+  getDashboard,
   getEmployeeHistory,
   getCoverage,
   createSwap,
