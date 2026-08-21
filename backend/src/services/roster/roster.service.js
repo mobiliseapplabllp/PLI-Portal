@@ -34,13 +34,24 @@ const scopedEmployeeWhere = (user, extra = {}) => {
 };
 
 // ── Date helpers ──────────────────────────────────────────────────────────────
+/**
+ * Format a Date as YYYY-MM-DD in the SERVER'S LOCAL timezone.
+ *
+ * Deliberately not toISOString(): the business runs on IST (UTC+5:30), where
+ * local midnight is 18:30 UTC the previous day — so toISOString() reports
+ * yesterday's date for anything between 00:00 and 05:30 IST, quietly rostering
+ * the wrong Saturday.
+ */
+const toDateStr = (d) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
 const isSaturdayStr = (dateStr) => new Date(`${dateStr}T00:00:00`).getDay() === 6;
 
 const nextSaturdayStr = (from = new Date()) => {
   const d = new Date(from);
   const delta = (6 - d.getDay() + 7) % 7; // 0 when today is Saturday
   d.setDate(d.getDate() + delta);
-  return d.toISOString().slice(0, 10);
+  return toDateStr(d);
 };
 
 const weekLabel = (dateStr) => {
@@ -50,6 +61,49 @@ const weekLabel = (dateStr) => {
   return `WK ${wkOfMonth} (${pretty})`;
 };
 
+/**
+ * Company rule: when a month has a 5th Saturday, everybody works it.
+ * The 1st–4th Saturdays always fall on days 1–28, so any Saturday dated 29+ is
+ * by definition the 5th of its month.
+ */
+const isFifthSaturday = (dateStr) => Number(String(dateStr).slice(8, 10)) >= 29;
+
+/** All Saturday dates in [from, to] inclusive, as YYYY-MM-DD strings. */
+const saturdaysBetween = (from, to) => {
+  const out = [];
+  const d = new Date(`${from}T00:00:00`);
+  d.setDate(d.getDate() + ((6 - d.getDay() + 7) % 7)); // advance to first Saturday
+  const end = new Date(`${to}T00:00:00`);
+  while (d <= end) {
+    out.push(toDateStr(d));
+    d.setDate(d.getDate() + 7);
+  }
+  return out;
+};
+
+/** The most recent `n` Saturdays, ending with the upcoming one. */
+const lastNSaturdays = (n) => {
+  const out = [];
+  const d = new Date(`${nextSaturdayStr()}T00:00:00`);
+  for (let i = 0; i < n; i += 1) {
+    out.unshift(toDateStr(d));
+    d.setDate(d.getDate() - 7);
+  }
+  return out;
+};
+
+/** Every Saturday of an Indian financial year, e.g. "2026-27" → Apr 2026–Mar 2027. */
+const financialYearSaturdays = (financialYear) => {
+  const startYear = Number(String(financialYear).slice(0, 4));
+  return saturdaysBetween(`${startYear}-04-01`, `${startYear + 1}-03-31`);
+};
+
+const currentFinancialYear = (d = new Date()) => {
+  const y = d.getFullYear();
+  const startYear = d.getMonth() + 1 >= 4 ? y : y - 1;
+  return `${startYear}-${String((startYear + 1) % 100).padStart(2, '0')}`;
+};
+
 const prettyDate = (dateStr) =>
   new Date(`${dateStr}T00:00:00`).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' });
 
@@ -57,6 +111,10 @@ const prettyDate = (dateStr) =>
 /**
  * Latest previous FINAL status per employee before the given Saturday.
  * Returns Map<employeeId, { finalStatus, saturdayDate }>.
+ *
+ * 5th Saturdays are skipped: everyone works those by company rule, so using one
+ * as the baseline would hand the entire company the same next Saturday off and
+ * collapse the alternation. The baseline is the last *normal* Saturday.
  */
 const getLastStatuses = async (employeeIds, beforeSaturday) => {
   if (!employeeIds.length) return new Map();
@@ -68,6 +126,7 @@ const getLastStatuses = async (employeeIds, beforeSaturday) => {
   });
   const map = new Map();
   for (const r of rows) {
+    if (isFifthSaturday(r.week.saturdayDate)) continue;
     if (!map.has(r.employeeId)) {
       map.set(r.employeeId, { finalStatus: r.finalStatus, saturdayDate: r.week.saturdayDate });
     }
@@ -95,11 +154,17 @@ const generateEntries = async (week, user) => {
   const missing = employees.filter((e) => !have.has(e.id));
   if (!missing.length) return 0;
 
-  const lastMap = await getLastStatuses(missing.map((e) => e.id), week.saturdayDate);
+  // Company rule: a 5th Saturday is a full-strength working day for everyone.
+  const fifth = isFifthSaturday(week.saturdayDate);
+  const lastMap = fifth ? new Map() : await getLastStatuses(missing.map((e) => e.id), week.saturdayDate);
+
   const payload = missing.map((emp) => {
     const last = lastMap.get(emp.id);
-    const proposed =
-      last && last.finalStatus === ROSTER_STATUS.WORKING ? ROSTER_STATUS.OFF : ROSTER_STATUS.WORKING;
+    const proposed = fifth
+      ? ROSTER_STATUS.WORKING
+      : last && last.finalStatus === ROSTER_STATUS.WORKING
+        ? ROSTER_STATUS.OFF
+        : ROSTER_STATUS.WORKING;
     return {
       rosterWeekId: week.id,
       employeeId: emp.id,
@@ -356,7 +421,7 @@ const publishWeek = async (weekId, user) => {
 
 // ── Employee self-view ────────────────────────────────────────────────────────
 const getMyRoster = async (user) => {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = toDateStr(new Date());
 
   const upcoming = await RosterEntry.findOne({
     where: { employeeId: user._id, isPublished: true },
@@ -512,7 +577,7 @@ const getCoverage = async (user, query = {}) => {
   const fairnessRows = await RosterEntry.findAll({
     where: { isPublished: true },
     include: [
-      { model: RosterWeek, as: 'week', where: { saturdayDate: { [Op.gte]: eightWeeksAgo.toISOString().slice(0, 10) } }, attributes: ['saturdayDate'] },
+      { model: RosterWeek, as: 'week', where: { saturdayDate: { [Op.gte]: toDateStr(eightWeeksAgo) } }, attributes: ['saturdayDate'] },
       { model: User, as: 'employee', where: fairWhere, attributes: ['id', 'name', 'employeeCode'] },
     ],
     attributes: ['employeeId', 'finalStatus'],
@@ -544,6 +609,181 @@ const getCoverage = async (user, query = {}) => {
     byManager,
     fairness: Object.values(fairness).sort((a, b) => b.worked - a.worked),
   };
+};
+
+// ── Saturday trend matrix ─────────────────────────────────────────────────────
+/**
+ * Employees down the side, Saturdays across the top.
+ *
+ * Visible to every role by design — the roster is company-wide information and
+ * transparency is what makes the alternation auditable.
+ *
+ * query: { range: 'recent'|'fy', financialYear?, departmentId?, managerId? }
+ */
+const getTrend = async (user, query = {}) => {
+  const range = query.range === 'fy' ? 'fy' : 'recent';
+  const financialYear = query.financialYear || currentFinancialYear();
+  const dates = range === 'fy' ? financialYearSaturdays(financialYear) : lastNSaturdays(12);
+  const from = dates[0];
+  const to = dates[dates.length - 1];
+
+  const employeeWhere = { isActive: true, rosterApplicable: { [Op.ne]: false } };
+  if (query.departmentId) employeeWhere.departmentId = query.departmentId;
+  if (query.managerId) employeeWhere.managerId = query.managerId;
+
+  const [employees, weeks] = await Promise.all([
+    User.findAll({
+      where: employeeWhere,
+      attributes: ['id', 'name', 'employeeCode', 'designation', 'managerId'],
+      include: [
+        { model: Department, as: 'department', attributes: ['id', 'name'] },
+        { model: User, as: 'manager', attributes: ['id', 'name'] },
+      ],
+      order: [['name', 'ASC']],
+    }),
+    RosterWeek.findAll({
+      where: { saturdayDate: { [Op.between]: [from, to] } },
+      attributes: ['id', 'saturdayDate'],
+    }),
+  ]);
+
+  const weekByDate = new Map(weeks.map((w) => [String(w.saturdayDate).slice(0, 10), w]));
+
+  const entries = weeks.length
+    ? await RosterEntry.findAll({
+        where: { rosterWeekId: { [Op.in]: weeks.map((w) => w.id) } },
+        attributes: ['rosterWeekId', 'employeeId', 'plannedStatus', 'finalStatus', 'isPublished', 'changeReason'],
+      })
+    : [];
+
+  // rosterWeekId -> employeeId -> entry
+  const byWeek = new Map();
+  for (const e of entries) {
+    if (!byWeek.has(e.rosterWeekId)) byWeek.set(e.rosterWeekId, new Map());
+    byWeek.get(e.rosterWeekId).set(e.employeeId, e);
+  }
+
+  const columns = dates.map((date) => {
+    const week = weekByDate.get(date);
+    const cells = week ? byWeek.get(week.id) : null;
+    const values = cells ? [...cells.values()] : [];
+    return {
+      date,
+      label: weekLabel(date),
+      isFifthSaturday: isFifthSaturday(date),
+      exists: !!week,
+      weekId: week ? week.id : null,
+      // A column counts as draft while nothing in it has been published yet
+      isDraft: values.length > 0 && values.every((e) => !e.isPublished),
+      workingCount: values.filter((e) => e.finalStatus === ROSTER_STATUS.WORKING).length,
+      offCount: values.filter((e) => e.finalStatus === ROSTER_STATUS.OFF).length,
+    };
+  });
+
+  const rows = employees.map((emp) => {
+    const cells = dates.map((date) => {
+      const week = weekByDate.get(date);
+      const entry = week ? byWeek.get(week.id)?.get(emp.id) : null;
+      if (!entry) return { date, status: null };            // no roster entry at all
+      return {
+        date,
+        status: entry.finalStatus,
+        changed: entry.isPublished && entry.plannedStatus !== entry.finalStatus,
+        changeReason: entry.changeReason || null,
+        published: entry.isPublished,
+      };
+    });
+
+    const worked = cells.filter((c) => c.status === ROSTER_STATUS.WORKING).length;
+    const off = cells.filter((c) => c.status === ROSTER_STATUS.OFF).length;
+
+    // Alternation health: adjacent Saturdays with the same status. 5th Saturdays
+    // and empty cells are skipped — neither is a genuine break of the pattern.
+    const sequence = cells.filter((c) => c.status && !isFifthSaturday(c.date));
+    let breaks = 0;
+    for (let i = 1; i < sequence.length; i += 1) {
+      if (sequence[i].status === sequence[i - 1].status) breaks += 1;
+    }
+
+    return {
+      employee: {
+        _id: emp.id,
+        name: emp.name,
+        employeeCode: emp.employeeCode,
+        designation: emp.designation,
+        department: emp.department ? { _id: emp.department.id, name: emp.department.name } : null,
+        manager: emp.manager ? { _id: emp.manager.id, name: emp.manager.name } : null,
+      },
+      cells,
+      worked,
+      off,
+      breaks,
+    };
+  });
+
+  return {
+    range,
+    financialYear,
+    from,
+    to,
+    columns,
+    rows,
+    totals: {
+      employees: rows.length,
+      saturdays: columns.length,
+      fifthSaturdays: columns.filter((c) => c.isFifthSaturday).length,
+      imbalanced: rows.filter((r) => r.breaks > 0).length,
+    },
+  };
+};
+
+const exportTrendExcel = async (user, query = {}) => {
+  const trend = await getTrend(user, query);
+  const columns = [
+    { header: 'Employee Code', key: 'code', width: 16 },
+    { header: 'Resource', key: 'name', width: 28 },
+    { header: 'Department', key: 'dept', width: 18 },
+    { header: 'Manager', key: 'manager', width: 22 },
+    ...trend.columns.map((c) => ({
+      header: `${new Date(`${c.date}T00:00:00`).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}${c.isFifthSaturday ? ' (5th)' : ''}`,
+      key: c.date,
+      width: 12,
+    })),
+    { header: 'Worked', key: 'worked', width: 10 },
+    { header: 'Off', key: 'off', width: 10 },
+    { header: 'Alternation Breaks', key: 'breaks', width: 18 },
+  ];
+
+  const rows = trend.rows.map((r) => {
+    const row = {
+      code: r.employee.employeeCode || '',
+      name: r.employee.name,
+      dept: r.employee.department?.name || '',
+      manager: r.employee.manager?.name || '',
+      worked: r.worked,
+      off: r.off,
+      breaks: r.breaks,
+    };
+    for (const c of r.cells) {
+      row[c.date] = c.status === ROSTER_STATUS.WORKING ? 'Working' : c.status === ROSTER_STATUS.OFF ? 'Off' : '';
+    }
+    return row;
+  });
+
+  // Coverage footer
+  rows.push({
+    code: '',
+    name: 'WORKING HEADCOUNT',
+    dept: '',
+    manager: '',
+    ...Object.fromEntries(trend.columns.map((c) => [c.date, c.exists ? c.workingCount : ''])),
+    worked: '',
+    off: '',
+    breaks: '',
+  });
+
+  const buffer = await generateExcel(`Saturday Trend ${trend.from} to ${trend.to}`, columns, rows);
+  return { buffer, filename: `saturday-trend-${trend.from}-to-${trend.to}.xlsx` };
 };
 
 // ── Excel export ──────────────────────────────────────────────────────────────
@@ -582,6 +822,8 @@ module.exports = {
   nextSaturdayStr,
   prettyDate,
   weekLabel,
+  isFifthSaturday,
+  currentFinancialYear,
   // API surface
   getOrCreateWeek,
   listWeeks,
@@ -592,5 +834,7 @@ module.exports = {
   getRosterDashboard,
   getEmployeeHistory,
   getCoverage,
+  getTrend,
+  exportTrendExcel,
   exportWeekExcel,
 };

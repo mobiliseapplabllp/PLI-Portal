@@ -18,11 +18,16 @@ const {
 } = require('../utils/emailService');
 const { ROSTER_STATUS } = require('../config/constants');
 
+// Local-timezone date string — toISOString() would report yesterday for any run
+// between 00:00 and 05:30 IST and mail the wrong Saturday.
+const toDateStr = (d) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
 const nextSaturdayStr = (from = new Date()) => {
   const d = new Date(from);
   const delta = (6 - d.getDay() + 7) % 7;
   d.setDate(d.getDate() + delta);
-  return d.toISOString().slice(0, 10);
+  return toDateStr(d);
 };
 
 const prettyDate = (dateStr) =>

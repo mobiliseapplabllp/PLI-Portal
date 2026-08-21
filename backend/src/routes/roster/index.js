@@ -35,6 +35,10 @@ router.put('/entries/:entryId', authorize(...MANAGERS), updateEntryValidator, va
 router.get('/history/:employeeId', authorize(...MANAGERS), ctrl.getEmployeeHistory);
 router.get('/coverage', authorize(...MANAGERS), ctrl.getCoverage);
 
+// Saturday trend matrix — company-wide and visible to every role by design
+router.get('/trend', authorize(...ALL), ctrl.getTrend);
+router.get('/trend/export', authorize(...ALL), ctrl.exportTrend);
+
 // Swaps — employees create/accept/cancel; managers/admin decide
 router.post('/weeks/:weekId/swaps', authorize(...ALL), createSwapValidator, validate, ctrl.createSwap);
 router.get('/swaps', authorize(...ALL), ctrl.listSwaps);

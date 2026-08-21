@@ -70,6 +70,21 @@ const getCoverage = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
+const getTrend = async (req, res, next) => {
+  try {
+    sendSuccess(res, await rosterService.getTrend(req.user, req.query));
+  } catch (err) { next(err); }
+};
+
+const exportTrend = async (req, res, next) => {
+  try {
+    const { buffer, filename } = await rosterService.exportTrendExcel(req.user, req.query);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(filename)}"`);
+    res.send(buffer);
+  } catch (err) { next(err); }
+};
+
 // ── Swaps ─────────────────────────────────────────────────────────────────────
 const createSwap = async (req, res, next) => {
   try {
@@ -125,6 +140,8 @@ module.exports = {
   getDashboard,
   getEmployeeHistory,
   getCoverage,
+  getTrend,
+  exportTrend,
   createSwap,
   listSwaps,
   acceptSwap,

@@ -20,6 +20,11 @@ export const getMyRosterApi = () => api.get('/roster/my');
 export const getRosterHistoryApi = (employeeId, params) => api.get(`/roster/history/${employeeId}`, { params });
 export const getRosterCoverageApi = (params) => api.get('/roster/coverage', { params });
 
+// Saturday trend matrix (employees × Saturdays) — visible to every role
+export const getRosterTrendApi = (params) => api.get('/roster/trend', { params });
+export const exportRosterTrendApi = (params) =>
+  api.get('/roster/trend/export', { params, responseType: 'arraybuffer' });
+
 // ── Swaps ─────────────────────────────────────────────────────────────────────
 export const createSwapApi = (weekId, targetEmployeeId, reason) =>
   api.post(`/roster/weeks/${weekId}/swaps`, { targetEmployeeId, reason });

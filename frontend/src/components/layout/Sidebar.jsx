@@ -268,11 +268,13 @@ pmNavItems.final_approver = [...pmNavItems.final_approver, ...csatReadOnlyItems]
 const rosterSelfItems = [
   { to: '/roster/dashboard', label: 'Roster Dashboard', icon: HiOutlineHome },
   { to: '/roster/my', label: 'My Saturdays', icon: HiOutlineCalendar },
+  { to: '/roster/trend', label: 'Saturday Trend', icon: HiOutlineTable },
 ];
 
 const rosterManagerItems = [
   { to: '/roster/dashboard', label: 'Roster Dashboard', icon: HiOutlineHome },
   { to: '/roster/board', label: 'Saturday Roster', icon: HiOutlineCalendar },
+  { to: '/roster/trend', label: 'Saturday Trend', icon: HiOutlineTable },
   { to: '/roster/swaps', label: 'Swaps & Comp-Offs', icon: HiOutlineSwitchHorizontal },
   { to: '/roster/coverage', label: 'Coverage', icon: HiOutlineChartBar },
   { to: '/roster/my', label: 'My Saturdays', icon: HiOutlineClipboardCheck },
