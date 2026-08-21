@@ -3,8 +3,9 @@ import { useSelector } from 'react-redux';
 import toast from 'react-hot-toast';
 import {
   HiOutlineCalendar, HiOutlineDownload, HiOutlineMail, HiOutlineRefresh,
-  HiOutlineCheckCircle, HiOutlineExclamation,
+  HiOutlineCheckCircle, HiOutlineExclamation, HiOutlineTable, HiOutlineViewList,
 } from 'react-icons/hi';
+import TrendMatrix from './components/TrendMatrix';
 import PageHeader from '../../components/common/PageHeader';
 import Modal from '../../components/common/Modal';
 import ConfirmDialog from '../../components/common/ConfirmDialog';
@@ -19,6 +20,9 @@ import { getUsersApi } from '../../api/users.api';
 import { downloadBlob } from '../../utils/formatters';
 
 const ADMIN_ROLES = ['admin', 'hr_admin'];
+// Roles allowed to plan and publish a week. Everyone else gets the Trend tab
+// only — the roster is company-wide information, but editing it is not.
+const MANAGER_ROLES = ['admin', 'hr_admin', 'manager', 'senior_manager', 'sales_director'];
 
 const fmtSat = (d) =>
   new Date(`${String(d).slice(0, 10)}T00:00:00`).toLocaleDateString('en-IN', {
@@ -81,6 +85,10 @@ const HistoryChips = ({ history }) => {
 export default function RosterBoard() {
   const user = useSelector((s) => s.auth.user);
   const isAdmin = ADMIN_ROLES.includes(user?.role);
+  const canManage = MANAGER_ROLES.includes(user?.role);
+
+  // Non-managers land straight on Trend — the planning grid isn't theirs to use
+  const [tab, setTab] = useState(canManage ? 'roster' : 'trend');
 
   const saturdays = useMemo(upcomingSaturdays, []);
   const [selectedDate, setSelectedDate] = useState(saturdays[0]);
@@ -118,9 +126,15 @@ export default function RosterBoard() {
     }
   }, [deptFilter, managerFilter]);
 
-  useEffect(() => { load(selectedDate); /* eslint-disable-next-line */ }, [selectedDate, deptFilter, managerFilter]);
+  // Only the planning tab needs week data — and only managers may fetch it
+  useEffect(() => {
+    if (tab !== 'roster' || !canManage) { setLoading(false); return; }
+    load(selectedDate);
+    /* eslint-disable-next-line */
+  }, [tab, canManage, selectedDate, deptFilter, managerFilter]);
 
   useEffect(() => {
+    if (!canManage) return;
     listRosterWeeksApi({ limit: 12 })
       .then((res) => setPastWeeks(res.data.data || []))
       .catch(() => {});
@@ -199,26 +213,59 @@ export default function RosterBoard() {
     <div>
       <PageHeader
         title="Saturday Roster"
-        subtitle={isAdmin ? 'All teams — alternate Saturday working' : 'Your team — alternate Saturday working'}
+        subtitle={
+          tab === 'trend'
+            ? 'Who worked which Saturday — the whole company, at a glance'
+            : isAdmin ? 'All teams — alternate Saturday working' : 'Your team — alternate Saturday working'
+        }
         actions={
-          <div className="flex gap-2">
-            <button className="btn-secondary flex items-center gap-1" onClick={() => load(selectedDate)}>
-              <HiOutlineRefresh className="w-4 h-4" /> Refresh
-            </button>
-            {data?.week && (
-              <button className="btn-secondary flex items-center gap-1" onClick={handleExport}>
-                <HiOutlineDownload className="w-4 h-4" /> Excel
+          tab === 'roster' ? (
+            <div className="flex gap-2">
+              <button className="btn-secondary flex items-center gap-1" onClick={() => load(selectedDate)}>
+                <HiOutlineRefresh className="w-4 h-4" /> Refresh
               </button>
-            )}
-            {unpublished > 0 && (
-              <button className="btn-primary flex items-center gap-1" disabled={saving} onClick={() => setPublishConfirm(true)}>
-                <HiOutlineMail className="w-4 h-4" /> Publish & Email ({unpublished})
-              </button>
-            )}
-          </div>
+              {data?.week && (
+                <button className="btn-secondary flex items-center gap-1" onClick={handleExport}>
+                  <HiOutlineDownload className="w-4 h-4" /> Excel
+                </button>
+              )}
+              {unpublished > 0 && (
+                <button className="btn-primary flex items-center gap-1" disabled={saving} onClick={() => setPublishConfirm(true)}>
+                  <HiOutlineMail className="w-4 h-4" /> Publish & Email ({unpublished})
+                </button>
+              )}
+            </div>
+          ) : null
         }
       />
 
+      {/* Tabs */}
+      <div className="flex gap-1 border-b border-gray-200 mb-5">
+        {[
+          ...(canManage ? [{ key: 'roster', label: 'Week Roster', icon: HiOutlineViewList }] : []),
+          { key: 'trend', label: 'Saturday Trend', icon: HiOutlineTable },
+        ].map(({ key, label, icon: Icon }) => (
+          <button
+            key={key}
+            type="button"
+            onClick={() => setTab(key)}
+            className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition ${
+              tab === key
+                ? 'border-primary-600 text-primary-700'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+            }`}
+          >
+            <Icon className="w-4 h-4" /> {label}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'trend' ? (
+        <TrendMatrix
+          onOpenWeek={canManage ? (date) => { setSelectedDate(date); setTab('roster'); } : undefined}
+        />
+      ) : (
+      <>
       {/* Week picker + filters */}
       <div className="card mb-4 flex flex-wrap items-end gap-4">
         <div>
@@ -352,6 +399,8 @@ export default function RosterBoard() {
             </tbody>
           </table>
         </div>
+      )}
+      </>
       )}
 
       {/* Publish confirm */}

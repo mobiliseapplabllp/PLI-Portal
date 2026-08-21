@@ -265,16 +265,17 @@ pmNavItems.final_approver = [...pmNavItems.final_approver, ...csatReadOnlyItems]
 // ── Rostering Nav Items ───────────────────────────────────────────────────────
 // Roster managers (manager/senior_manager/sales_director) plan their own team;
 // admin + hr_admin see every team; everyone else gets their personal view only.
+// The Saturday Trend matrix lives as a tab inside the Saturday Roster page,
+// so it needs no nav entry of its own.
 const rosterSelfItems = [
   { to: '/roster/dashboard', label: 'Roster Dashboard', icon: HiOutlineHome },
   { to: '/roster/my', label: 'My Saturdays', icon: HiOutlineCalendar },
-  { to: '/roster/trend', label: 'Saturday Trend', icon: HiOutlineTable },
+  { to: '/roster/board', label: 'Saturday Trend', icon: HiOutlineTable },
 ];
 
 const rosterManagerItems = [
   { to: '/roster/dashboard', label: 'Roster Dashboard', icon: HiOutlineHome },
   { to: '/roster/board', label: 'Saturday Roster', icon: HiOutlineCalendar },
-  { to: '/roster/trend', label: 'Saturday Trend', icon: HiOutlineTable },
   { to: '/roster/swaps', label: 'Swaps & Comp-Offs', icon: HiOutlineSwitchHorizontal },
   { to: '/roster/coverage', label: 'Coverage', icon: HiOutlineChartBar },
   { to: '/roster/my', label: 'My Saturdays', icon: HiOutlineClipboardCheck },

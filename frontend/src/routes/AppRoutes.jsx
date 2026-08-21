@@ -73,7 +73,6 @@ import PMSettings from '../pages/pm/PMSettings';
 // Rostering pages
 import RosterDashboard from '../pages/roster/RosterDashboard';
 import RosterBoard from '../pages/roster/RosterBoard';
-import RosterTrend from '../pages/roster/RosterTrend';
 import MySaturdays from '../pages/roster/MySaturdays';
 import RosterCoverage from '../pages/roster/RosterCoverage';
 import SwapApprovals from '../pages/roster/SwapApprovals';
@@ -198,8 +197,7 @@ export default function AppRoutes() {
 
         {/* Saturday Rostering */}
         <Route path="/roster/dashboard" element={<RoleRoute roles={ALL_ROLES}><RosterDashboard /></RoleRoute>} />
-        <Route path="/roster/trend" element={<RoleRoute roles={ALL_ROLES}><RosterTrend /></RoleRoute>} />
-        <Route path="/roster/board" element={<RoleRoute roles={['manager', 'senior_manager', 'sales_director', 'admin', 'hr_admin']}><RosterBoard /></RoleRoute>} />
+        <Route path="/roster/board" element={<RoleRoute roles={ALL_ROLES}><RosterBoard /></RoleRoute>} />
         <Route path="/roster/my" element={<RoleRoute roles={ALL_ROLES}><MySaturdays /></RoleRoute>} />
         <Route path="/roster/coverage" element={<RoleRoute roles={['manager', 'senior_manager', 'sales_director', 'admin', 'hr_admin']}><RosterCoverage /></RoleRoute>} />
         <Route path="/roster/swaps" element={<RoleRoute roles={['manager', 'senior_manager', 'sales_director', 'admin', 'hr_admin']}><SwapApprovals /></RoleRoute>} />

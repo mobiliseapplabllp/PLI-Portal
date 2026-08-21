@@ -4,12 +4,11 @@ import toast from 'react-hot-toast';
 import {
   HiOutlineDownload, HiOutlineRefresh, HiOutlineSearch, HiOutlineExclamation,
 } from 'react-icons/hi';
-import PageHeader from '../../components/common/PageHeader';
-import TableSkeleton from '../../components/common/TableSkeleton';
-import EmptyState from '../../components/common/EmptyState';
-import { getRosterTrendApi, exportRosterTrendApi } from '../../api/roster.api';
-import { getDepartmentsApi } from '../../api/departments.api';
-import { downloadBlob } from '../../utils/formatters';
+import TableSkeleton from '../../../components/common/TableSkeleton';
+import EmptyState from '../../../components/common/EmptyState';
+import { getRosterTrendApi, exportRosterTrendApi } from '../../../api/roster.api';
+import { getDepartmentsApi } from '../../../api/departments.api';
+import { downloadBlob } from '../../../utils/formatters';
 
 const fmtCol = (d) =>
   new Date(`${String(d).slice(0, 10)}T00:00:00`).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
@@ -55,7 +54,8 @@ function Cell({ cell, isFifth, onClick }) {
   );
 }
 
-export default function RosterTrend() {
+/** Saturday trend matrix — rendered as a tab inside the Saturday Roster page. */
+export default function TrendMatrix({ onOpenWeek }) {
   const navigate = useNavigate();
   const [range, setRange] = useState('recent');
   const [deptFilter, setDeptFilter] = useState('');
@@ -114,21 +114,6 @@ export default function RosterTrend() {
 
   return (
     <div>
-      <PageHeader
-        title="Saturday Trend"
-        subtitle="Who worked which Saturday — the whole company, at a glance"
-        actions={
-          <div className="flex gap-2">
-            <button className="btn-secondary flex items-center gap-1" onClick={load}>
-              <HiOutlineRefresh className="w-4 h-4" /> Refresh
-            </button>
-            <button className="btn-secondary flex items-center gap-1" disabled={exporting || !data} onClick={handleExport}>
-              <HiOutlineDownload className="w-4 h-4" /> {exporting ? 'Exporting…' : 'Excel'}
-            </button>
-          </div>
-        }
-      />
-
       {/* Controls */}
       <div className="card mb-4 flex flex-wrap items-end gap-4">
         <div>
@@ -179,6 +164,15 @@ export default function RosterTrend() {
           <input type="checkbox" className="rounded" checked={onlyImbalanced} onChange={(e) => setOnlyImbalanced(e.target.checked)} />
           Only alternation breaks
         </label>
+
+        <div className="flex gap-2 ml-auto pb-1">
+          <button className="btn-secondary flex items-center gap-1" onClick={load}>
+            <HiOutlineRefresh className="w-4 h-4" /> Refresh
+          </button>
+          <button className="btn-secondary flex items-center gap-1" disabled={exporting || !data} onClick={handleExport}>
+            <HiOutlineDownload className="w-4 h-4" /> {exporting ? 'Exporting…' : 'Excel'}
+          </button>
+        </div>
       </div>
 
       {/* Legend */}
@@ -247,7 +241,7 @@ export default function RosterTrend() {
                         key={cell.date}
                         cell={cell}
                         isFifth={data.columns[i].isFifthSaturday}
-                        onClick={() => navigate('/roster/board')}
+                        onClick={() => (onOpenWeek ? onOpenWeek(cell.date) : navigate('/roster/board'))}
                       />
                     ))}
                     <td className="border-b border-l border-gray-100 px-2 py-1.5 text-center font-semibold text-emerald-600">{r.worked}</td>
