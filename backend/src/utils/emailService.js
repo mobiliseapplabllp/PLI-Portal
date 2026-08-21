@@ -413,6 +413,139 @@ const sendApprovalEscalationEmail = async (adminEmail, {
   return sendEmail(adminEmail, subject, html);
 };
 
+// ── Saturday Rostering emails ─────────────────────────────────────────────────
+
+const rosterStatusBadge = (status) =>
+  status === 'working'
+    ? '<span style="display:inline-block;padding:6px 16px;background:#059669;color:#fff;border-radius:6px;font-weight:bold">WORKING</span>'
+    : '<span style="display:inline-block;padding:6px 16px;background:#6b7280;color:#fff;border-radius:6px;font-weight:bold">OFF</span>';
+
+const rosterMyLink = () =>
+  `<p><a href="${process.env.FRONTEND_URL || 'http://localhost:5173'}/roster/my"
+      style="display:inline-block;margin-top:12px;padding:10px 20px;background:#2563eb;color:#fff;text-decoration:none;border-radius:6px">View My Saturdays</a></p>`;
+
+// Sent when a manager publishes the week's roster
+const sendRosterPublishedEmail = async (email, name, dateLabel, status) => {
+  const subject = `Saturday Roster — ${dateLabel}: You are ${status === 'working' ? 'Working' : 'Off'}`;
+  const html = `
+    <p>Hi ${name},</p>
+    <p>Your roster for <strong>Saturday, ${dateLabel}</strong> has been published:</p>
+    <p style="margin:16px 0">${rosterStatusBadge(status)}</p>
+    ${status === 'working'
+      ? '<p>Please plan to be available for work this Saturday.</p>'
+      : '<p>Enjoy your Saturday off!</p>'}
+    ${rosterMyLink()}
+  `;
+  return sendEmail(email, subject, html);
+};
+
+// Sent when a published entry is changed as per company work requirement
+const sendRosterChangeEmail = async (email, name, dateLabel, oldStatus, newStatus, reason, compOffGranted) => {
+  const subject = `Roster Change — ${dateLabel}: You are now ${newStatus === 'working' ? 'Working' : 'Off'}`;
+  const html = `
+    <p>Hi ${name},</p>
+    <p>Your roster for <strong>Saturday, ${dateLabel}</strong> has been <strong>changed</strong> as per company work requirement:</p>
+    <p style="margin:16px 0">
+      <span style="text-decoration:line-through;color:#9ca3af;margin-right:8px">${oldStatus === 'working' ? 'Working' : 'Off'}</span>
+      → ${rosterStatusBadge(newStatus)}
+    </p>
+    ${reason ? `<p><strong>Reason:</strong> ${reason}</p>` : ''}
+    ${compOffGranted
+      ? '<p style="color:#059669"><strong>✓ A compensatory off has been credited to you</strong> for working this Saturday.</p>'
+      : ''}
+    ${rosterMyLink()}
+  `;
+  return sendEmail(email, subject, html);
+};
+
+// Friday reminder to employees marked Working for tomorrow
+const sendRosterReminderEmail = async (email, name, dateLabel) => {
+  const subject = `Reminder: You are Working tomorrow (Saturday, ${dateLabel})`;
+  const html = `
+    <p>Hi ${name},</p>
+    <p>This is a reminder that you are rostered <strong>WORKING</strong> tomorrow, <strong>Saturday, ${dateLabel}</strong>.</p>
+    <p style="margin:16px 0">${rosterStatusBadge('working')}</p>
+    ${rosterMyLink()}
+  `;
+  return sendEmail(email, subject, html);
+};
+
+// Weekly (Wednesday) digest to each employee for the upcoming Saturday
+const sendRosterDigestEmail = async (email, name, dateLabel, status) => {
+  const subject = `This Saturday (${dateLabel}): You are ${status === 'working' ? 'Working' : 'Off'}`;
+  const html = `
+    <p>Hi ${name},</p>
+    <p>Your status for the upcoming <strong>Saturday, ${dateLabel}</strong>:</p>
+    <p style="margin:16px 0">${rosterStatusBadge(status)}</p>
+    ${rosterMyLink()}
+  `;
+  return sendEmail(email, subject, html);
+};
+
+// Weekly digest to a manager with their team's Saturday roster
+const sendRosterManagerDigestEmail = async (email, name, dateLabel, rows) => {
+  const subject = `Team Saturday Roster — ${dateLabel}`;
+  const rowsHtml = rows
+    .map(
+      (r) => `<tr>
+        <td style="padding:6px 12px;border:1px solid #e5e7eb">${r.employeeCode || ''}</td>
+        <td style="padding:6px 12px;border:1px solid #e5e7eb">${r.name}</td>
+        <td style="padding:6px 12px;border:1px solid #e5e7eb;text-align:center">${
+          r.status === 'working'
+            ? '<span style="color:#059669;font-weight:bold">Working</span>'
+            : '<span style="color:#6b7280">Off</span>'
+        }</td>
+      </tr>`
+    )
+    .join('');
+  const html = `
+    <p>Hi ${name},</p>
+    <p>Your team's roster for <strong>Saturday, ${dateLabel}</strong>:</p>
+    <table style="border-collapse:collapse;margin:12px 0">
+      <tr style="background:#1f2937;color:#fff">
+        <th style="padding:6px 12px;border:1px solid #e5e7eb">Code</th>
+        <th style="padding:6px 12px;border:1px solid #e5e7eb">Employee</th>
+        <th style="padding:6px 12px;border:1px solid #e5e7eb">Status</th>
+      </tr>
+      ${rowsHtml}
+    </table>
+    <p><a href="${process.env.FRONTEND_URL || 'http://localhost:5173'}/roster/board"
+        style="display:inline-block;margin-top:12px;padding:10px 20px;background:#2563eb;color:#fff;text-decoration:none;border-radius:6px">Open Roster Board</a></p>
+  `;
+  return sendEmail(email, subject, html);
+};
+
+// Swap lifecycle emails — stage: requested | peer_accepted | approved | rejected
+const sendRosterSwapEmail = async (email, name, stage, { requesterName, targetName, dateLabel, reason, comment }) => {
+  const map = {
+    requested: {
+      subject: `Saturday Swap Request — ${dateLabel}`,
+      body: `<p><strong>${requesterName}</strong> has requested to swap Saturday (${dateLabel}) statuses with you.</p>
+             ${reason ? `<p><strong>Reason:</strong> ${reason}</p>` : ''}
+             <p>Please open the portal to accept or ignore this request.</p>`,
+    },
+    peer_accepted: {
+      subject: `Swap Awaiting Your Approval — ${dateLabel}`,
+      body: `<p><strong>${requesterName}</strong> and <strong>${targetName}</strong> have agreed to swap their Saturday (${dateLabel}) statuses.</p>
+             <p>Please open the portal to approve or reject the swap.</p>`,
+    },
+    approved: {
+      subject: `Swap Approved — ${dateLabel}`,
+      body: `<p>The Saturday (${dateLabel}) swap between <strong>${requesterName}</strong> and <strong>${targetName}</strong> has been <strong style="color:#059669">approved</strong>. Your roster has been updated.</p>
+             ${comment ? `<p><strong>Comment:</strong> ${comment}</p>` : ''}`,
+    },
+    rejected: {
+      subject: `Swap Rejected — ${dateLabel}`,
+      body: `<p>The Saturday (${dateLabel}) swap between <strong>${requesterName}</strong> and <strong>${targetName}</strong> was <strong style="color:#dc2626">rejected</strong>.</p>
+             ${comment ? `<p><strong>Comment:</strong> ${comment}</p>` : ''}`,
+    },
+  };
+  const t = map[stage];
+  if (!t) return null;
+  const html = `<p>Hi ${name},</p>${t.body}${rosterMyLink()}`;
+  return sendEmail(email, t.subject, html);
+};
+
 module.exports = {
   sendEmail,
   sendCsatSurveyEmail,
@@ -429,4 +562,10 @@ module.exports = {
   sendSelfReviewDeadlineReminderEmail,
   sendManagerReviewDeadlineReminderEmail,
   sendCycleOpenedEmail,
+  sendRosterPublishedEmail,
+  sendRosterChangeEmail,
+  sendRosterReminderEmail,
+  sendRosterDigestEmail,
+  sendRosterManagerDigestEmail,
+  sendRosterSwapEmail,
 };

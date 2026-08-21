@@ -41,7 +41,7 @@ export default function EmployeeManagement() {
   const openCreate = () => {
     setEditingUser(null);
     setManagerSearch('');
-    reset({ name: '', email: '', employeeCode: '', password: '', role: 'employee', phone: '', designation: '', department: '', manager: '', kpiReviewApplicable: true });
+    reset({ name: '', email: '', employeeCode: '', password: '', role: 'employee', phone: '', designation: '', department: '', manager: '', kpiReviewApplicable: true, rosterApplicable: true });
     setShowModal(true);
   };
 
@@ -59,6 +59,7 @@ export default function EmployeeManagement() {
       manager: user.manager?._id || '',
       isActive: user.isActive,
       kpiReviewApplicable: user.kpiReviewApplicable !== false,
+      rosterApplicable: user.rosterApplicable !== false,
     });
     setShowModal(true);
   };
@@ -122,6 +123,15 @@ export default function EmployeeManagement() {
           : 'bg-red-100 text-red-700'
       }`}>
         {r.kpiReviewApplicable !== false ? 'Applicable' : 'Not Applicable'}
+      </span>
+    )},
+    { key: 'rosterApplicable', label: 'Roster', render: (r) => (
+      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
+        r.rosterApplicable !== false
+          ? 'bg-blue-100 text-blue-700'
+          : 'bg-gray-200 text-gray-500'
+      }`}>
+        {r.rosterApplicable !== false ? 'Rostered' : 'Not in Roster'}
       </span>
     )},
     { key: 'actions', label: '', render: (r) => (
@@ -265,6 +275,17 @@ export default function EmployeeManagement() {
             />
             <label htmlFor="kpiReviewApplicable" className={`text-sm ${editingUser && watchIsActive === false ? 'text-gray-400' : 'text-gray-700'}`}>
               KPI Review Applicable
+            </label>
+          </div>
+          <div className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              id="rosterApplicable"
+              {...register('rosterApplicable')}
+              className="rounded"
+            />
+            <label htmlFor="rosterApplicable" className="text-sm text-gray-700">
+              Saturday Roster Applicable
             </label>
           </div>
           {editingUser && watchIsActive === false && (

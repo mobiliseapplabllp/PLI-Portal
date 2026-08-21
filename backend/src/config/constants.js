@@ -191,6 +191,30 @@ const PM_OVERALL_STATUS = {
 // Roles that can see Project Management module
 const PM_VIEWER_ROLES = ['admin', 'manager', 'senior_manager', 'employee', 'hr_admin', 'final_approver', 'md', 'director'];
 
+// ── Saturday Rostering ────────────────────────────────────────────────────────
+const ROSTER_STATUS = {
+  WORKING: 'working',
+  OFF: 'off',
+};
+
+const ROSTER_SWAP_STATUS = {
+  PENDING_PEER: 'pending_peer',
+  PENDING_MANAGER: 'pending_manager',
+  APPROVED: 'approved',
+  REJECTED: 'rejected',
+  CANCELLED: 'cancelled',
+};
+
+const ROSTER_COMP_OFF_STATUS = {
+  EARNED: 'earned',
+  AVAILED: 'availed',
+  CANCELLED: 'cancelled',
+};
+
+// Roles that manage their own team's roster (admin/hr_admin manage all teams)
+const ROSTER_TEAM_MANAGER_ROLES = ['manager', 'senior_manager', 'sales_director'];
+const ROSTER_ADMIN_ROLES = ['admin', 'hr_admin'];
+
 // Quarter mapping: month number -> quarter
 const QUARTER_MAP = {
   4: 'Q1', 5: 'Q1', 6: 'Q1',
@@ -232,4 +256,9 @@ module.exports = {
   PM_TASK_STATUS,
   PM_OVERALL_STATUS,
   PM_VIEWER_ROLES,
+  ROSTER_STATUS,
+  ROSTER_SWAP_STATUS,
+  ROSTER_COMP_OFF_STATUS,
+  ROSTER_TEAM_MANAGER_ROLES,
+  ROSTER_ADMIN_ROLES,
 };

@@ -71,6 +71,12 @@ import DailyLogHistory from '../pages/pm/DailyLogHistory';
 import MyTasks from '../pages/pm/MyTasks';
 import PMSettings from '../pages/pm/PMSettings';
 
+// Rostering pages
+import RosterBoard from '../pages/roster/RosterBoard';
+import MySaturdays from '../pages/roster/MySaturdays';
+import RosterCoverage from '../pages/roster/RosterCoverage';
+import SwapApprovals from '../pages/roster/SwapApprovals';
+
 // Common
 import ProfilePage from '../pages/common/ProfilePage';
 import NotFoundPage from '../pages/common/NotFoundPage';
@@ -189,6 +195,12 @@ export default function AppRoutes() {
         <Route path="/csat/approval-inbox" element={<RoleRoute roles={['admin']}><SurveyApprovalInboxPage /></RoleRoute>} />
         <Route path="/csat/approval/:approvalId" element={<RoleRoute roles={['admin', 'manager', 'senior_manager']}><SurveyApprovalDetailPage /></RoleRoute>} />
         <Route path="/csat/my-requests" element={<RoleRoute roles={['manager', 'senior_manager']}><MyApprovalRequestsPage /></RoleRoute>} />
+
+        {/* Saturday Rostering */}
+        <Route path="/roster/board" element={<RoleRoute roles={['manager', 'senior_manager', 'sales_director', 'admin', 'hr_admin']}><RosterBoard /></RoleRoute>} />
+        <Route path="/roster/my" element={<RoleRoute roles={ALL_ROLES}><MySaturdays /></RoleRoute>} />
+        <Route path="/roster/coverage" element={<RoleRoute roles={['manager', 'senior_manager', 'sales_director', 'admin', 'hr_admin']}><RosterCoverage /></RoleRoute>} />
+        <Route path="/roster/swaps" element={<RoleRoute roles={['manager', 'senior_manager', 'sales_director', 'admin', 'hr_admin']}><SwapApprovals /></RoleRoute>} />
       </Route>
 
       <Route path="*" element={<NotFoundPage />} />

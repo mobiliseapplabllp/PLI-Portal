@@ -81,6 +81,8 @@ app.listen(PORT, () => {
   startProjectDailyReportJob().catch(err => console.error('[PM DailyReport] Startup error:', err.message));
   const { startSurveyCron } = require('./src/jobs/surveyCron.job');
   startSurveyCron();
+  const { startRosterMailerJob } = require('./src/jobs/rosterMailer.job');
+  startRosterMailerJob();
 });
 
 module.exports = app;

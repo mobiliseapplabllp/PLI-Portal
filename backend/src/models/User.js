@@ -30,6 +30,9 @@ const User = sequelize.define(
     isActive: { type: DataTypes.BOOLEAN, defaultValue: true },
     mustChangePassword: { type: DataTypes.BOOLEAN, defaultValue: true },
     kpiReviewApplicable: { type: DataTypes.BOOLEAN, defaultValue: true },
+    // Saturday rostering applicability — column added by migration 011 (users table
+    // is at the 64-index cap so sync({alter:true}) cannot add it).
+    rosterApplicable: { type: DataTypes.BOOLEAN, defaultValue: true },
     lastLogin: { type: DataTypes.DATE, allowNull: true },
   },
   {

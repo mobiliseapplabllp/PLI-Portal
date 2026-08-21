@@ -13,6 +13,7 @@ const createUserValidator = [
   body('joiningDate').optional().isISO8601().withMessage('Invalid date format'),
   body('manager').optional().isUUID().withMessage('Invalid manager ID'),
   body('kpiReviewApplicable').optional().isBoolean().withMessage('Must be boolean'),
+  body('rosterApplicable').optional().isBoolean().withMessage('Must be boolean'),
 ];
 
 const updateUserValidator = [
@@ -26,6 +27,7 @@ const updateUserValidator = [
   body('manager').optional(),
   body('isActive').optional().isBoolean().withMessage('isActive must be boolean'),
   body('kpiReviewApplicable').optional().isBoolean().withMessage('Must be boolean'),
+  body('rosterApplicable').optional().isBoolean().withMessage('Must be boolean'),
 ];
 
 module.exports = { createUserValidator, updateUserValidator };

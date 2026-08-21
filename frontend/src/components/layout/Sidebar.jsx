@@ -31,6 +31,7 @@ import {
   HiOutlineAnnotation,
   HiOutlineInbox,
   HiOutlineClipboardCheck as HiOutlineMyRequests,
+  HiOutlineSwitchHorizontal,
 } from 'react-icons/hi';
 import { ROLE_CONFIG } from '../../utils/constants';
 
@@ -154,6 +155,29 @@ const kpiNavItems = {
   md: [],
   director: [],
 };
+
+// ── Saturday Rostering nav — injected into the KPI module shell ───────────────
+const rosterManagerItems = [
+  { section: 'Rostering' },
+  { to: '/roster/board', label: 'Saturday Roster', icon: HiOutlineCalendar },
+  { to: '/roster/swaps', label: 'Swaps & Comp-Offs', icon: HiOutlineSwitchHorizontal },
+  { to: '/roster/coverage', label: 'Roster Coverage', icon: HiOutlineChartBar },
+  { to: '/roster/my', label: 'My Saturdays', icon: HiOutlineClipboardCheck },
+];
+kpiNavItems.manager.push(...rosterManagerItems);
+kpiNavItems.senior_manager.push(...rosterManagerItems);
+kpiNavItems.sales_director.push(...rosterManagerItems);
+// Admin/HR are typically not rostered themselves — no "My Saturdays"
+kpiNavItems.admin.push(...rosterManagerItems.filter((i) => i.to !== '/roster/my'));
+kpiNavItems.hr_admin.push(
+  { section: 'Rostering' },
+  { to: '/roster/board', label: 'Saturday Roster', icon: HiOutlineCalendar },
+  { to: '/roster/coverage', label: 'Roster Coverage', icon: HiOutlineChartBar },
+);
+kpiNavItems.employee.push(
+  { section: 'Rostering' },
+  { to: '/roster/my', label: 'My Saturdays', icon: HiOutlineCalendar },
+);
 
 // ── PM Nav Items ──────────────────────────────────────────────────────────────
 const pmNavItems = {
