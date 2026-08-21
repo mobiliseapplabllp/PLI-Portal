@@ -413,6 +413,110 @@ const sendApprovalEscalationEmail = async (adminEmail, {
   return sendEmail(adminEmail, subject, html);
 };
 
+// ── Project billing ───────────────────────────────────────────────────────────
+
+/**
+ * Escape user-supplied text before it goes into email HTML. Project names,
+ * client names and descriptions are free text — without this, markup typed into
+ * a project field would render live in Finance's inbox.
+ */
+const esc = (value) =>
+  String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+
+const fmtDay = (d) =>
+  d ? new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
+
+const detailRow = (label, value) => `
+  <tr>
+    <td style="padding:7px 14px;border-bottom:1px solid #eef2f7;color:#6b7280;font-size:13px;white-space:nowrap">${label}</td>
+    <td style="padding:7px 14px;border-bottom:1px solid #eef2f7;color:#111827;font-size:13px"><strong>${value}</strong></td>
+  </tr>`;
+
+/**
+ * Sent to Finance when a billable project is marked Completed. Carries enough
+ * detail to raise the invoice without opening the portal or chasing the PM.
+ */
+const sendProjectReadyToBillEmail = async (email, name, project, stats, link) => {
+  const durationDays =
+    project.startDate && project.endDate
+      ? Math.max(1, Math.round((new Date(project.endDate) - new Date(project.startDate)) / 86400000))
+      : null;
+
+  const subject = `Ready to invoice: ${project.name}${project.clientName ? ` — ${project.clientName}` : ''}`;
+
+  const html = `
+    <div style="font-family:Arial,sans-serif;max-width:640px;margin:0 auto;color:#111827">
+      <div style="background:#111827;color:#fff;padding:18px 22px;border-radius:10px 10px 0 0">
+        <div style="font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:#9ca3af">Ready to invoice</div>
+        <div style="font-size:20px;font-weight:bold;margin-top:4px">${esc(project.name)}</div>
+      </div>
+
+      <div style="border:1px solid #e5e7eb;border-top:none;border-radius:0 0 10px 10px;padding:20px 22px">
+        <p style="margin:0 0 16px">Hi ${esc(name)},</p>
+        <p style="margin:0 0 18px">
+          This project has been marked <strong>Completed</strong> and is flagged <strong>billable</strong>.
+          The details below are everything recorded against it.
+        </p>
+
+        <table style="width:100%;border-collapse:collapse;border:1px solid #eef2f7;border-radius:8px;margin-bottom:18px">
+          ${detailRow('Client', esc(project.clientName) || '—')}
+          ${project.clientEmail ? detailRow('Client contact', esc(project.clientEmail)) : ''}
+          ${detailRow('Project manager', esc(project.projectManager?.name) || '—')}
+          ${project.projectManager?.email ? detailRow('PM contact', esc(project.projectManager.email)) : ''}
+          ${project.owner?.name ? detailRow('Project owner', esc(project.owner.name)) : ''}
+          ${detailRow('Period', `${fmtDay(project.startDate)} → ${fmtDay(project.endDate)}${durationDays ? ` <span style="color:#6b7280;font-weight:normal">(${durationDays} days)</span>` : ''}`)}
+          ${detailRow('Completed on', fmtDay(new Date()))}
+          ${detailRow('Milestones delivered', `${stats.milestonesCompleted} of ${stats.milestonesTotal}`)}
+          ${detailRow('Tasks completed', `${stats.tasksCompleted} of ${stats.tasksTotal}`)}
+          ${detailRow('Team size', String(stats.teamSize))}
+        </table>
+
+        ${
+          project.description || project.purpose
+            ? `<div style="background:#f8fafc;border-left:3px solid #2563eb;padding:12px 16px;border-radius:6px;margin-bottom:18px">
+                 <div style="font-size:11px;text-transform:uppercase;letter-spacing:.1em;color:#6b7280;margin-bottom:6px">Scope</div>
+                 <div style="font-size:13px;color:#374151;white-space:pre-wrap">${esc(project.description || project.purpose).slice(0, 600)}</div>
+               </div>`
+            : ''
+        }
+
+        <p style="margin:0 0 6px">
+          <a href="${link}" style="display:inline-block;padding:11px 22px;background:#2563eb;color:#fff;text-decoration:none;border-radius:6px;font-weight:bold">
+            Open Billing Register
+          </a>
+        </p>
+        <p style="font-size:12px;color:#6b7280;margin:14px 0 0">
+          You will be asked for an invoice number and billing date. Only the Finance team can mark a project billed —
+          the project manager cannot. Raising the invoice notifies ${esc(project.projectManager?.name) || 'the project manager'} automatically.
+        </p>
+      </div>
+    </div>
+  `;
+  return sendEmail(email, subject, html);
+};
+
+/** Confirmation to the project manager once Finance has raised the invoice. */
+const sendProjectBilledEmail = async (email, name, project) => {
+  const subject = `Invoice ${project.invoiceNumber} raised for ${project.name}`;
+  const html = `
+    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;color:#111827">
+      <p>Hi ${esc(name)},</p>
+      <p>Finance has invoiced <strong>${esc(project.name)}</strong>${project.clientName ? ` for ${esc(project.clientName)}` : ''}.</p>
+      <table style="width:100%;border-collapse:collapse;border:1px solid #eef2f7;margin:14px 0">
+        ${detailRow('Invoice number', esc(project.invoiceNumber))}
+        ${detailRow('Billed date', fmtDay(project.billedDate))}
+        ${detailRow('Billed by', esc(project.billedBy?.name) || 'Finance')}
+      </table>
+      <p style="font-size:12px;color:#6b7280">No action is needed from you — this is a record for your project.</p>
+    </div>
+  `;
+  return sendEmail(email, subject, html);
+};
+
 // ── Login OTP ─────────────────────────────────────────────────────────────────
 
 // NOTE: unlike most templates here, this one THROWS on failure. sendEmail()
@@ -589,6 +693,8 @@ module.exports = {
   sendManagerReviewDeadlineReminderEmail,
   sendCycleOpenedEmail,
   sendLoginOtpEmail,
+  sendProjectReadyToBillEmail,
+  sendProjectBilledEmail,
   sendRosterPublishedEmail,
   sendRosterChangeEmail,
   sendRosterReminderEmail,

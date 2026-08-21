@@ -1,11 +1,11 @@
 const { Op } = require('sequelize');
-const { Project } = require('../../models/associations');
+const { Project, Milestone, Task, ProjectMember } = require('../../models/associations');
 const User = require('../../models/User');
 const { NotFoundError, ForbiddenError, ValidationError } = require('../../utils/errors');
 const { createAuditLog } = require('../../middleware/auditLogger');
 const { generateExcel } = require('../../utils/excelExporter');
 const notificationService = require('../notification.service');
-const { sendEmail } = require('../../utils/emailService');
+const { sendProjectReadyToBillEmail, sendProjectBilledEmail } = require('../../utils/emailService');
 const {
   PM_BILLING_ROLES,
   PM_PROJECT_STATUS,
@@ -135,6 +135,8 @@ const markBilled = async (projectId, { invoiceNumber, billedDate }, user) => {
     newValue: { invoiceNumber: project.invoiceNumber, billedDate: project.billedDate },
   });
 
+  const updated = await Project.findByPk(project.id, { include: projectIncludes });
+
   // Tell the delivery side their project has been invoiced
   if (project.managerId) {
     notificationService.create({
@@ -145,9 +147,17 @@ const markBilled = async (projectId, { invoiceNumber, billedDate }, user) => {
       referenceType: 'pm_project',
       referenceId: project.id,
     });
+
+    if (updated?.projectManager?.email) {
+      sendProjectBilledEmail(
+        updated.projectManager.email,
+        updated.projectManager.name,
+        updated.get({ plain: true })
+      ).catch(() => {});
+    }
   }
 
-  return Project.findByPk(project.id, { include: projectIncludes });
+  return updated;
 };
 
 /** Reverse an invoice entry (wrong invoice number, credit note, etc.). */
@@ -184,7 +194,7 @@ const unmarkBilled = async (projectId, { reason }, user) => {
  * Alert Finance that a billable project just completed. Called from the project
  * service on the status transition; never throws into the caller's flow.
  */
-const notifyFinanceReadyToBill = async (project) => {
+const notifyFinanceReadyToBill = async (projectRef) => {
   try {
     const financeUsers = await User.findAll({
       where: { role: { [Op.in]: PM_BILLING_ROLES }, isActive: true },
@@ -192,26 +202,40 @@ const notifyFinanceReadyToBill = async (project) => {
     });
     if (!financeUsers.length) return;
 
+    // Re-read with the people attached, and gather what Finance needs to raise
+    // the invoice without chasing the project manager.
+    const project = await Project.findByPk(projectRef.id, { include: projectIncludes });
+    if (!project) return;
+
+    const [milestones, tasks, teamSize] = await Promise.all([
+      Milestone.findAll({ where: { projectId: project.id }, attributes: ['status'] }),
+      Task.findAll({ where: { projectId: project.id }, attributes: ['status'] }),
+      ProjectMember.count({ where: { projectId: project.id } }),
+    ]);
+
+    const stats = {
+      milestonesTotal: milestones.length,
+      milestonesCompleted: milestones.filter((m) => m.status === 'completed').length,
+      tasksTotal: tasks.length,
+      tasksCompleted: tasks.filter((t) => t.status === 'completed').length,
+      teamSize,
+    };
+
     const link = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/pm/billing`;
+    const plain = project.get({ plain: true });
+
     for (const fin of financeUsers) {
       notificationService.create({
         recipient: fin.id,
         type: NOTIFICATION_TYPES.PM_PROJECT_READY_TO_BILL,
         title: `Ready to bill: ${project.name}`,
-        message: `"${project.name}" is complete and marked billable${project.clientName ? ` for ${project.clientName}` : ''}. It is ready to invoice.`,
+        message: `"${project.name}"${project.clientName ? ` for ${project.clientName}` : ''} is complete and billable — ${stats.milestonesCompleted}/${stats.milestonesTotal} milestones delivered. Ready to invoice.`,
         referenceType: 'pm_project',
         referenceId: project.id,
       });
 
       if (fin.email) {
-        sendEmail(
-          fin.email,
-          `Ready to bill: ${project.name}`,
-          `<p>Hi ${fin.name},</p>
-           <p><strong>${project.name}</strong>${project.clientName ? ` (${project.clientName})` : ''} has been marked
-           <strong>Completed</strong> and is flagged billable — it is ready to invoice.</p>
-           <p><a href="${link}" style="display:inline-block;margin-top:12px;padding:10px 20px;background:#2563eb;color:#fff;text-decoration:none;border-radius:6px">Open Billing Register</a></p>`
-        ).catch(() => {});
+        sendProjectReadyToBillEmail(fin.email, fin.name, plain, stats, link).catch(() => {});
       }
     }
   } catch (err) {
