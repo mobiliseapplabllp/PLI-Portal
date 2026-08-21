@@ -9,6 +9,7 @@ const ROLES = {
   MD: 'md',
   DIRECTOR: 'director',
   SALES_DIRECTOR: 'sales_director',
+  FINANCE: 'finance',
 };
 
 // KPI Assignment statuses
@@ -114,6 +115,8 @@ const NOTIFICATION_TYPES = {
   PM_PROJECT_ASSIGNED: 'pm_project_assigned',
   PM_MILESTONE_UPDATED: 'pm_milestone_updated',
   PM_DAILY_LOG: 'pm_daily_log',
+  PM_PROJECT_READY_TO_BILL: 'pm_project_ready_to_bill',
+  PM_PROJECT_BILLED: 'pm_project_billed',
   // Scoring config
   SCORING_CONFIG_UPDATED: 'scoring_config_updated',
   // CSAT
@@ -189,7 +192,10 @@ const PM_OVERALL_STATUS = {
 };
 
 // Roles that can see Project Management module
-const PM_VIEWER_ROLES = ['admin', 'manager', 'senior_manager', 'employee', 'hr_admin', 'final_approver', 'md', 'director'];
+const PM_VIEWER_ROLES = ['admin', 'manager', 'senior_manager', 'employee', 'hr_admin', 'final_approver', 'md', 'director', 'finance'];
+
+// Only these roles may mark a project as billed
+const PM_BILLING_ROLES = ['finance', 'admin'];
 
 // ── OTP login ─────────────────────────────────────────────────────────────────
 const OTP_CONFIG = {
@@ -266,6 +272,7 @@ module.exports = {
   PM_TASK_STATUS,
   PM_OVERALL_STATUS,
   PM_VIEWER_ROLES,
+  PM_BILLING_ROLES,
   OTP_CONFIG,
   ROSTER_STATUS,
   ROSTER_SWAP_STATUS,

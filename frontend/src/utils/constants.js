@@ -6,6 +6,7 @@ export const ROLES = {
   FINAL_APPROVER: 'final_approver',
   ADMIN: 'admin',
   SALES_DIRECTOR: 'sales_director',
+  FINANCE: 'finance',
 };
 
 export const ROLE_OPTIONS = [
@@ -16,6 +17,7 @@ export const ROLE_OPTIONS = [
   { value: 'final_approver',  label: 'Final Approver' },
   { value: 'admin',           label: 'Admin' },
   { value: 'sales_director',  label: 'Sales Director' },
+  { value: 'finance',         label: 'Finance' },
 ];
 
 export const KPI_STATUS = {
@@ -236,4 +238,5 @@ export const ROLE_CONFIG = {
   final_approver:  { label: 'Final Approver Portal',  accentClass: 'from-cyan-700 to-cyan-800' },
   admin:           { label: 'Admin Portal',            accentClass: 'from-gray-700 to-gray-800' },
   sales_director:  { label: 'Sales Director Portal',  accentClass: 'from-rose-600 to-rose-700' },
+  finance:         { label: 'Finance Portal',          accentClass: 'from-teal-600 to-teal-700' },
 };

@@ -7,6 +7,7 @@ const DailyStatusLog = require('../../models/pm/DailyStatusLog');
 const ProjectNotificationRecipient = require('../../models/pm/ProjectNotificationRecipient');
 const User = require('../../models/User');
 const { NotFoundError, ForbiddenError } = require('../../utils/errors');
+const { PM_PROJECT_STATUS } = require('../../config/constants');
 const pmSettingsService = require('./pmSettings.service');
 
 const PROJECT_INCLUDE = [
@@ -89,12 +90,21 @@ const getProjectById = async (id, user) => {
   return project;
 };
 
+// Billing outcome is Finance's to record — a project manager may declare a
+// project billable, but never that it has been billed. Stripped on both paths.
+const FINANCE_ONLY_FIELDS = ['isBilled', 'invoiceNumber', 'billedDate', 'billedById', 'billedAt'];
+const stripFinanceFields = (data) => {
+  const clean = { ...data };
+  for (const f of FINANCE_ONLY_FIELDS) delete clean[f];
+  return clean;
+};
+
 const createProject = async (data, user) => {
   const settings = await pmSettingsService.getSettings();
   const allowed = settings.allowedCreatorRoles || ['admin', 'manager', 'senior_manager'];
   if (!allowed.includes(user.role))
     throw new ForbiddenError(`Your role (${user.role}) is not permitted to create projects`);
-  return Project.create({ ...data, createdById: user._id });
+  return Project.create({ ...stripFinanceFields(data), createdById: user._id });
 };
 
 const updateProject = async (id, data, user) => {
@@ -103,8 +113,17 @@ const updateProject = async (id, data, user) => {
   if (!canManageProject(user) && String(project.managerId) !== String(user._id)) {
     throw new ForbiddenError('Only project manager or admin can update this project');
   }
-  Object.assign(project, data);
+
+  const wasCompleted = project.status === PM_PROJECT_STATUS.COMPLETED;
+  Object.assign(project, stripFinanceFields(data));
   await project.save();
+
+  // A billable project reaching Completed is Finance's cue to invoice it
+  const nowCompleted = project.status === PM_PROJECT_STATUS.COMPLETED;
+  if (!wasCompleted && nowCompleted && project.isBillable && !project.isBilled) {
+    require('./billing.service').notifyFinanceReadyToBill(project).catch(() => {});
+  }
+
   return project;
 };
 

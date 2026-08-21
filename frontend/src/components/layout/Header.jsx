@@ -7,7 +7,7 @@ import NotificationBell from './NotificationBell';
 import {
   HiOutlineLogout, HiOutlineUser, HiOutlineMenuAlt2,
   HiOutlineChevronDown, HiOutlineLightningBolt, HiOutlineClipboardList,
-  HiOutlineCalendar, HiCheck,
+  HiOutlineCalendar, HiOutlineAnnotation, HiCheck,
 } from 'react-icons/hi';
 
 const MODULES = [
@@ -34,6 +34,14 @@ const MODULES = [
     defaultRoute: '/roster/dashboard',
     color: 'text-violet-600',
     bg: 'bg-violet-50',
+  },
+  {
+    id: 'csat',
+    label: 'Client Surveys',
+    icon: HiOutlineAnnotation,
+    defaultRoute: '/csat/dashboard',
+    color: 'text-amber-600',
+    bg: 'bg-amber-50',
   },
 ];
 

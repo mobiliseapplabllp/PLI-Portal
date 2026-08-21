@@ -21,6 +21,15 @@ const Project = sequelize.define(
     startDate: { type: DataTypes.DATEONLY, allowNull: true },
     endDate: { type: DataTypes.DATEONLY, allowNull: true },
     createdById: { type: DataTypes.UUID, allowNull: true },
+    // ── Billing ───────────────────────────────────────────────────────────────
+    // isBillable is set by the project manager; isBilled and its invoice details
+    // are written only by Finance/admin, and only once the project is completed.
+    isBillable: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+    isBilled: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+    invoiceNumber: { type: DataTypes.STRING(64), allowNull: true },
+    billedDate: { type: DataTypes.DATEONLY, allowNull: true },
+    billedById: { type: DataTypes.UUID, allowNull: true },
+    billedAt: { type: DataTypes.DATE, allowNull: true },
   },
   { tableName: 'pm_projects' }
 );

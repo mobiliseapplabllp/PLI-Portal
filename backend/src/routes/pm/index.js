@@ -7,13 +7,16 @@ const milestoneRoutes = require('./milestone.routes');
 const taskRoutes = require('./task.routes');
 const dailyLogRoutes = require('./dailyLog.routes');
 const pmSettingsRoutes = require('./pmSettings.routes');
+const billingRoutes = require('./billing.routes');
 const taskCtrl = require('../../controllers/pm/task.controller');
 
 router.use(authenticate);
 
-const ALL = ['admin', 'manager', 'senior_manager', 'employee', 'hr_admin', 'final_approver', 'md', 'director'];
+const ALL = ['admin', 'manager', 'senior_manager', 'employee', 'hr_admin', 'final_approver', 'md', 'director', 'finance'];
 router.get('/my-tasks', authorize(...ALL), taskCtrl.getMyTasks);
 
+// Registered before /projects so it is not shadowed by /projects/:id
+router.use('/billing', billingRoutes);
 router.use('/projects', projectRoutes);
 router.use('/projects/:id/milestones', milestoneRoutes);
 router.use('/projects/:id/milestones/:milestoneId/tasks', taskRoutes);

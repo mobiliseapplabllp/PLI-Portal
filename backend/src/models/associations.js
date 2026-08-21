@@ -93,6 +93,7 @@ KpiTemplate.belongsTo(User, { foreignKey: 'createdById', as: 'createdBy' });
 Project.belongsTo(User, { foreignKey: 'ownerId', as: 'owner' });
 Project.belongsTo(User, { foreignKey: 'managerId', as: 'projectManager' });
 Project.belongsTo(User, { foreignKey: 'createdById', as: 'createdBy' });
+Project.belongsTo(User, { foreignKey: 'billedById', as: 'billedBy' });
 Project.hasMany(ProjectMember, { foreignKey: 'projectId', as: 'members', onDelete: 'CASCADE' });
 Project.hasMany(Milestone, { foreignKey: 'projectId', as: 'milestones', onDelete: 'CASCADE' });
 Project.hasMany(Task, { foreignKey: 'projectId', as: 'tasks', onDelete: 'CASCADE' });

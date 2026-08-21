@@ -69,6 +69,7 @@ import DailyLogForm from '../pages/pm/DailyLogForm';
 import DailyLogHistory from '../pages/pm/DailyLogHistory';
 import MyTasks from '../pages/pm/MyTasks';
 import PMSettings from '../pages/pm/PMSettings';
+import BillingRegister from '../pages/pm/BillingRegister';
 
 // Rostering pages
 import RosterDashboard from '../pages/roster/RosterDashboard';
@@ -81,7 +82,8 @@ import SwapApprovals from '../pages/roster/SwapApprovals';
 import ProfilePage from '../pages/common/ProfilePage';
 import NotFoundPage from '../pages/common/NotFoundPage';
 
-const ALL_ROLES = ['admin', 'manager', 'senior_manager', 'employee', 'hr_admin', 'final_approver', 'md', 'director', 'sales_director'];
+const ALL_ROLES = ['admin', 'manager', 'senior_manager', 'employee', 'hr_admin', 'final_approver', 'md', 'director', 'sales_director', 'finance'];
+const BILLING_VIEWERS = ['finance', 'admin', 'md', 'director', 'senior_manager'];
 const PM_CREATORS = ['admin', 'manager', 'senior_manager'];
 
 function HomeRedirect() {
@@ -181,6 +183,7 @@ export default function AppRoutes() {
         <Route path="/pm/projects/:id/daily-logs" element={<RoleRoute roles={ALL_ROLES}><DailyLogHistory /></RoleRoute>} />
         <Route path="/pm/my-tasks" element={<RoleRoute roles={ALL_ROLES}><MyTasks /></RoleRoute>} />
         <Route path="/pm/settings" element={<RoleRoute roles={['admin']}><PMSettings /></RoleRoute>} />
+        <Route path="/pm/billing" element={<RoleRoute roles={BILLING_VIEWERS}><BillingRegister /></RoleRoute>} />
 
         {/* CSAT routes */}
         <Route path="/csat/client-organisations" element={<RoleRoute roles={['admin', 'manager', 'senior_manager']}><ClientOrgsPage /></RoleRoute>} />

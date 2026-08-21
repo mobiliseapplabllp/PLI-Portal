@@ -32,6 +32,7 @@ import {
   HiOutlineInbox,
   HiOutlineClipboardCheck as HiOutlineMyRequests,
   HiOutlineSwitchHorizontal,
+  HiOutlineCurrencyRupee,
 } from 'react-icons/hi';
 import { ROLE_CONFIG } from '../../utils/constants';
 import LakshyaLogo from '../common/LakshyaLogo';
@@ -215,9 +216,32 @@ const pmNavItems = {
       ],
     },
     { to: '/pm/my-tasks', label: 'My Tasks', icon: HiOutlineCheckCircle },
+    { to: '/pm/billing', label: 'Billing Register', icon: HiOutlineCurrencyRupee },
     { to: '/pm/settings', label: 'PM Settings', icon: HiOutlineCog },
-    { section: 'Client Surveys' },
-    { to: '/csat/dashboard', label: 'CSAT Dashboard', icon: HiOutlineChartBar },
+  ],
+};
+
+// CSAT items appended to manager/senior_manager/hr_admin/final_approver PM nav
+// Sales Director has no PM module access
+pmNavItems.sales_director = [];
+
+// ── Billing (Finance) ─────────────────────────────────────────────────────────
+// Finance lives inside the PM module: projects are what get billed.
+const billingItem = { to: '/pm/billing', label: 'Billing Register', icon: HiOutlineCurrencyRupee };
+pmNavItems.finance = [
+  { to: '/pm/dashboard', label: 'PM Dashboard', icon: HiOutlineHome },
+  { to: '/pm/projects', label: 'All Projects', icon: HiOutlineFolderOpen },
+  billingItem,
+];
+pmNavItems.md = [...pmNavItems.md, billingItem];
+pmNavItems.director = [...pmNavItems.director, billingItem];
+pmNavItems.senior_manager = [...pmNavItems.senior_manager, billingItem];
+
+// ── CSAT Nav Items ────────────────────────────────────────────────────────────
+// Client Surveys is its own application, not a section of Project Management.
+const csatNavItems = {
+  admin: [
+    { to: '/csat/dashboard', label: 'CSAT Dashboard', icon: HiOutlineHome },
     { to: '/csat/client-organisations', label: 'Client Orgs', icon: HiOutlineOfficeBuilding },
     { to: '/csat/approval-inbox', label: 'Approval Inbox', icon: HiOutlineInbox },
     {
@@ -230,37 +254,27 @@ const pmNavItems = {
       ],
     },
   ],
+  manager: [
+    { to: '/csat/dashboard', label: 'CSAT Dashboard', icon: HiOutlineHome },
+    { to: '/csat/client-organisations', label: 'Client Orgs', icon: HiOutlineOfficeBuilding },
+    { to: '/csat/send', label: 'Send Survey', icon: HiOutlinePaperAirplane },
+    { to: '/csat/my-requests', label: 'My Requests', icon: HiOutlineMyRequests },
+    { to: '/csat/responses', label: 'Survey Responses', icon: HiOutlineChartBar },
+  ],
+  // Read-only audiences
+  hr_admin: [
+    { to: '/csat/dashboard', label: 'CSAT Dashboard', icon: HiOutlineHome },
+    { to: '/csat/responses', label: 'Survey Responses', icon: HiOutlineChartBar },
+  ],
 };
-
-// CSAT items appended to manager/senior_manager/hr_admin/final_approver PM nav
-const csatManagerItems = [
-  { section: 'Client Surveys' },
-  { to: '/csat/dashboard', label: 'CSAT Dashboard', icon: HiOutlineChartBar },
-  {
-    label: 'Surveys',
-    icon: HiOutlineAnnotation,
-    children: [
-      { to: '/csat/send', label: 'Send Survey', icon: HiOutlinePaperAirplane },
-      { to: '/csat/my-requests', label: 'My Requests', icon: HiOutlineMyRequests },
-      { to: '/csat/responses', label: 'Survey Responses', icon: HiOutlineChartBar },
-    ],
-  },
-];
-
-const csatReadOnlyItems = [
-  { section: 'Client Surveys' },
-  { to: '/csat/dashboard', label: 'CSAT Dashboard', icon: HiOutlineChartBar },
-  { to: '/csat/responses', label: 'Survey Responses', icon: HiOutlineChartBar },
-];
-
-// Sales Director has no PM module access
-pmNavItems.sales_director = [];
-
-// Inject CSAT into pm nav items for non-admin roles
-pmNavItems.manager       = [...pmNavItems.manager,       ...csatManagerItems];
-pmNavItems.senior_manager = [...pmNavItems.senior_manager, ...csatManagerItems];
-pmNavItems.hr_admin      = [...pmNavItems.hr_admin,      ...csatReadOnlyItems];
-pmNavItems.final_approver = [...pmNavItems.final_approver, ...csatReadOnlyItems];
+csatNavItems.senior_manager = csatNavItems.manager;
+csatNavItems.final_approver = csatNavItems.hr_admin;
+// Roles with no client-survey remit
+csatNavItems.employee = [];
+csatNavItems.md = [];
+csatNavItems.director = [];
+csatNavItems.sales_director = [];
+csatNavItems.finance = [];
 
 // ── Rostering Nav Items ───────────────────────────────────────────────────────
 // Roster managers (manager/senior_manager/sales_director) plan their own team;
@@ -304,7 +318,7 @@ export default function Sidebar({ collapsed, onToggle, onNavClick }) {
 
   if (!user) return null;
 
-  const navMapByModule = { pm: pmNavItems, roster: rosterNavItems, kpi: kpiNavItems };
+  const navMapByModule = { pm: pmNavItems, roster: rosterNavItems, csat: csatNavItems, kpi: kpiNavItems };
   const navMap = navMapByModule[activeModule] || kpiNavItems;
   const items = navMap[user.role] || navMap.employee || [];
   const roleConfig = ROLE_CONFIG[user.role] || ROLE_CONFIG.employee;
@@ -322,8 +336,12 @@ export default function Sidebar({ collapsed, onToggle, onNavClick }) {
     }`;
 
   // Each module carries its own header accent so the shell reads as a distinct app
-  const moduleAccent = { pm: 'from-emerald-600 to-emerald-700', roster: 'from-violet-600 to-violet-700' };
-  const moduleLabel = { pm: 'Project Mgmt', roster: 'Rostering' };
+  const moduleAccent = {
+    pm: 'from-emerald-600 to-emerald-700',
+    roster: 'from-violet-600 to-violet-700',
+    csat: 'from-amber-600 to-amber-700',
+  };
+  const moduleLabel = { pm: 'Project Mgmt', roster: 'Rostering', csat: 'Client Surveys' };
   const headerAccent = moduleAccent[activeModule] || roleConfig.accentClass;
   const headerLabel = moduleLabel[activeModule] || roleConfig.label;
 

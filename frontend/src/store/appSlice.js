@@ -1,7 +1,7 @@
 import { createSlice } from '@reduxjs/toolkit';
 
 // Top-level applications the shell can switch between.
-export const MODULE_IDS = ['kpi', 'pm', 'roster'];
+export const MODULE_IDS = ['kpi', 'pm', 'roster', 'csat'];
 
 const stored = localStorage.getItem('pli_active_module');
 

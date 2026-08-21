@@ -191,6 +191,7 @@ export default function EmployeeManagement() {
               <option value="md">MD (Managing Director)</option>
               <option value="director">Director</option>
               <option value="sales_director">Sales Director</option>
+              <option value="finance">Finance</option>
             </select>
           </div>
           <div>
