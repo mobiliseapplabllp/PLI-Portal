@@ -34,6 +34,7 @@ import {
   HiOutlineSwitchHorizontal,
 } from 'react-icons/hi';
 import { ROLE_CONFIG } from '../../utils/constants';
+import LakshyaLogo from '../common/LakshyaLogo';
 
 // ── KPI Nav Items ─────────────────────────────────────────────────────────────
 const kpiNavItems = {
@@ -320,10 +321,10 @@ export default function Sidebar({ collapsed, onToggle, onNavClick }) {
       {/* Role-accented header */}
       <div className={`h-16 flex items-center justify-between px-4 border-b border-gray-200 bg-gradient-to-r ${headerAccent}`}>
         <div className={`flex items-center ${collapsed ? 'justify-center w-full' : ''}`}>
-          <HiOutlineCollection className="w-7 h-7 text-white flex-shrink-0" />
+          <LakshyaLogo className="w-7 h-7 text-white flex-shrink-0" />
           {!collapsed && (
             <div className="ml-2">
-              <div className="text-xs text-white/70 leading-none">PLI Portal</div>
+              <div className="text-xs text-white/70 leading-none">Lakshya Portal</div>
               <div className="text-sm font-bold text-white leading-tight whitespace-nowrap">{headerLabel}</div>
             </div>
           )}

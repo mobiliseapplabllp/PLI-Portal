@@ -153,7 +153,7 @@ function buildEmailHtml(project, milestones, log, today) {
 
   <!-- Footer -->
   <div style="background:#f9fafb;padding:16px 28px;border-top:1px solid #e5e7eb;font-size:11px;color:#9ca3af;text-align:center;">
-    This is an automated daily status report from the PLI Portal — Project Management Module.<br>
+    This is an automated daily status report from the Lakshya Portal — Project Management Module.<br>
     Project Manager: ${project.projectManager ? project.projectManager.name : '—'} &nbsp;|&nbsp; Report Date: ${formatDate(today)}
   </div>
 </div>
@@ -611,7 +611,7 @@ async function buildConsolidatedEmailHtml(projects, recipientLabel) {
                   </table>
                 </td>
                 <td valign="middle">
-                  <div style="color:#ffffff;font-size:15px;font-weight:700;margin:0;">PLI Portal</div>
+                  <div style="color:#ffffff;font-size:15px;font-weight:700;margin:0;">Lakshya Portal</div>
                   <div style="color:#7EA8C9;font-size:10px;text-transform:uppercase;letter-spacing:0.8px;margin-top:2px;">Project Management</div>
                 </td>
               </tr>
@@ -698,7 +698,7 @@ async function buildConsolidatedEmailHtml(projects, recipientLabel) {
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
         <tr>
           <td valign="middle" width="60%">
-            <div style="font-size:12px;font-weight:700;color:#9BBDD6;margin-bottom:3px;">PLI Portal &mdash; Project Management</div>
+            <div style="font-size:12px;font-weight:700;color:#9BBDD6;margin-bottom:3px;">Lakshya Portal &mdash; Project Management</div>
             <div style="font-size:11px;color:#4A6A87;line-height:1.6;">This is an automated consolidated daily report.<br>Manage settings: Admin &rarr; Project Management &rarr; PM Settings</div>
           </td>
           <td valign="middle" width="40%" align="right">

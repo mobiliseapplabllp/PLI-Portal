@@ -1,15 +1,23 @@
 const { body } = require('express-validator');
+const { OTP_CONFIG } = require('../config/constants');
 
-const loginValidator = [
-  body('identifier').notEmpty().withMessage('Email or Employee ID is required').trim(),
-  body('password').notEmpty().withMessage('Password is required'),
+// Authentication is email-OTP only — no password validators remain.
+const otpRequestValidator = [
+  body('identifier')
+    .notEmpty().withMessage('Email or Employee ID is required')
+    .isLength({ max: 255 }).withMessage('Invalid identifier')
+    .trim(),
 ];
 
-const changePasswordValidator = [
-  body('currentPassword').notEmpty().withMessage('Current password is required'),
-  body('newPassword')
-    .isLength({ min: 6 })
-    .withMessage('New password must be at least 6 characters'),
+const otpVerifyValidator = [
+  body('identifier')
+    .notEmpty().withMessage('Email or Employee ID is required')
+    .isLength({ max: 255 }).withMessage('Invalid identifier')
+    .trim(),
+  body('code')
+    .trim()
+    .matches(new RegExp(`^\\d{${OTP_CONFIG.LENGTH}}$`))
+    .withMessage(`Enter the ${OTP_CONFIG.LENGTH}-digit code`),
 ];
 
-module.exports = { loginValidator, changePasswordValidator };
+module.exports = { otpRequestValidator, otpVerifyValidator };

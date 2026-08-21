@@ -6,7 +6,6 @@ import AppLayout from '../components/layout/AppLayout';
 
 // Auth pages
 import LoginPage from '../pages/auth/LoginPage';
-import ChangePasswordPage from '../pages/auth/ChangePasswordPage';
 
 // Employee pages
 import EmployeeDashboard from '../pages/employee/EmployeeDashboard';
@@ -129,7 +128,6 @@ export default function AppRoutes() {
         }
       >
         <Route path="/" element={<HomeRedirect />} />
-        <Route path="/change-password" element={<ChangePasswordPage />} />
         <Route path="/profile" element={<ProfilePage />} />
 
         {/* Employee routes */}

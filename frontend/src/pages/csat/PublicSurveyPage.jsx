@@ -162,7 +162,7 @@ function IntroScreen({ survey, recipientName, questionCount, onStart }) {
         </div>
       </div>
       <footer className="pb-6 text-center">
-        <p className="text-xs text-gray-300">Powered by PLI Portal · Secure & Confidential</p>
+        <p className="text-xs text-gray-300">Powered by Lakshya Portal · Secure & Confidential</p>
       </footer>
     </div>
   );
@@ -494,7 +494,7 @@ export default function PublicSurveyPage() {
       </div>
 
       <footer className="py-3 text-center">
-        <p className="text-xs text-gray-300">Powered by PLI Portal · Secure & Confidential</p>
+        <p className="text-xs text-gray-300">Powered by Lakshya Portal · Secure & Confidential</p>
       </footer>
     </div>
   );

@@ -13,6 +13,7 @@ const PliSlab = require('./PliSlab');
 const Notification = require('./Notification');
 const AuditLog = require('./AuditLog');
 const KpiTemplate = require('./KpiTemplate');
+const LoginOtp = require('./LoginOtp');
 
 // ── PM Models ─────────────────────────────────────────────────────────────────
 const Project = require('./pm/Project');
@@ -80,6 +81,10 @@ Notification.belongsTo(User, { foreignKey: 'recipientId', as: 'recipient' });
 
 // ── AuditLog ──────────────────────────────────────────────────────────────────
 AuditLog.belongsTo(User, { foreignKey: 'changedById', as: 'changedBy' });
+
+// ── LoginOtp ──────────────────────────────────────────────────────────────────
+LoginOtp.belongsTo(User, { foreignKey: 'userId', as: 'user' });
+User.hasMany(LoginOtp, { foreignKey: 'userId', as: 'loginOtps', onDelete: 'CASCADE' });
 
 // ── KpiTemplate ───────────────────────────────────────────────────────────────
 KpiTemplate.belongsTo(User, { foreignKey: 'createdById', as: 'createdBy' });
@@ -202,4 +207,6 @@ module.exports = {
   SurveyDispatchApproval, SurveyDispatchApprovalFeedback,
   // Rostering
   RosterWeek, RosterEntry, RosterCompOff, RosterSwapRequest,
+  // Auth
+  LoginOtp,
 };

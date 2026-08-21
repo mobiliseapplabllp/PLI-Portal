@@ -59,7 +59,7 @@ const sendKpiAssignedEmail = async (employeeEmail, employeeName, month, year) =>
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
       <h2 style="color: #1e40af;">KPIs Assigned</h2>
       <p>Dear <strong>${employeeName}</strong>,</p>
-      <p>Your KPIs for <strong>${month} ${year}</strong> have been assigned. Please log in to the PLI Portal to view your KPIs and submit your self-assessment.</p>
+      <p>Your KPIs for <strong>${month} ${year}</strong> have been assigned. Please log in to the Lakshya Portal to view your KPIs and submit your self-assessment.</p>
       <p style="margin-top: 24px;">
         <a href="${process.env.FRONTEND_URL || 'http://localhost:5173'}/employee/my-kpis"
            style="background-color: #1e40af; color: white; padding: 10px 24px; text-decoration: none; border-radius: 6px;">
@@ -67,7 +67,7 @@ const sendKpiAssignedEmail = async (employeeEmail, employeeName, month, year) =>
         </a>
       </p>
       <hr style="margin-top: 32px; border: none; border-top: 1px solid #e5e7eb;" />
-      <p style="font-size: 12px; color: #6b7280;">This is an automated notification from the PLI Portal.</p>
+      <p style="font-size: 12px; color: #6b7280;">This is an automated notification from the Lakshya Portal.</p>
     </div>
   `;
   return sendEmail(employeeEmail, subject, html);
@@ -82,7 +82,7 @@ const sendSubmissionReminderEmail = async (employeeEmail, employeeName, month, y
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
       <h2 style="color: #d97706;">Submission Reminder</h2>
       <p>Dear <strong>${employeeName}</strong>,</p>
-      <p>This is a reminder to submit your self-assessment for <strong>${month} ${year}</strong>. Please log in to the PLI Portal and complete your submission at your earliest convenience.</p>
+      <p>This is a reminder to submit your self-assessment for <strong>${month} ${year}</strong>. Please log in to the Lakshya Portal and complete your submission at your earliest convenience.</p>
       <p style="margin-top: 24px;">
         <a href="${process.env.FRONTEND_URL || 'http://localhost:5173'}/employee/my-kpis"
            style="background-color: #d97706; color: white; padding: 10px 24px; text-decoration: none; border-radius: 6px;">
@@ -90,7 +90,7 @@ const sendSubmissionReminderEmail = async (employeeEmail, employeeName, month, y
         </a>
       </p>
       <hr style="margin-top: 32px; border: none; border-top: 1px solid #e5e7eb;" />
-      <p style="font-size: 12px; color: #6b7280;">This is an automated notification from the PLI Portal.</p>
+      <p style="font-size: 12px; color: #6b7280;">This is an automated notification from the Lakshya Portal.</p>
     </div>
   `;
   return sendEmail(employeeEmail, subject, html);
@@ -113,7 +113,7 @@ const sendReviewCompleteEmail = async (employeeEmail, employeeName, month, year,
       <h2 style="color: #059669;">${label}</h2>
       <p>Dear <strong>${employeeName}</strong>,</p>
       <p>Your KPI assessment for <strong>${month} ${year}</strong> has been updated to: <strong>${label}</strong>.</p>
-      <p>Please log in to the PLI Portal to view the details.</p>
+      <p>Please log in to the Lakshya Portal to view the details.</p>
       <p style="margin-top: 24px;">
         <a href="${process.env.FRONTEND_URL || 'http://localhost:5173'}/employee/my-kpis"
            style="background-color: #059669; color: white; padding: 10px 24px; text-decoration: none; border-radius: 6px;">
@@ -121,7 +121,7 @@ const sendReviewCompleteEmail = async (employeeEmail, employeeName, month, year,
         </a>
       </p>
       <hr style="margin-top: 32px; border: none; border-top: 1px solid #e5e7eb;" />
-      <p style="font-size: 12px; color: #6b7280;">This is an automated notification from the PLI Portal.</p>
+      <p style="font-size: 12px; color: #6b7280;">This is an automated notification from the Lakshya Portal.</p>
     </div>
   `;
   return sendEmail(employeeEmail, subject, html);
@@ -136,7 +136,7 @@ const sendEmployeeSubmittedEmail = async (managerEmail, managerName, employeeNam
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
       <h2 style="color: #7c3aed;">Employee KPI Submission</h2>
       <p>Dear <strong>${managerName}</strong>,</p>
-      <p><strong>${employeeName}</strong> has submitted their self-assessment for <strong>${month} ${year}</strong>. Please log in to the PLI Portal to review.</p>
+      <p><strong>${employeeName}</strong> has submitted their self-assessment for <strong>${month} ${year}</strong>. Please log in to the Lakshya Portal to review.</p>
       <p style="margin-top: 24px;">
         <a href="${process.env.FRONTEND_URL || 'http://localhost:5173'}/manager/team-overview"
            style="background-color: #7c3aed; color: white; padding: 10px 24px; text-decoration: none; border-radius: 6px;">
@@ -144,7 +144,7 @@ const sendEmployeeSubmittedEmail = async (managerEmail, managerName, employeeNam
         </a>
       </p>
       <hr style="margin-top: 32px; border: none; border-top: 1px solid #e5e7eb;" />
-      <p style="font-size: 12px; color: #6b7280;">This is an automated notification from the PLI Portal.</p>
+      <p style="font-size: 12px; color: #6b7280;">This is an automated notification from the Lakshya Portal.</p>
     </div>
   `;
   return sendEmail(managerEmail, subject, html);
@@ -159,7 +159,7 @@ const sendManagerReviewedEmail = async (adminEmail, adminName, month, year) => {
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
       <h2 style="color: #7c3aed;">Manager Review Complete</h2>
       <p>Dear <strong>${adminName}</strong>,</p>
-      <p>A manager review has been completed for <strong>${month} ${year}</strong>. Please log in to the PLI Portal to perform the final review.</p>
+      <p>A manager review has been completed for <strong>${month} ${year}</strong>. Please log in to the Lakshya Portal to perform the final review.</p>
       <p style="margin-top: 24px;">
         <a href="${process.env.FRONTEND_URL || 'http://localhost:5173'}/admin/overview"
            style="background-color: #7c3aed; color: white; padding: 10px 24px; text-decoration: none; border-radius: 6px;">
@@ -167,7 +167,7 @@ const sendManagerReviewedEmail = async (adminEmail, adminName, month, year) => {
         </a>
       </p>
       <hr style="margin-top: 32px; border: none; border-top: 1px solid #e5e7eb;" />
-      <p style="font-size: 12px; color: #6b7280;">This is an automated notification from the PLI Portal.</p>
+      <p style="font-size: 12px; color: #6b7280;">This is an automated notification from the Lakshya Portal.</p>
     </div>
   `;
   return sendEmail(adminEmail, subject, html);
@@ -184,7 +184,7 @@ const sendCommitmentDeadlineReminderEmail = async (employeeEmail, employeeName, 
       <h2 style="color: ${urgency};">KPI Commitment Deadline Reminder</h2>
       <p>Dear <strong>${employeeName}</strong>,</p>
       <p>Your KPI commitment for <strong>${month} ${year}</strong> is due in <strong>${daysLeft} day${daysLeft === 1 ? '' : 's'}</strong> (by <strong>${deadline}</strong>).</p>
-      <p>Please log in to the PLI Portal and submit your KPI commitment before the deadline.</p>
+      <p>Please log in to the Lakshya Portal and submit your KPI commitment before the deadline.</p>
       <p style="margin-top: 24px;">
         <a href="${process.env.FRONTEND_URL || 'http://localhost:5173'}/employee/my-kpis"
            style="background-color: ${urgency}; color: white; padding: 10px 24px; text-decoration: none; border-radius: 6px;">
@@ -192,7 +192,7 @@ const sendCommitmentDeadlineReminderEmail = async (employeeEmail, employeeName, 
         </a>
       </p>
       <hr style="margin-top: 32px; border: none; border-top: 1px solid #e5e7eb;" />
-      <p style="font-size: 12px; color: #6b7280;">This is an automated reminder from the PLI Portal.</p>
+      <p style="font-size: 12px; color: #6b7280;">This is an automated reminder from the Lakshya Portal.</p>
     </div>
   `;
   return sendEmail(employeeEmail, subject, html);
@@ -209,7 +209,7 @@ const sendSelfReviewDeadlineReminderEmail = async (employeeEmail, employeeName, 
       <h2 style="color: ${urgency};">KPI Self-Review Deadline Reminder</h2>
       <p>Dear <strong>${employeeName}</strong>,</p>
       <p>Your KPI self-review for <strong>${month} ${year}</strong> is due in <strong>${daysLeft} day${daysLeft === 1 ? '' : 's'}</strong> (by <strong>${deadline}</strong>).</p>
-      <p>Please log in to the PLI Portal and submit your achievement self-review before the deadline.</p>
+      <p>Please log in to the Lakshya Portal and submit your achievement self-review before the deadline.</p>
       <p style="margin-top: 24px;">
         <a href="${process.env.FRONTEND_URL || 'http://localhost:5173'}/employee/my-kpis"
            style="background-color: ${urgency}; color: white; padding: 10px 24px; text-decoration: none; border-radius: 6px;">
@@ -217,7 +217,7 @@ const sendSelfReviewDeadlineReminderEmail = async (employeeEmail, employeeName, 
         </a>
       </p>
       <hr style="margin-top: 32px; border: none; border-top: 1px solid #e5e7eb;" />
-      <p style="font-size: 12px; color: #6b7280;">This is an automated reminder from the PLI Portal.</p>
+      <p style="font-size: 12px; color: #6b7280;">This is an automated reminder from the Lakshya Portal.</p>
     </div>
   `;
   return sendEmail(employeeEmail, subject, html);
@@ -234,7 +234,7 @@ const sendManagerReviewDeadlineReminderEmail = async (managerEmail, managerName,
       <h2 style="color: ${urgency};">Manager Review Deadline Reminder</h2>
       <p>Dear <strong>${managerName}</strong>,</p>
       <p>The KPI manager review for <strong>${month} ${year}</strong> is due in <strong>${daysLeft} day${daysLeft === 1 ? '' : 's'}</strong> (by <strong>${deadline}</strong>).</p>
-      <p>Please log in to the PLI Portal and complete your team's KPI review before the deadline.</p>
+      <p>Please log in to the Lakshya Portal and complete your team's KPI review before the deadline.</p>
       <p style="margin-top: 24px;">
         <a href="${process.env.FRONTEND_URL || 'http://localhost:5173'}/manager/team-overview"
            style="background-color: ${urgency}; color: white; padding: 10px 24px; text-decoration: none; border-radius: 6px;">
@@ -242,7 +242,7 @@ const sendManagerReviewDeadlineReminderEmail = async (managerEmail, managerName,
         </a>
       </p>
       <hr style="margin-top: 32px; border: none; border-top: 1px solid #e5e7eb;" />
-      <p style="font-size: 12px; color: #6b7280;">This is an automated reminder from the PLI Portal.</p>
+      <p style="font-size: 12px; color: #6b7280;">This is an automated reminder from the Lakshya Portal.</p>
     </div>
   `;
   return sendEmail(managerEmail, subject, html);
@@ -260,7 +260,7 @@ const sendCycleOpenedEmail = async (employeeEmail, employeeName, month, year, co
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
       <h2 style="color: #059669;">KPI Appraisal Cycle is Now Open</h2>
       <p>Dear <strong>${employeeName}</strong>,</p>
-      <p>The KPI appraisal cycle for <strong>${month} ${year}</strong> is now open. Please log in to the PLI Portal to view and submit your KPI commitments.</p>
+      <p>The KPI appraisal cycle for <strong>${month} ${year}</strong> is now open. Please log in to the Lakshya Portal to view and submit your KPI commitments.</p>
       ${deadlineNote}
       <p style="color: #6b7280; font-style: italic;">If you have already submitted your commitments, please ignore this notification.</p>
       <p style="margin-top: 24px;">
@@ -270,7 +270,7 @@ const sendCycleOpenedEmail = async (employeeEmail, employeeName, month, year, co
         </a>
       </p>
       <hr style="margin-top: 32px; border: none; border-top: 1px solid #e5e7eb;" />
-      <p style="font-size: 12px; color: #6b7280;">This is an automated notification from the PLI Portal.</p>
+      <p style="font-size: 12px; color: #6b7280;">This is an automated notification from the Lakshya Portal.</p>
     </div>
   `;
   return sendEmail(employeeEmail, subject, html);
@@ -411,6 +411,27 @@ const sendApprovalEscalationEmail = async (adminEmail, {
     <p><a href="${approvalLink}" style="display:inline-block;margin-top:12px;padding:10px 20px;background:#dc2626;color:#fff;text-decoration:none;border-radius:6px">Review Now</a></p>
   `;
   return sendEmail(adminEmail, subject, html);
+};
+
+// ── Login OTP ─────────────────────────────────────────────────────────────────
+
+const sendLoginOtpEmail = async (email, name, code, ttlMinutes) => {
+  const subject = `${code} is your Lakshya Portal sign-in code`;
+  const html = `
+    <p>Hi ${name},</p>
+    <p>Use this code to sign in to the Lakshya Portal:</p>
+    <p style="margin:20px 0">
+      <span style="display:inline-block;padding:14px 28px;background:#111827;color:#fff;
+        font-size:30px;letter-spacing:10px;font-weight:bold;border-radius:8px;font-family:monospace">${code}</span>
+    </p>
+    <p style="color:#6b7280;font-size:13px">
+      This code expires in ${ttlMinutes} minutes and can be used once.
+    </p>
+    <p style="color:#dc2626;font-size:13px">
+      If you did not try to sign in, ignore this email and tell your administrator — do not share this code with anyone.
+    </p>
+  `;
+  return sendEmail(email, subject, html);
 };
 
 // ── Saturday Rostering emails ─────────────────────────────────────────────────
@@ -562,6 +583,7 @@ module.exports = {
   sendSelfReviewDeadlineReminderEmail,
   sendManagerReviewDeadlineReminderEmail,
   sendCycleOpenedEmail,
+  sendLoginOtpEmail,
   sendRosterPublishedEmail,
   sendRosterChangeEmail,
   sendRosterReminderEmail,

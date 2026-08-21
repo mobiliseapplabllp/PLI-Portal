@@ -14,7 +14,9 @@ const User = sequelize.define(
     employeeCode: { type: DataTypes.STRING(32), allowNull: false, unique: true },
     name: { type: DataTypes.STRING(255), allowNull: false },
     email: { type: DataTypes.STRING(255), allowNull: false, unique: true },
-    passwordHash: { type: DataTypes.STRING(255), allowNull: false },
+    // Retained for legacy rows only — authentication is email-OTP only and
+    // nothing reads this column any more (see migration 013).
+    passwordHash: { type: DataTypes.STRING(255), allowNull: true },
     phone: { type: DataTypes.STRING(32), allowNull: true },
     departmentId: { type: DataTypes.UUID, allowNull: true },
     designation: { type: DataTypes.STRING(128), allowNull: true },

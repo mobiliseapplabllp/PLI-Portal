@@ -191,6 +191,16 @@ const PM_OVERALL_STATUS = {
 // Roles that can see Project Management module
 const PM_VIEWER_ROLES = ['admin', 'manager', 'senior_manager', 'employee', 'hr_admin', 'final_approver', 'md', 'director'];
 
+// ── OTP login ─────────────────────────────────────────────────────────────────
+const OTP_CONFIG = {
+  LENGTH: 6,
+  TTL_MINUTES: 10,
+  MAX_ATTEMPTS: 5,          // wrong guesses before the code is burned
+  RESEND_COOLDOWN_SECONDS: 60,
+  MAX_REQUESTS_PER_HOUR: 5, // per-account budget — survives IP rotation
+  LOCKOUT_MINUTES: 15,      // cooldown after a code is burned by wrong guesses
+};
+
 // ── Saturday Rostering ────────────────────────────────────────────────────────
 const ROSTER_STATUS = {
   WORKING: 'working',
@@ -256,6 +266,7 @@ module.exports = {
   PM_TASK_STATUS,
   PM_OVERALL_STATUS,
   PM_VIEWER_ROLES,
+  OTP_CONFIG,
   ROSTER_STATUS,
   ROSTER_SWAP_STATUS,
   ROSTER_COMP_OFF_STATUS,

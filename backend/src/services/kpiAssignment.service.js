@@ -1431,7 +1431,7 @@ const bulkImportFromExcel = async (buffer, financialYear, month, user) => {
 
 const generateImportTemplate = async () => {
   const workbook = new ExcelJS.Workbook();
-  workbook.creator = 'PLI Portal';
+  workbook.creator = 'Lakshya Portal';
   workbook.created = new Date();
 
   const worksheet = workbook.addWorksheet('KPI Import');

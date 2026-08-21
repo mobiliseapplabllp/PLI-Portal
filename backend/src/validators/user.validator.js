@@ -5,7 +5,7 @@ const createUserValidator = [
   body('employeeCode').notEmpty().withMessage('Employee code is required').trim(),
   body('name').notEmpty().withMessage('Name is required').trim(),
   body('email').isEmail().withMessage('Valid email is required').normalizeEmail(),
-  body('password').isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
+  // No password field — users sign in with an emailed one-time code
   body('role').isIn(Object.values(ROLES)).withMessage('Invalid role'),
   body('phone').optional().trim(),
   body('department').optional().isUUID().withMessage('Invalid department ID'),

@@ -41,7 +41,7 @@ export default function EmployeeManagement() {
   const openCreate = () => {
     setEditingUser(null);
     setManagerSearch('');
-    reset({ name: '', email: '', employeeCode: '', password: '', role: 'employee', phone: '', designation: '', department: '', manager: '', kpiReviewApplicable: true, rosterApplicable: true });
+    reset({ name: '', email: '', employeeCode: '', role: 'employee', phone: '', designation: '', department: '', manager: '', kpiReviewApplicable: true, rosterApplicable: true });
     setShowModal(true);
   };
 
@@ -68,7 +68,7 @@ export default function EmployeeManagement() {
     const cleaned = { ...data };
     if (!cleaned.department) delete cleaned.department;
     if (!cleaned.manager) delete cleaned.manager;
-    if (!cleaned.password) delete cleaned.password;
+    delete cleaned.password; // passwords no longer exist — OTP sign-in only
 
     let result;
     if (editingUser) {
@@ -175,9 +175,8 @@ export default function EmployeeManagement() {
             <input type="email" {...register('email', { required: 'Required' })} className="input-field" />
           </div>
           {!editingUser && (
-            <div>
-              <label className="label-text">Password *</label>
-              <input type="password" {...register('password', { required: !editingUser ? 'Required' : false })} className="input-field" />
+            <div className="md:col-span-2 text-xs text-gray-500 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
+              No password is needed — this employee signs in with a one-time code sent to their email address.
             </div>
           )}
           <div>

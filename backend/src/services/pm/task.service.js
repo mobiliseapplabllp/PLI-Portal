@@ -24,7 +24,7 @@ async function sendTaskAssignmentEmail(task, project) {
           ${task.notes ? `<tr><td style="padding:8px;border:1px solid #e5e7eb;font-weight:600;background:#f9fafb">Notes</td><td style="padding:8px;border:1px solid #e5e7eb">${task.notes}</td></tr>` : ''}
           ${dueText ? `<tr><td style="padding:8px;border:1px solid #e5e7eb;font-weight:600;background:#f9fafb">Due Date</td><td style="padding:8px;border:1px solid #e5e7eb">${task.dueDate ? new Date(task.dueDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : ''}</td></tr>` : ''}
         </table>
-        <p style="color:#6b7280;font-size:12px">Please log in to the PLI Portal to view your task.</p>
+        <p style="color:#6b7280;font-size:12px">Please log in to the Lakshya Portal to view your task.</p>
       </div>`
     );
   } catch (err) {
