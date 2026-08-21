@@ -415,6 +415,9 @@ const sendApprovalEscalationEmail = async (adminEmail, {
 
 // ── Login OTP ─────────────────────────────────────────────────────────────────
 
+// NOTE: unlike most templates here, this one THROWS on failure. sendEmail()
+// swallows errors and returns null, which for a login code would leave the user
+// staring at "code sent" forever. The caller needs to know delivery failed.
 const sendLoginOtpEmail = async (email, name, code, ttlMinutes) => {
   const subject = `${code} is your Lakshya Portal sign-in code`;
   const html = `
@@ -431,7 +434,9 @@ const sendLoginOtpEmail = async (email, name, code, ttlMinutes) => {
       If you did not try to sign in, ignore this email and tell your administrator — do not share this code with anyone.
     </p>
   `;
-  return sendEmail(email, subject, html);
+  const info = await sendEmail(email, subject, html);
+  if (!info) throw new Error(`SMTP delivery failed for ${email}`);
+  return info;
 };
 
 // ── Saturday Rostering emails ─────────────────────────────────────────────────

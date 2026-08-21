@@ -2,7 +2,7 @@
  * Seed script — creates production data with real reporting hierarchy
  * Run: npm run seed
  *
- * Admin: admin@mobilise.co.in (MLP001 - ASHISH SHARMA)
+ * Admin: ashish.sharma@mobilise.co.in (MLP001 - ASHISH SHARMA)
  * Managers & Employees: {code}@mobilise.co.in / password123
  */
 require('dotenv').config();
@@ -234,7 +234,7 @@ const seed = async () => {
     const admin = await User.create({
       employeeCode: 'MLP001',
       name: 'ASHISH SHARMA',
-      email: 'admin@mobilise.co.in',
+      email: 'ashish.sharma@mobilise.co.in',
       passwordHash: plainPassword,
       role: 'admin',
       departmentId: deptMap.OPS,
@@ -496,7 +496,7 @@ const seed = async () => {
 
     console.log('\n  Login credentials (all passwords: password123):');
     console.log('  ─────────────────────────────────────');
-    console.log('  Admin:    admin@mobilise.co.in  or  MLP001');
+    console.log('  Admin:    ashish.sharma@mobilise.co.in  or  MLP001');
     console.log('  Manager:  mlp002@mobilise.co.in or  MLP002 (Smriti Sharma)');
     console.log('  Manager:  mlp041@mobilise.co.in or  MLP041 (Lal Singh)');
     console.log('  Employee: mlp159@mobilise.co.in or  MLP159');

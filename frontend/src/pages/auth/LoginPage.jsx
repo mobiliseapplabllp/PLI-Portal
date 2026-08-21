@@ -131,7 +131,10 @@ export default function LoginPage() {
     const result = await dispatch(requestOtp(id));
     setSending(false);
     if (result.meta.requestStatus === 'fulfilled') {
-      setNotice(`A ${OTP_LENGTH}-digit code was sent to the email registered for ${id}.`);
+      // Conditional wording on purpose: the server answers identically for real
+      // and unknown accounts, so promising delivery here would be a lie when the
+      // identifier is wrong.
+      setNotice(`If ${id} matches an account, a ${OTP_LENGTH}-digit code is on its way to its registered email address.`);
       setCooldown(result.payload?.resendAfterSeconds || 60);
       setOtp(Array(OTP_LENGTH).fill(''));
       return true;
@@ -324,6 +327,10 @@ export default function LoginPage() {
                       />
                       <p className="text-xs text-slate-400 mt-2">
                         The code expires in 10 minutes and can be used once.
+                      </p>
+                      <p className="text-xs text-slate-400 mt-1">
+                        Nothing arrived? Check spam, then confirm you used your <strong>work email</strong> or
+                        employee ID (e.g. MLP001) — a mistyped address gets no code.
                       </p>
                     </div>
 
