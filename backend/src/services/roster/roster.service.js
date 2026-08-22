@@ -1,5 +1,8 @@
 const { Op } = require('sequelize');
-const { RosterWeek, RosterEntry, RosterCompOff, RosterSwapRequest } = require('../../models/associations');
+const {
+  RosterWeek, RosterEntry, RosterCompOff, RosterSwapRequest, RosterEntryChange,
+} = require('../../models/associations');
+const settingsService = require('./rosterSettings.service');
 const User = require('../../models/User');
 const Department = require('../../models/Department');
 const { NotFoundError, ForbiddenError, ValidationError } = require('../../utils/errors');
@@ -62,11 +65,27 @@ const weekLabel = (dateStr) => {
 };
 
 /**
- * Company rule: when a month has a 5th Saturday, everybody works it.
- * The 1st–4th Saturdays always fall on days 1–28, so any Saturday dated 29+ is
- * by definition the 5th of its month.
+ * When a month has a 5th Saturday, everybody works it (configurable in roster
+ * settings). The 1st–4th Saturdays always fall on days 1–28, so any Saturday
+ * dated 29+ is by definition the 5th of its month.
  */
 const isFifthSaturday = (dateStr) => Number(String(dateStr).slice(8, 10)) >= 29;
+
+/** Append-only status history — RosterEntry keeps only the latest change. */
+const recordChange = async (entry, fromStatus, toStatus, { reason, source, userId }, transaction) => {
+  if (fromStatus === toStatus) return;
+  await RosterEntryChange.create(
+    {
+      rosterEntryId: entry.id,
+      fromStatus: fromStatus || null,
+      toStatus,
+      reason: reason || null,
+      source: source || 'manual',
+      changedById: userId || null,
+    },
+    transaction ? { transaction } : undefined
+  );
+};
 
 /** All Saturday dates in [from, to] inclusive, as YYYY-MM-DD strings. */
 const saturdaysBetween = (from, to) => {
@@ -127,6 +146,9 @@ const getLastStatuses = async (employeeIds, beforeSaturday) => {
   const map = new Map();
   for (const r of rows) {
     if (isFifthSaturday(r.week.saturdayDate)) continue;
+    // Leave and holidays are forced Off — using one as the baseline would hand
+    // the employee a second consecutive Off and drift the alternation.
+    if (r.onLeave || r.isHoliday) continue;
     if (!map.has(r.employeeId)) {
       map.set(r.employeeId, { finalStatus: r.finalStatus, saturdayDate: r.week.saturdayDate });
     }
@@ -154,27 +176,92 @@ const generateEntries = async (week, user) => {
   const missing = employees.filter((e) => !have.has(e.id));
   if (!missing.length) return 0;
 
-  // Company rule: a 5th Saturday is a full-strength working day for everyone.
-  const fifth = isFifthSaturday(week.saturdayDate);
-  const lastMap = fifth ? new Map() : await getLastStatuses(missing.map((e) => e.id), week.saturdayDate);
+  const settings = await settingsService.getSettings();
+  const date = String(week.saturdayDate).slice(0, 10);
+
+  // Calendar context: a company holiday makes the whole Saturday off, and
+  // anyone on leave that day is never rostered Working.
+  const [holidays, onLeave] = await Promise.all([
+    settingsService.getHolidayDates(date, date),
+    settingsService.getEmployeesOnLeave(date),
+  ]);
+  const isHoliday = holidays.has(date);
+
+  // A 5th Saturday is a full-strength working day for everyone, unless the
+  // company has switched that rule off.
+  const fifth = settings.fifthSaturdayWorking && isFifthSaturday(date);
+  const lastMap = fifth || isHoliday
+    ? new Map()
+    : await getLastStatuses(missing.map((e) => e.id), date);
 
   const payload = missing.map((emp) => {
+    const leave = onLeave.has(String(emp.id));
     const last = lastMap.get(emp.id);
-    const proposed = fifth
-      ? ROSTER_STATUS.WORKING
-      : last && last.finalStatus === ROSTER_STATUS.WORKING
-        ? ROSTER_STATUS.OFF
-        : ROSTER_STATUS.WORKING;
+
+    let proposed;
+    if (isHoliday || leave) proposed = ROSTER_STATUS.OFF;
+    else if (fifth) proposed = ROSTER_STATUS.WORKING;
+    else proposed = last && last.finalStatus === ROSTER_STATUS.WORKING ? ROSTER_STATUS.OFF : ROSTER_STATUS.WORKING;
+
     return {
       rosterWeekId: week.id,
       employeeId: emp.id,
       managerId: emp.managerId || null,
       plannedStatus: proposed,
       finalStatus: proposed,
+      onLeave: leave,
+      isHoliday,
     };
   });
   await RosterEntry.bulkCreate(payload);
   return payload.length;
+};
+
+/**
+ * Re-apply calendar rules to a week that already has entries.
+ *
+ * Leave and holidays are usually recorded *after* a roster has been drafted, so
+ * generation alone isn't enough — without this, someone who books leave on
+ * Monday stays rostered Working for Saturday. Only unpublished entries are
+ * touched; a published roster changes one person at a time, with a reason.
+ */
+const refreshCalendarFlags = async (week, user) => {
+  const date = String(week.saturdayDate).slice(0, 10);
+  const [holidays, onLeave] = await Promise.all([
+    settingsService.getHolidayDates(date, date),
+    settingsService.getEmployeesOnLeave(date),
+  ]);
+  const isHoliday = holidays.has(date);
+
+  const entries = await RosterEntry.findAll({ where: { rosterWeekId: week.id, isPublished: false } });
+  let changed = 0;
+
+  for (const entry of entries) {
+    const leave = onLeave.has(String(entry.employeeId));
+    const patch = {};
+    if (entry.onLeave !== leave) patch.onLeave = leave;
+    if (entry.isHoliday !== isHoliday) patch.isHoliday = isHoliday;
+
+    // Someone newly on leave, or a newly declared holiday, must not stay Working
+    if ((leave || isHoliday) && entry.finalStatus === ROSTER_STATUS.WORKING) {
+      patch.plannedStatus = ROSTER_STATUS.OFF;
+      patch.finalStatus = ROSTER_STATUS.OFF;
+    }
+
+    if (Object.keys(patch).length) {
+      const previous = entry.finalStatus;
+      await entry.update(patch);
+      if (patch.finalStatus) {
+        await recordChange(entry, previous, patch.finalStatus, {
+          source: isHoliday ? 'holiday' : 'leave',
+          reason: isHoliday ? (holidays.get(date) || 'Company holiday') : 'On leave',
+          userId: user?._id || null,
+        });
+      }
+      changed += 1;
+    }
+  }
+  return changed;
 };
 
 // ── Weeks ─────────────────────────────────────────────────────────────────────
@@ -188,6 +275,8 @@ const getOrCreateWeek = async (saturdayDate, user) => {
     defaults: { label: weekLabel(date), createdById: user._id },
   });
   const generated = await generateEntries(week, user);
+  // Pick up leave/holidays recorded after this week was first drafted
+  await refreshCalendarFlags(week, user);
   if (created || generated > 0) {
     await createAuditLog({
       entityType: 'roster_week',
@@ -309,10 +398,16 @@ const updateEntry = async (entryId, { status, reason }, user) => {
   if (!entry) throw new NotFoundError('Roster entry');
   await assertEntryScope(entry, user);
 
+  if (entry.onLeave && status === ROSTER_STATUS.WORKING) {
+    throw new ValidationError('This employee is on leave for this Saturday. Remove the leave record first.');
+  }
+
   if (!entry.isPublished) {
+    const previous = entry.finalStatus;
     entry.plannedStatus = status;
     entry.finalStatus = status;
     await entry.save();
+    await recordChange(entry, previous, status, { source: 'manual', userId: user._id });
     return entry;
   }
 
@@ -327,6 +422,11 @@ const updateEntry = async (entryId, { status, reason }, user) => {
   entry.changedById = user._id;
   entry.changedAt = new Date();
   await entry.save();
+  await recordChange(entry, oldStatus, status, {
+    reason: entry.changeReason,
+    source: 'manual',
+    userId: user._id,
+  });
 
   let compOffGranted = false;
   if (oldStatus === ROSTER_STATUS.OFF && status === ROSTER_STATUS.WORKING) {
@@ -369,6 +469,67 @@ const updateEntry = async (entryId, { status, reason }, user) => {
   return entry;
 };
 
+// ── Bulk actions ──────────────────────────────────────────────────────────────
+/**
+ * Whole-week shortcuts so a manager isn't clicking 87 toggles.
+ *   all_working | all_off | copy_last | invert_last
+ * Only unpublished entries are touched — published rosters must change one at a
+ * time with a reason, so the employee gets a specific explanation.
+ */
+const bulkUpdateWeek = async (weekId, action, user) => {
+  assertRosterManager(user);
+  const allowed = ['all_working', 'all_off', 'copy_last', 'invert_last'];
+  if (!allowed.includes(action)) throw new ValidationError(`Action must be one of: ${allowed.join(', ')}`);
+
+  const week = await RosterWeek.findByPk(weekId);
+  if (!week) throw new NotFoundError('Roster week');
+
+  const entries = await RosterEntry.findAll({
+    where: { rosterWeekId: week.id, isPublished: false },
+    include: [{ model: User, as: 'employee', where: scopedEmployeeWhere(user, {}), attributes: ['id'] }],
+  });
+  if (!entries.length) return { updated: 0, skipped: 0 };
+
+  let lastMap = new Map();
+  if (action === 'copy_last' || action === 'invert_last') {
+    lastMap = await getLastStatuses(entries.map((e) => e.employeeId), week.saturdayDate);
+  }
+
+  let updated = 0;
+  let skipped = 0;
+  for (const entry of entries) {
+    // Leave and holidays win over any bulk instruction
+    if (entry.onLeave || entry.isHoliday) { skipped += 1; continue; }
+
+    let next;
+    if (action === 'all_working') next = ROSTER_STATUS.WORKING;
+    else if (action === 'all_off') next = ROSTER_STATUS.OFF;
+    else {
+      const last = lastMap.get(entry.employeeId);
+      if (!last) { skipped += 1; continue; }
+      next = action === 'copy_last'
+        ? last.finalStatus
+        : last.finalStatus === ROSTER_STATUS.WORKING ? ROSTER_STATUS.OFF : ROSTER_STATUS.WORKING;
+    }
+
+    if (entry.finalStatus === next && entry.plannedStatus === next) { skipped += 1; continue; }
+    const previous = entry.finalStatus;
+    await entry.update({ plannedStatus: next, finalStatus: next });
+    await recordChange(entry, previous, next, { source: 'bulk', reason: `Bulk action: ${action}`, userId: user._id });
+    updated += 1;
+  }
+
+  await createAuditLog({
+    entityType: 'roster_week',
+    entityId: week.id,
+    action: 'bulk_updated',
+    changedBy: user._id,
+    newValue: { action, updated, skipped },
+  });
+
+  return { updated, skipped };
+};
+
 // ── Publish ───────────────────────────────────────────────────────────────────
 const publishWeek = async (weekId, user) => {
   assertRosterManager(user);
@@ -387,6 +548,22 @@ const publishWeek = async (weekId, user) => {
     ],
   });
   if (!entries.length) return { published: 0 };
+
+  // Coverage guardrail — refuse to publish a Saturday that leaves the team
+  // under-staffed. A holiday Saturday is exempt, since everyone is off by design.
+  const settings = await settingsService.getSettings();
+  const holidays = await settingsService.getHolidayDates(week.saturdayDate, week.saturdayDate);
+  if (settings.minCoveragePercent > 0 && !holidays.has(String(week.saturdayDate).slice(0, 10))) {
+    const eligible = entries.filter((e) => !e.onLeave);
+    const working = eligible.filter((e) => e.finalStatus === ROSTER_STATUS.WORKING).length;
+    const pct = eligible.length ? Math.round((working / eligible.length) * 100) : 0;
+    if (eligible.length && pct < settings.minCoveragePercent) {
+      throw new ValidationError(
+        `Only ${pct}% of the team is Working this Saturday (${working} of ${eligible.length}). ` +
+        `Minimum coverage is set to ${settings.minCoveragePercent}%. Adjust the roster or lower the limit in Roster Settings.`
+      );
+    }
+  }
 
   const now = new Date();
   await RosterEntry.update(
@@ -425,13 +602,36 @@ const getMyRoster = async (user) => {
 
   const upcoming = await RosterEntry.findOne({
     where: { employeeId: user._id, isPublished: true },
-    include: [{ model: RosterWeek, as: 'week', where: { saturdayDate: { [Op.gte]: today } } }],
+    include: [
+      { model: RosterWeek, as: 'week', where: { saturdayDate: { [Op.gte]: today } } },
+      {
+        model: RosterEntryChange,
+        as: 'changes',
+        required: false,
+        // separate query: a hasMany join here would push Sequelize into a
+        // subquery and break the ORDER BY on week.saturdayDate
+        separate: true,
+        include: [{ model: User, as: 'changedBy', attributes: ['id', 'name'] }],
+      },
+    ],
     order: [[{ model: RosterWeek, as: 'week' }, 'saturdayDate', 'ASC']],
   });
 
   const history = await RosterEntry.findAll({
     where: { employeeId: user._id, isPublished: true },
-    include: [{ model: RosterWeek, as: 'week', where: { saturdayDate: { [Op.lt]: today } } }],
+    include: [
+      { model: RosterWeek, as: 'week', where: { saturdayDate: { [Op.lt]: today } } },
+      // "Who changed my Saturday, and why" — full trail, not just the last edit
+      {
+        model: RosterEntryChange,
+        as: 'changes',
+        required: false,
+        // separate query: a hasMany join here would push Sequelize into a
+        // subquery and break the ORDER BY on week.saturdayDate
+        separate: true,
+        include: [{ model: User, as: 'changedBy', attributes: ['id', 'name'] }],
+      },
+    ],
     order: [[{ model: RosterWeek, as: 'week' }, 'saturdayDate', 'DESC']],
     limit: 12,
   });
@@ -455,6 +655,38 @@ const getMyRoster = async (user) => {
     compOffBalance,
     stats: { recentSaturdays: history.length, workedCount, offCount: history.length - workedCount },
   };
+};
+
+// ── Auto-creation ─────────────────────────────────────────────────────────────
+/**
+ * Ensure the next N Saturdays exist with entries generated, so managers arrive
+ * to a pre-filled draft instead of creating each week by hand. Runs from the
+ * daily cron as a system user (admin scope = every team).
+ */
+const ensureUpcomingWeeks = async () => {
+  const settings = await settingsService.getSettings();
+  if (!settings.autoCreateEnabled) return { created: 0, skipped: 'disabled' };
+
+  const systemUser = { role: 'admin', _id: null };
+  const created = [];
+
+  const d = new Date(`${nextSaturdayStr()}T00:00:00`);
+  for (let i = 0; i < settings.autoCreateWeeksAhead; i += 1) {
+    const date = toDateStr(d);
+    const [week, isNew] = await RosterWeek.findOrCreate({
+      where: { saturdayDate: date },
+      defaults: { label: weekLabel(date), createdById: null },
+    });
+    const generated = await generateEntries(week, systemUser);
+    await refreshCalendarFlags(week, systemUser);
+    if (isNew || generated > 0) created.push({ date, entries: generated, newWeek: isNew });
+    d.setDate(d.getDate() + 7);
+  }
+
+  if (created.length) {
+    console.log('[Roster] auto-created weeks:', created.map((c) => `${c.date}(${c.entries})`).join(' '));
+  }
+  return { created: created.length, weeks: created };
 };
 
 // ── Module dashboard ──────────────────────────────────────────────────────────
@@ -829,7 +1061,9 @@ module.exports = {
   listWeeks,
   getWeekDetail,
   updateEntry,
+  bulkUpdateWeek,
   publishWeek,
+  ensureUpcomingWeeks,
   getMyRoster,
   getRosterDashboard,
   getEmployeeHistory,

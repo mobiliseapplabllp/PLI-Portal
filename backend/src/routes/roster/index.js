@@ -30,6 +30,21 @@ router.get('/weeks/:weekId/export', authorize(...MANAGERS), ctrl.exportWeek);
 
 // Entries
 router.put('/entries/:entryId', authorize(...MANAGERS), updateEntryValidator, validate, ctrl.updateEntry);
+router.post('/weeks/:weekId/bulk', authorize(...MANAGERS), ctrl.bulkUpdateWeek);
+
+// Settings — admin/HR only (service re-asserts)
+router.get('/settings', authorize(...MANAGERS), ctrl.getSettings);
+router.put('/settings', authorize('admin', 'hr_admin'), ctrl.updateSettings);
+
+// Company holidays
+router.get('/holidays', authorize(...ALL), ctrl.listHolidays);
+router.post('/holidays', authorize('admin', 'hr_admin'), ctrl.createHoliday);
+router.delete('/holidays/:id', authorize('admin', 'hr_admin'), ctrl.deleteHoliday);
+
+// Leave — managers record it for their own team, admin/HR for anyone
+router.get('/leaves', authorize(...ALL), ctrl.listLeaves);
+router.post('/leaves', authorize(...MANAGERS), ctrl.createLeave);
+router.delete('/leaves/:id', authorize(...MANAGERS), ctrl.deleteLeave);
 
 // Employee history + coverage dashboard
 router.get('/history/:employeeId', authorize(...MANAGERS), ctrl.getEmployeeHistory);

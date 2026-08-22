@@ -1,6 +1,7 @@
 const rosterService = require('../../services/roster/roster.service');
 const swapService = require('../../services/roster/rosterSwap.service');
 const compOffService = require('../../services/roster/rosterCompOff.service');
+const settingsService = require('../../services/roster/rosterSettings.service');
 const { sendSuccess } = require('../../utils/response');
 
 // ── Weeks ─────────────────────────────────────────────────────────────────────
@@ -129,8 +130,78 @@ const availCompOff = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
+// ── Bulk actions ──────────────────────────────────────────────────────────────
+const bulkUpdateWeek = async (req, res, next) => {
+  try {
+    const r = await rosterService.bulkUpdateWeek(req.params.weekId, req.body.action, req.user);
+    sendSuccess(res, r, `${r.updated} entr${r.updated === 1 ? 'y' : 'ies'} updated${r.skipped ? `, ${r.skipped} skipped` : ''}`);
+  } catch (err) { next(err); }
+};
+
+// ── Settings ──────────────────────────────────────────────────────────────────
+const getSettings = async (req, res, next) => {
+  try {
+    sendSuccess(res, await settingsService.getSettings());
+  } catch (err) { next(err); }
+};
+
+const updateSettings = async (req, res, next) => {
+  try {
+    sendSuccess(res, await settingsService.updateSettings(req.body, req.user), 'Roster settings saved');
+  } catch (err) { next(err); }
+};
+
+// ── Holidays ──────────────────────────────────────────────────────────────────
+const listHolidays = async (req, res, next) => {
+  try {
+    sendSuccess(res, await settingsService.listHolidays(req.query));
+  } catch (err) { next(err); }
+};
+
+const createHoliday = async (req, res, next) => {
+  try {
+    sendSuccess(res, await settingsService.createHoliday(req.body, req.user), 'Holiday added', 201);
+  } catch (err) { next(err); }
+};
+
+const deleteHoliday = async (req, res, next) => {
+  try {
+    await settingsService.deleteHoliday(req.params.id, req.user);
+    sendSuccess(res, null, 'Holiday removed');
+  } catch (err) { next(err); }
+};
+
+// ── Leave ─────────────────────────────────────────────────────────────────────
+const listLeaves = async (req, res, next) => {
+  try {
+    sendSuccess(res, await settingsService.listLeaves(req.user, req.query));
+  } catch (err) { next(err); }
+};
+
+const createLeave = async (req, res, next) => {
+  try {
+    sendSuccess(res, await settingsService.createLeave(req.body, req.user), 'Leave recorded', 201);
+  } catch (err) { next(err); }
+};
+
+const deleteLeave = async (req, res, next) => {
+  try {
+    await settingsService.deleteLeave(req.params.id, req.user);
+    sendSuccess(res, null, 'Leave removed');
+  } catch (err) { next(err); }
+};
+
 module.exports = {
   listWeeks,
+  bulkUpdateWeek,
+  getSettings,
+  updateSettings,
+  listHolidays,
+  createHoliday,
+  deleteHoliday,
+  listLeaves,
+  createLeave,
+  deleteLeave,
   createWeek,
   getWeek,
   publishWeek,

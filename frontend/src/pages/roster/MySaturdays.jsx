@@ -230,7 +230,27 @@ export default function MySaturdays() {
                         h.finalStatus === 'working' ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-200 text-gray-600'
                       }`}>{h.finalStatus === 'working' ? 'Working' : 'Off'}</span>
                     </td>
-                    <td className="py-2 text-xs text-gray-500">{h.changeReason || '—'}</td>
+                    <td className="py-2 text-xs text-gray-500">
+                      {h.changes?.length ? (
+                        <div className="space-y-0.5">
+                          {h.changes.map((c) => (
+                            <div key={c._id || c.id}>
+                              <span className="text-gray-400">
+                                {c.fromStatus ? `${c.fromStatus === 'working' ? 'Working' : 'Off'} → ` : ''}
+                              </span>
+                              <span className={c.toStatus === 'working' ? 'text-emerald-600' : 'text-gray-600'}>
+                                {c.toStatus === 'working' ? 'Working' : 'Off'}
+                              </span>
+                              {c.changedBy?.name && <span className="text-gray-400"> by {c.changedBy.name}</span>}
+                              {c.source !== 'manual' && <span className="text-gray-300"> ({c.source})</span>}
+                              {c.reason && <div className="text-gray-400 italic">{c.reason}</div>}
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        h.changeReason || '—'
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>

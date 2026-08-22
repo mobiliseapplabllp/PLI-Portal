@@ -33,6 +33,22 @@ export const acceptSwapApi = (id) => api.post(`/roster/swaps/${id}/accept`);
 export const decideSwapApi = (id, action, comment) => api.post(`/roster/swaps/${id}/decide`, { action, comment });
 export const cancelSwapApi = (id) => api.post(`/roster/swaps/${id}/cancel`);
 
+// ── Bulk actions ──────────────────────────────────────────────────────────────
+// action: 'all_working' | 'all_off' | 'copy_last' | 'invert_last'
+export const bulkUpdateWeekApi = (weekId, action) => api.post(`/roster/weeks/${weekId}/bulk`, { action });
+
+// ── Settings, holidays and leave ──────────────────────────────────────────────
+export const getRosterSettingsApi = () => api.get('/roster/settings');
+export const updateRosterSettingsApi = (data) => api.put('/roster/settings', data);
+
+export const listHolidaysApi = (params) => api.get('/roster/holidays', { params });
+export const createHolidayApi = (holidayDate, name) => api.post('/roster/holidays', { holidayDate, name });
+export const deleteHolidayApi = (id) => api.delete(`/roster/holidays/${id}`);
+
+export const listLeavesApi = (params) => api.get('/roster/leaves', { params });
+export const createLeaveApi = (data) => api.post('/roster/leaves', data);
+export const deleteLeaveApi = (id) => api.delete(`/roster/leaves/${id}`);
+
 // ── Comp-offs ─────────────────────────────────────────────────────────────────
 export const listCompOffsApi = (params) => api.get('/roster/comp-offs', { params });
 export const availCompOffApi = (id, availedDate) => api.patch(`/roster/comp-offs/${id}/avail`, { availedDate });

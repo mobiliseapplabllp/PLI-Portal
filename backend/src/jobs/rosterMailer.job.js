@@ -1,11 +1,14 @@
 /**
- * Saturday Rostering mailer — two IST-pinned schedules:
- *  1. Wednesday 10:30 IST — weekly digest: every published employee gets their
- *     upcoming-Saturday status; every manager gets their team's roster table.
- *  2. Friday 10:00 IST — reminder to employees rostered WORKING for tomorrow.
+ * Saturday Rostering scheduled work — all IST, all driven by roster_settings
+ * rather than hardcoded times:
+ *   1. Weekly digest    — every employee gets their upcoming-Saturday status,
+ *                         every manager gets their team's table
+ *   2. Working reminder — to those rostered WORKING for tomorrow
+ *   3. Auto-create      — keeps the next N Saturdays drafted so managers arrive
+ *                         to a pre-filled roster (daily, 06:00 IST)
  *
- * Idempotency: per-entry digestSentAt / reminderSentAt stamps — a re-run the same
- * day (or a late publish before Friday) never double-sends.
+ * Idempotency: per-entry digestSentAt / reminderSentAt stamps, so a re-run on
+ * the same day (or a late publish) never double-sends.
  */
 const cron = require('node-cron');
 const { Op } = require('sequelize');
@@ -51,15 +54,14 @@ const loadPublishedEntries = async (saturdayDate, extraWhere = {}) => {
 };
 
 const runWeeklyDigest = async () => {
+  const settings = await require('../services/roster/rosterSettings.service').getSettings();
+  if (!settings.digestEnabled) { console.log('[Roster] digest disabled in settings — skipping'); return; }
+
   const saturday = nextSaturdayStr();
   const dateLabel = prettyDate(saturday);
   const { week, entries } = await loadPublishedEntries(saturday, { digestSentAt: null });
-  if (!week) {
-    console.log(`[Roster] Digest: no roster week for ${saturday} — skipping`);
-    return;
-  }
+  if (!week) { console.log(`[Roster] Digest: no roster week for ${saturday} — skipping`); return; }
 
-  // 1. Employee digests
   let sent = 0;
   for (const e of entries) {
     if (!e.employee?.email) continue;
@@ -72,8 +74,7 @@ const runWeeklyDigest = async () => {
     }
   }
 
-  // 2. Manager team digests — group ALL published entries (not only un-digested)
-  //    by the employee's current manager so managers always get the full table.
+  // Manager digests use ALL published entries so the table is complete
   const { entries: allPublished } = await loadPublishedEntries(saturday);
   const byManager = new Map();
   for (const e of allPublished) {
@@ -104,17 +105,18 @@ const runWeeklyDigest = async () => {
   console.log(`[Roster] Digest for ${saturday}: ${sent} employee mails, ${byManager.size} manager digests`);
 };
 
-const runFridayReminder = async () => {
+const runReminder = async () => {
+  const settings = await require('../services/roster/rosterSettings.service').getSettings();
+  if (!settings.reminderEnabled) { console.log('[Roster] reminder disabled in settings — skipping'); return; }
+
   const saturday = nextSaturdayStr();
   const dateLabel = prettyDate(saturday);
   const { week, entries } = await loadPublishedEntries(saturday, {
     finalStatus: ROSTER_STATUS.WORKING,
     reminderSentAt: null,
   });
-  if (!week) {
-    console.log(`[Roster] Reminder: no roster week for ${saturday} — skipping`);
-    return;
-  }
+  if (!week) { console.log(`[Roster] Reminder: no roster week for ${saturday} — skipping`); return; }
+
   let sent = 0;
   for (const e of entries) {
     if (!e.employee?.email) continue;
@@ -126,21 +128,55 @@ const runFridayReminder = async () => {
       console.error('[Roster] reminder email failed:', err.message);
     }
   }
-  console.log(`[Roster] Friday reminder for ${saturday}: ${sent} mails`);
+  console.log(`[Roster] Reminder for ${saturday}: ${sent} mails`);
+};
+
+const runAutoCreate = async () => {
+  try {
+    const r = await require('../services/roster/roster.service').ensureUpcomingWeeks();
+    if (r.created) console.log(`[Roster] auto-create: ${r.created} week(s) prepared`);
+  } catch (err) {
+    console.error('[Roster] auto-create failed:', err.message);
+  }
+};
+
+// ── Scheduling ────────────────────────────────────────────────────────────────
+let tasks = [];
+
+const clearTasks = () => {
+  tasks.forEach((t) => { try { t.stop(); } catch { /* already stopped */ } });
+  tasks = [];
+};
+
+const scheduleFromSettings = async () => {
+  const settings = await require('../services/roster/rosterSettings.service').getSettings();
+  clearTasks();
+
+  const [dh, dm] = String(settings.digestTime).split(':').map(Number);
+  const [rh, rm] = String(settings.reminderTime).split(':').map(Number);
+  const opts = { timezone: 'Asia/Kolkata' };
+
+  const safe = (fn, label) => () => fn().catch((e) => console.error(`[Roster] ${label} failed:`, e.message));
+
+  tasks.push(cron.schedule(`${dm} ${dh} * * ${settings.digestDay}`, safe(runWeeklyDigest, 'digest'), opts));
+  tasks.push(cron.schedule(`${rm} ${rh} * * ${settings.reminderDay}`, safe(runReminder, 'reminder'), opts));
+  // Daily at 06:00 IST — keeps upcoming Saturdays drafted
+  tasks.push(cron.schedule('0 6 * * *', safe(runAutoCreate, 'auto-create'), opts));
+
+  const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  console.log(
+    `[Roster] scheduled — digest ${days[settings.digestDay]} ${settings.digestTime} IST` +
+    ` (${settings.digestEnabled ? 'on' : 'off'}), reminder ${days[settings.reminderDay]} ${settings.reminderTime} IST` +
+    ` (${settings.reminderEnabled ? 'on' : 'off'}), auto-create daily 06:00` +
+    ` (${settings.autoCreateEnabled ? `${settings.autoCreateWeeksAhead} weeks ahead` : 'off'})`
+  );
 };
 
 const startRosterMailerJob = () => {
-  // Wednesday 10:30 IST — weekly digest
-  cron.schedule('30 10 * * 3', () => {
-    runWeeklyDigest().catch((err) => console.error('[Roster] digest run failed:', err.message));
-  }, { timezone: 'Asia/Kolkata' });
-
-  // Friday 10:00 IST — working-tomorrow reminder
-  cron.schedule('0 10 * * 5', () => {
-    runFridayReminder().catch((err) => console.error('[Roster] reminder run failed:', err.message));
-  }, { timezone: 'Asia/Kolkata' });
-
-  console.log('[Roster] Mailer scheduled — digest Wed 10:30 IST, reminder Fri 10:00 IST');
+  scheduleFromSettings().catch((err) => console.error('[Roster] scheduling failed:', err.message));
 };
 
-module.exports = { startRosterMailerJob, runWeeklyDigest, runFridayReminder };
+/** Called when an admin saves roster settings, so changes take effect at once. */
+const rescheduleRosterJobs = async () => scheduleFromSettings();
+
+module.exports = { startRosterMailerJob, rescheduleRosterJobs, runWeeklyDigest, runReminder, runAutoCreate };

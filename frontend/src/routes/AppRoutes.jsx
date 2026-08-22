@@ -77,6 +77,7 @@ import RosterBoard from '../pages/roster/RosterBoard';
 import MySaturdays from '../pages/roster/MySaturdays';
 import RosterCoverage from '../pages/roster/RosterCoverage';
 import SwapApprovals from '../pages/roster/SwapApprovals';
+import RosterSettings from '../pages/roster/RosterSettings';
 
 // Common
 import ProfilePage from '../pages/common/ProfilePage';
@@ -204,6 +205,7 @@ export default function AppRoutes() {
         <Route path="/roster/my" element={<RoleRoute roles={ALL_ROLES}><MySaturdays /></RoleRoute>} />
         <Route path="/roster/coverage" element={<RoleRoute roles={['manager', 'senior_manager', 'sales_director', 'admin', 'hr_admin']}><RosterCoverage /></RoleRoute>} />
         <Route path="/roster/swaps" element={<RoleRoute roles={['manager', 'senior_manager', 'sales_director', 'admin', 'hr_admin']}><SwapApprovals /></RoleRoute>} />
+        <Route path="/roster/settings" element={<RoleRoute roles={['manager', 'senior_manager', 'sales_director', 'admin', 'hr_admin']}><RosterSettings /></RoleRoute>} />
       </Route>
 
       <Route path="*" element={<NotFoundPage />} />

@@ -178,6 +178,10 @@ const RosterWeek = require('./roster/RosterWeek');
 const RosterEntry = require('./roster/RosterEntry');
 const RosterCompOff = require('./roster/RosterCompOff');
 const RosterSwapRequest = require('./roster/RosterSwapRequest');
+const RosterSettings = require('./roster/RosterSettings');
+const RosterHoliday = require('./roster/RosterHoliday');
+const RosterLeave = require('./roster/RosterLeave');
+const RosterEntryChange = require('./roster/RosterEntryChange');
 
 RosterWeek.belongsTo(User, { foreignKey: 'createdById', as: 'createdBy' });
 RosterWeek.hasMany(RosterEntry, { foreignKey: 'rosterWeekId', as: 'entries', onDelete: 'CASCADE' });
@@ -199,6 +203,14 @@ RosterSwapRequest.belongsTo(User, { foreignKey: 'decidedById', as: 'decidedBy' }
 RosterSwapRequest.belongsTo(RosterEntry, { foreignKey: 'requesterEntryId', as: 'requesterEntry' });
 RosterSwapRequest.belongsTo(RosterEntry, { foreignKey: 'targetEntryId', as: 'targetEntry' });
 
+RosterHoliday.belongsTo(User, { foreignKey: 'createdById', as: 'createdBy' });
+RosterLeave.belongsTo(User, { foreignKey: 'employeeId', as: 'employee' });
+RosterLeave.belongsTo(User, { foreignKey: 'createdById', as: 'createdBy' });
+
+RosterEntry.hasMany(RosterEntryChange, { foreignKey: 'rosterEntryId', as: 'changes', onDelete: 'CASCADE' });
+RosterEntryChange.belongsTo(RosterEntry, { foreignKey: 'rosterEntryId', as: 'entry' });
+RosterEntryChange.belongsTo(User, { foreignKey: 'changedById', as: 'changedBy' });
+
 // Export PM models so other files can import from associations
 module.exports = {
   Project, ProjectMember, Milestone, Task, DailyStatusLog, ProjectNotificationRecipient, PmSettings,
@@ -208,6 +220,7 @@ module.exports = {
   SurveyDispatchApproval, SurveyDispatchApprovalFeedback,
   // Rostering
   RosterWeek, RosterEntry, RosterCompOff, RosterSwapRequest,
+  RosterSettings, RosterHoliday, RosterLeave, RosterEntryChange,
   // Auth
   LoginOtp,
 };

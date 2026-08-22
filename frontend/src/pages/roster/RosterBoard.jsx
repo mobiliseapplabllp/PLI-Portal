@@ -13,7 +13,7 @@ import TableSkeleton from '../../components/common/TableSkeleton';
 import EmptyState from '../../components/common/EmptyState';
 import {
   listRosterWeeksApi, createRosterWeekApi, getRosterWeekApi,
-  publishRosterWeekApi, exportRosterWeekApi, updateRosterEntryApi,
+  publishRosterWeekApi, exportRosterWeekApi, updateRosterEntryApi, bulkUpdateWeekApi,
 } from '../../api/roster.api';
 import { getDepartmentsApi } from '../../api/departments.api';
 import { getUsersApi } from '../../api/users.api';
@@ -197,6 +197,19 @@ export default function RosterBoard() {
     }
   };
 
+  const handleBulk = async (action) => {
+    setSaving(true);
+    try {
+      const res = await bulkUpdateWeekApi(data.week._id || data.week.id, action);
+      toast.success(res.data.message || 'Roster updated');
+      await load(selectedDate);
+    } catch (err) {
+      toast.error(err.response?.data?.error?.message || 'Bulk update failed');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const handleExport = async () => {
     try {
       const res = await exportRosterWeekApi(data.week._id || data.week.id);
@@ -307,6 +320,33 @@ export default function RosterBoard() {
             </div>
           </>
         )}
+        {/* Bulk actions — drafts only; published entries need a per-person reason */}
+        {unpublished > 0 && (
+          <div className="flex items-end gap-1.5">
+            <div>
+              <label className="label-text">Bulk fill drafts</label>
+              <div className="flex gap-1.5">
+                {[
+                  { key: 'invert_last', label: 'Alternate from last' },
+                  { key: 'copy_last', label: 'Copy last' },
+                  { key: 'all_working', label: 'All working' },
+                  { key: 'all_off', label: 'All off' },
+                ].map((b) => (
+                  <button
+                    key={b.key}
+                    type="button"
+                    disabled={saving}
+                    onClick={() => handleBulk(b.key)}
+                    className="px-2.5 py-2 text-xs font-medium rounded-lg border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+                  >
+                    {b.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
         {stats && (
           <div className="flex gap-3 ml-auto text-sm">
             <span className="px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 font-semibold">{stats.working} Working</span>
@@ -344,7 +384,19 @@ export default function RosterBoard() {
                 return (
                   <tr key={e._id || e.id} className={changed ? 'bg-amber-50/60' : ''}>
                     <td className="px-4 py-3">
-                      <div className="font-medium text-gray-800">{e.employee?.name}</div>
+                      <div className="font-medium text-gray-800 flex items-center gap-2">
+                        {e.employee?.name}
+                        {e.onLeave && (
+                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-sky-100 text-sky-700" title="On leave — cannot be rostered Working">
+                            ON LEAVE
+                          </span>
+                        )}
+                        {e.isHoliday && (
+                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-violet-100 text-violet-700" title="Company holiday">
+                            HOLIDAY
+                          </span>
+                        )}
+                      </div>
                       <div className="text-xs text-gray-400">
                         {e.employee?.employeeCode}
                         {e.employee?.department?.name ? ` · ${e.employee.department.name}` : ''}

@@ -292,6 +292,7 @@ const rosterManagerItems = [
   { to: '/roster/board', label: 'Saturday Roster', icon: HiOutlineCalendar },
   { to: '/roster/swaps', label: 'Swaps & Comp-Offs', icon: HiOutlineSwitchHorizontal },
   { to: '/roster/coverage', label: 'Coverage', icon: HiOutlineChartBar },
+  { to: '/roster/settings', label: 'Roster Settings', icon: HiOutlineCog },
   { to: '/roster/my', label: 'My Saturdays', icon: HiOutlineClipboardCheck },
 ];
 

@@ -22,6 +22,10 @@ const RosterEntry = sequelize.define(
       allowNull: false,
       defaultValue: ROSTER_STATUS.WORKING,
     },
+    // Why this entry is Off, when it isn't simple alternation. Set at generation
+    // and refreshed while the week is still a draft.
+    onLeave: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+    isHoliday: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
     changeReason: { type: DataTypes.STRING(512), allowNull: true },
     changedById: { type: DataTypes.UUID, allowNull: true },
     changedAt: { type: DataTypes.DATE, allowNull: true },
