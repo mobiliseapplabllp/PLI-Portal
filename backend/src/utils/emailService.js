@@ -40,7 +40,9 @@ const sendEmail = async (to, subject, html) => {
       return null;
     }
 
-    const from = process.env.SMTP_FROM || process.env.SMTP_USER;
+    // Fall back to a named sender rather than a bare address, so mail still
+    // arrives as "Lakshya Portal" on environments where SMTP_FROM is unset.
+    const from = process.env.SMTP_FROM || `Lakshya Portal <${process.env.SMTP_USER}>`;
     const info = await t.sendMail({ from, to, subject, html });
     console.log('[Email] Sent to', to, '— messageId:', info.messageId);
     return info;
