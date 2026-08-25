@@ -207,6 +207,11 @@ const HdTicket = sequelize.define('HdTicket', {
     defaultValue: 0,
     field:        'reopen_count',
   },
+  billable: {
+    type:         DataTypes.ENUM('Billable', 'Non-Billable'),
+    allowNull:    false,
+    defaultValue: 'Non-Billable',
+  },
 }, {
   tableName:  'hd_tickets',
   underscored: true,

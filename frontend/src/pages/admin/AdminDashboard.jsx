@@ -180,10 +180,10 @@ export default function AdminDashboard() {
           <h3 className="text-lg font-semibold text-gray-800 mb-4">Department Completion</h3>
           {data?.departmentSummary?.length > 0 ? (
             <div className="space-y-4">
-              {data.departmentSummary.map((dept) => {
+              {data.departmentSummary.map((dept, i) => {
                 const completionPct = dept.total > 0 ? Math.round((dept.locked / dept.total) * 100) : 0;
                 return (
-                  <div key={dept._id || 'unassigned'}>
+                  <div key={dept._id || `unassigned-${i}`}>
                     <div className="flex items-center justify-between mb-1">
                       <span className="text-sm font-medium text-gray-700">{dept._id || 'Unassigned'}</span>
                       <div className="flex items-center gap-3">
@@ -224,9 +224,9 @@ export default function AdminDashboard() {
             </span>
           </div>
           <div className="space-y-2">
-            {pendingByDept.map((dept) => (
+            {pendingByDept.map((dept, i) => (
               <div
-                key={dept.departmentId || dept.departmentName}
+                key={dept.departmentId || dept.departmentName || `dept-${i}`}
                 className="flex items-center justify-between p-3 rounded-lg bg-amber-50 border border-amber-100 hover:bg-amber-100 transition-colors cursor-pointer"
                 onClick={() => navigate(`/admin/review?dept=${dept.departmentId}&status=manager_reviewed`)}
               >
@@ -262,10 +262,10 @@ export default function AdminDashboard() {
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
-                {data.departmentSummary.map((d) => {
+                {data.departmentSummary.map((d, i) => {
                   const pct = d.total > 0 ? Math.round((d.locked / d.total) * 100) : 0;
                   return (
-                    <tr key={d._id || 'unassigned'} className="hover:bg-gray-50">
+                    <tr key={d._id || `unassigned-${i}`} className="hover:bg-gray-50">
                       <td className="px-4 py-3 text-sm font-medium text-gray-900">{d._id || 'Unassigned'}</td>
                       <td className="px-4 py-3 text-sm text-gray-600">{d.total}</td>
                       <td className="px-4 py-3 text-sm text-gray-600">{d.locked}</td>

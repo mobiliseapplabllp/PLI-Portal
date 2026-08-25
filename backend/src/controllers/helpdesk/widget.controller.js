@@ -79,7 +79,15 @@ const submitWidgetTicket = async (req, res, next) => {
     if (!category) return sendError(res, 'category is required', 400);
 
     const project = await HdProject.findOne({ where: { publicToken: token } });
-    if (!project) return sendError(res, 'Invalid widget token', 404);
+    if (!project) {
+      return sendError(res, 'Invalid or expired widget token', 401);
+    }
+    if (!project.publicToken || project.publicToken !== token) {
+      return sendError(res, 'Widget token mismatch', 401);
+    }
+    if (project.status && project.status !== 'Active') {
+      return sendError(res, 'This project is not accepting submissions', 403);
+    }
 
     const t = await sequelize.transaction();
     try {

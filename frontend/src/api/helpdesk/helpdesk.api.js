@@ -8,7 +8,7 @@ export const deleteTicketApi      = (id)         => api.delete(`/helpdesk/ticket
 export const bulkAssignTicketsApi = (data)       => api.post('/helpdesk/tickets/bulk-assign', data);
 
 export const getGroupsApi         = ()           => api.get('/helpdesk/groups');
-export const getHdProjectsApi     = ()           => api.get('/helpdesk/projects');
+export const getHdProjectsApi     = (groupId)    => api.get('/helpdesk/projects', { params: groupId ? { groupId } : undefined });
 export const getSolutionsApi      = (params)     => api.get('/helpdesk/solutions', { params });
 export const getAnnouncementsApi  = ()           => api.get('/helpdesk/announcements');
 export const getDashboardStatsApi = ()           => api.get('/helpdesk/dashboard/stats');
@@ -42,3 +42,9 @@ export const assignUserGroupApi = (userId, groupId) =>
  */
 export const bulkAssignUserGroupsApi = (assignments) =>
   api.put('/helpdesk/user-groups/bulk', { assignments });
+
+// Helpdesk ticket documents
+export const getHdDocumentsApi       = (ticketId)        => api.get(`/helpdesk/tickets/${ticketId}/documents`);
+export const uploadHdDocumentApi     = (ticketId, fd)    => api.post(`/helpdesk/tickets/${ticketId}/documents`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+export const deleteHdDocumentApi     = (ticketId, docId) => api.delete(`/helpdesk/tickets/${ticketId}/documents/${docId}`);
+export const downloadHdDocumentUrl   = (ticketId, docId) => `/api/helpdesk/tickets/${ticketId}/documents/${docId}/download`;

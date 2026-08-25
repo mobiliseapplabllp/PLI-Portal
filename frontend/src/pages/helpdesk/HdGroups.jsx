@@ -38,7 +38,7 @@ export default function HdGroups() {
   useEffect(() => {
     dispatch(fetchGroups());
     // Load all active users — any user can be set as a group manager
-    getUsersApi({ pageSize: 200 })
+    getUsersApi({ limit: 1000 })
       .then(res => setManagers(res.data?.data?.users || res.data?.data || res.data || []))
       .catch(() => {});
   }, [dispatch]);

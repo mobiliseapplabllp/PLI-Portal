@@ -8,19 +8,21 @@ const ProjectNotificationRecipient = require('../../models/pm/ProjectNotificatio
 const User = require('../../models/User');
 const { NotFoundError, ForbiddenError } = require('../../utils/errors');
 const pmSettingsService = require('./pmSettings.service');
+const { createDefaultMilestones } = require('./milestone.service');
 
 const PROJECT_INCLUDE = [
-  { model: User, as: 'owner', attributes: ['id', 'name', 'email', 'designation'] },
+  { model: User, as: 'owner',          attributes: ['id', 'name', 'email', 'designation'] },
+  { model: User, as: 'accountManager', attributes: ['id', 'name', 'email', 'designation'] },
   { model: User, as: 'projectManager', attributes: ['id', 'name', 'email', 'designation'] },
-  { model: User, as: 'createdBy', attributes: ['id', 'name'] },
+  { model: User, as: 'createdBy',      attributes: ['id', 'name'] },
   {
     model: ProjectMember, as: 'members',
     include: [{ model: User, as: 'user', attributes: ['id', 'name', 'email', 'designation', 'role'] }],
   },
-  // Milestones are included in list to support progress calculation on dashboard/project list
+  // Top-level milestones for list-view progress calculation
   {
     model: Milestone, as: 'milestones',
-    attributes: ['id', 'name', 'status', 'endDate', 'completionPercentage', 'order'],
+    attributes: ['id', 'name', 'status', 'endDate', 'completionPercentage', 'weightPercentage', 'isDefault', 'parentMilestoneId', 'order'],
     include: [{ model: User, as: 'accountableUser', attributes: ['id', 'name'] }],
   },
 ];
@@ -30,10 +32,12 @@ function canManageProject(user) {
 }
 
 function isProjectVisible(project, user) {
+  const uid = String(user._id ?? user.id);
   if (['admin', 'md', 'director', 'hr_admin', 'final_approver'].includes(user.role)) return true;
-  if (String(project.managerId) === String(user._id)) return true;
-  if (String(project.ownerId) === String(user._id)) return true;
-  return project.members && project.members.some(m => String(m.userId) === String(user._id));
+  if (String(project.managerId)        === uid) return true;
+  if (String(project.ownerId)          === uid) return true;
+  if (String(project.accountManagerId) === uid) return true;
+  return project.members && project.members.some(m => String(m.userId) === uid);
 }
 
 const getProjects = async (query, user) => {
@@ -94,8 +98,41 @@ const createProject = async (data, user) => {
   const allowed = settings.allowedCreatorRoles || ['admin', 'manager', 'senior_manager'];
   if (!allowed.includes(user.role))
     throw new ForbiddenError(`Your role (${user.role}) is not permitted to create projects`);
-  return Project.create({ ...data, createdById: user._id });
+
+  const {
+    name, description, purpose, clientName, clientEmail, notifyClient,
+    managerId, ownerId, accountManagerId,
+    status, billingType, projectType,
+    startDate, endDate,
+  } = data;
+
+  const project = await Project.create({
+    name, description, purpose, clientName, clientEmail, notifyClient,
+    managerId,
+    ownerId:          ownerId ?? accountManagerId,   // backward compat
+    accountManagerId: accountManagerId ?? ownerId,
+    status:           status      || 'Yet to Start',
+    billingType:      billingType || 'Non-Billable',
+    projectType:      projectType || null,
+    startDate, endDate,
+    createdById: user._id ?? user.id,
+  });
+
+  // Auto-create default milestones from template if projectType is set
+  if (project.projectType) {
+    try {
+      await createDefaultMilestones(project.id, project.projectType);
+    } catch (err) {
+      console.warn('[createProject] Warning: could not create default milestones:', err.message);
+    }
+  }
+
+  return project;
 };
+
+// Lightweight lookup used by the controller for permission checks (no includes, no visibility filter)
+const getProject = async (id) =>
+  Project.findByPk(id, { attributes: ['id', 'managerId', 'ownerId'] });
 
 const updateProject = async (id, data, user) => {
   const project = await Project.findByPk(id);
@@ -103,7 +140,16 @@ const updateProject = async (id, data, user) => {
   if (!canManageProject(user) && String(project.managerId) !== String(user._id)) {
     throw new ForbiddenError('Only project manager or admin can update this project');
   }
-  Object.assign(project, data);
+  // Explicit allowlist keeps updates to known model fields
+  const ALLOWED_FIELDS = [
+    'name', 'description', 'purpose', 'clientName', 'clientEmail', 'notifyClient',
+    'managerId', 'ownerId', 'accountManagerId',
+    'status', 'billingType', 'projectType',
+    'startDate', 'endDate',
+  ];
+  const updateData = {};
+  ALLOWED_FIELDS.forEach((key) => { if (key in data) updateData[key] = data[key]; });
+  Object.assign(project, updateData);
   await project.save();
   return project;
 };
@@ -217,7 +263,7 @@ const removeRecipient = async (projectId, recipientId, user) => {
 };
 
 module.exports = {
-  getProjects, getProjectById, createProject, updateProject, deleteProject, getProjectSummary,
+  getProjects, getProjectById, getProject, createProject, updateProject, deleteProject, getProjectSummary,
   getMembers, addMember, updateMember, removeMember,
   getRecipients, addRecipient, removeRecipient,
 };

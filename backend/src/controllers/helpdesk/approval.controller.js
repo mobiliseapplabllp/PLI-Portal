@@ -128,6 +128,12 @@ const respondApproval = async (req, res, next) => {
     if (approval.status !== APPROVAL_STATUS.PENDING)
       return sendError(res, 'This approval request has already been acted upon', 409);
 
+    // Block if the parent ticket is already closed or resolved
+    const ticketCheck = await HdTicket.findByPk(approval.ticketId, { attributes: ['id', 'status'] });
+    if (ticketCheck && ['closed', 'resolved'].includes(ticketCheck.status)) {
+      return sendError(res, 'The ticket has already been closed', 409);
+    }
+
     const newStatus = action === 'approve' ? APPROVAL_STATUS.APPROVED : APPROVAL_STATUS.REJECTED;
     approval.status = newStatus;
     if (newStatus === APPROVAL_STATUS.APPROVED) approval.approvedAt = new Date();

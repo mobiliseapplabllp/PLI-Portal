@@ -15,13 +15,22 @@ const AuditLog = require('./AuditLog');
 const KpiTemplate = require('./KpiTemplate');
 
 // ── PM Models ─────────────────────────────────────────────────────────────────
-const Project = require('./pm/Project');
-const ProjectMember = require('./pm/ProjectMember');
-const Milestone = require('./pm/Milestone');
-const Task = require('./pm/Task');
-const DailyStatusLog = require('./pm/DailyStatusLog');
+const Project                    = require('./pm/Project');
+const ProjectMember              = require('./pm/ProjectMember');
+const Milestone                  = require('./pm/Milestone');
+const Task                       = require('./pm/Task');
+const DailyStatusLog             = require('./pm/DailyStatusLog');
 const ProjectNotificationRecipient = require('./pm/ProjectNotificationRecipient');
-const PmSettings = require('./pm/PmSettings');
+const PmSettings                 = require('./pm/PmSettings');
+const PmDocument                 = require('./pm/PmDocument');
+// Phase 2 new models
+const PmProjectType              = require('./pm/PmProjectType');
+const PmStatus                   = require('./pm/PmStatus');
+const PmMilestoneTemplate        = require('./pm/PmMilestoneTemplate');
+const PmStatusReport             = require('./pm/PmStatusReport');
+const PmRaidItem                 = require('./pm/PmRaidItem');
+const PmFinancialDetail          = require('./pm/PmFinancialDetail');
+const PmClosure                  = require('./pm/PmClosure');
 
 // ── User ─────────────────────────────────────────────────────────────────────
 User.belongsTo(Department, { foreignKey: 'departmentId', as: 'department' });
@@ -85,31 +94,54 @@ AuditLog.belongsTo(User, { foreignKey: 'changedById', as: 'changedBy' });
 KpiTemplate.belongsTo(User, { foreignKey: 'createdById', as: 'createdBy' });
 
 // ── Project ───────────────────────────────────────────────────────────────────
-Project.belongsTo(User, { foreignKey: 'ownerId', as: 'owner' });
-Project.belongsTo(User, { foreignKey: 'managerId', as: 'projectManager' });
-Project.belongsTo(User, { foreignKey: 'createdById', as: 'createdBy' });
-Project.hasMany(ProjectMember, { foreignKey: 'projectId', as: 'members', onDelete: 'CASCADE' });
-Project.hasMany(Milestone, { foreignKey: 'projectId', as: 'milestones', onDelete: 'CASCADE' });
-Project.hasMany(Task, { foreignKey: 'projectId', as: 'tasks', onDelete: 'CASCADE' });
-Project.hasMany(DailyStatusLog, { foreignKey: 'projectId', as: 'dailyLogs', onDelete: 'CASCADE' });
-Project.hasMany(ProjectNotificationRecipient, { foreignKey: 'projectId', as: 'notificationRecipients', onDelete: 'CASCADE' });
+Project.belongsTo(User, { foreignKey: 'ownerId',          as: 'owner' });
+Project.belongsTo(User, { foreignKey: 'accountManagerId', as: 'accountManager' });
+Project.belongsTo(User, { foreignKey: 'managerId',        as: 'projectManager' });
+Project.belongsTo(User, { foreignKey: 'createdById',      as: 'createdBy' });
+Project.hasMany(ProjectMember,               { foreignKey: 'projectId', as: 'members',               onDelete: 'CASCADE' });
+Project.hasMany(Milestone,                   { foreignKey: 'projectId', as: 'milestones',             onDelete: 'CASCADE' });
+Project.hasMany(Task,                        { foreignKey: 'projectId', as: 'tasks',                  onDelete: 'CASCADE' });
+Project.hasMany(DailyStatusLog,              { foreignKey: 'projectId', as: 'dailyLogs',             onDelete: 'CASCADE' });
+Project.hasMany(ProjectNotificationRecipient,{ foreignKey: 'projectId', as: 'notificationRecipients', onDelete: 'CASCADE' });
+Project.hasMany(PmStatusReport,              { foreignKey: 'projectId', as: 'statusReports',          onDelete: 'CASCADE' });
+Project.hasMany(PmRaidItem,                  { foreignKey: 'projectId', as: 'raidItems',              onDelete: 'CASCADE' });
+Project.hasOne (PmFinancialDetail,           { foreignKey: 'projectId', as: 'financialDetail',        onDelete: 'CASCADE' });
+Project.hasOne (PmClosure,                   { foreignKey: 'projectId', as: 'closure',                onDelete: 'CASCADE' });
 
 ProjectMember.belongsTo(Project, { foreignKey: 'projectId', as: 'project' });
-ProjectMember.belongsTo(User, { foreignKey: 'userId', as: 'user' });
+ProjectMember.belongsTo(User,    { foreignKey: 'userId',    as: 'user' });
 
-Milestone.belongsTo(Project, { foreignKey: 'projectId', as: 'project' });
-Milestone.belongsTo(User, { foreignKey: 'accountableUserId', as: 'accountableUser' });
-Milestone.hasMany(Task, { foreignKey: 'milestoneId', as: 'tasks', onDelete: 'CASCADE' });
+// ── Milestone self-association (parent → sub-milestones) ──────────────────────
+Milestone.belongsTo(Project,   { foreignKey: 'projectId',         as: 'project' });
+Milestone.belongsTo(User,      { foreignKey: 'accountableUserId', as: 'accountableUser' });
+Milestone.belongsTo(Milestone, { foreignKey: 'parentMilestoneId', as: 'parent',        constraints: false });
+Milestone.hasMany  (Milestone, { foreignKey: 'parentMilestoneId', as: 'subMilestones', constraints: false });
+Milestone.hasMany  (Task,      { foreignKey: 'milestoneId',       as: 'tasks',         onDelete: 'CASCADE' });
 
 Task.belongsTo(Milestone, { foreignKey: 'milestoneId', as: 'milestone' });
-Task.belongsTo(Project, { foreignKey: 'projectId', as: 'project' });
-Task.belongsTo(User, { foreignKey: 'assignedToId', as: 'assignedTo' });
+Task.belongsTo(Project,   { foreignKey: 'projectId',   as: 'project' });
+Task.belongsTo(User,      { foreignKey: 'assignedToId',as: 'assignedTo' });
 
-DailyStatusLog.belongsTo(Project, { foreignKey: 'projectId', as: 'project' });
-DailyStatusLog.belongsTo(User, { foreignKey: 'createdById', as: 'createdBy' });
+DailyStatusLog.belongsTo(Project, { foreignKey: 'projectId',  as: 'project' });
+DailyStatusLog.belongsTo(User,    { foreignKey: 'createdById', as: 'createdBy' });
 
 ProjectNotificationRecipient.belongsTo(Project, { foreignKey: 'projectId', as: 'project' });
-ProjectNotificationRecipient.belongsTo(User, { foreignKey: 'userId', as: 'user' });
+ProjectNotificationRecipient.belongsTo(User,    { foreignKey: 'userId',    as: 'user' });
+
+// ── PM Sub-resource associations ──────────────────────────────────────────────
+PmStatusReport.belongsTo(Project, { foreignKey: 'projectId',  as: 'project',   constraints: false });
+PmStatusReport.belongsTo(User,    { foreignKey: 'createdById', as: 'createdBy', constraints: false });
+
+PmRaidItem.belongsTo(Project, { foreignKey: 'projectId',  as: 'project',   constraints: false });
+PmRaidItem.belongsTo(User,    { foreignKey: 'createdById', as: 'createdBy', constraints: false });
+
+PmFinancialDetail.belongsTo(Project, { foreignKey: 'projectId', as: 'project', constraints: false });
+
+PmClosure.belongsTo(Project, { foreignKey: 'projectId',   as: 'project',   constraints: false });
+PmClosure.belongsTo(User,    { foreignKey: 'signedOffById',as: 'signedOffBy', constraints: false });
+
+// ── PmDocument (polymorphic via entityType + entityId) ────────────────────────
+PmDocument.belongsTo(User, { foreignKey: 'uploadedById', as: 'uploadedBy', constraints: false });
 
 // ── CSAT Models ───────────────────────────────────────────────────────────────
 const ClientOrganisation = require('./csat/ClientOrganisation');
@@ -169,7 +201,9 @@ SurveyDispatchApprovalFeedback.belongsTo(SurveyQuestion, { foreignKey: 'surveyQu
 
 // Export PM models so other files can import from associations
 module.exports = {
-  Project, ProjectMember, Milestone, Task, DailyStatusLog, ProjectNotificationRecipient, PmSettings,
+  Project, ProjectMember, Milestone, Task, DailyStatusLog, ProjectNotificationRecipient, PmSettings, PmDocument,
+  PmProjectType, PmStatus, PmMilestoneTemplate,
+  PmStatusReport, PmRaidItem, PmFinancialDetail, PmClosure,
   // CSAT
   ClientOrganisation, ClientEmployee, Survey, SurveyQuestion,
   SurveyDispatch, SurveyRecipient, SurveyResponse,

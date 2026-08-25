@@ -116,7 +116,6 @@ export default function TicketList() {
   // Local state
   const [pageSize, setPageSize] = useState(20);
   const [searchInput, setSearchInput] = useState(filters.search || '');
-  const debounceRef = useRef(null);
   const [viewMode, setViewMode] = useState('list');
 
   // Filter-dropdown datasets
@@ -168,12 +167,14 @@ export default function TicketList() {
     !!filters.status     ||
     !!filters.priority   ||
     !!filters.assigneeId ||
-    !!filters.projectId;
+    !!filters.projectId  ||
+    !!filters.groupId;
 
   // -------------------------------------------------------------------------
   // Load tickets
   // -------------------------------------------------------------------------
   const load = useCallback(() => {
+    setSelected([]);       // clear stale selection before fetching a new page
     setLoadError(false);
     dispatch(fetchTickets({ ...filters, page, pageSize }))
       .unwrap()
@@ -192,12 +193,10 @@ export default function TicketList() {
     getHdProjectsApi().then(unwrapList).then(setProjects).catch(() => setProjects([]));
   }, [canListUsers]);
 
-  // Load groups when bulk-assign modal opens
+  // Load groups on mount for the group filter dropdown
   useEffect(() => {
-    if (showBulkAssign) {
-      getGroupsApi().then(unwrapList).then(setGroups).catch(() => setGroups([]));
-    }
-  }, [showBulkAssign]);
+    getGroupsApi().then(unwrapList).then(setGroups).catch(() => setGroups([]));
+  }, []);
 
   // URL deep-linking: pre-populate filters from query params on first render
   useEffect(() => {
@@ -217,6 +216,16 @@ export default function TicketList() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Debounced search — dispatches filter update 400 ms after the user stops typing
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (searchInput !== filters.search) {
+        dispatch(setTicketsFilter({ search: searchInput }));
+      }
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [searchInput]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Clear row selection whenever the ticket list changes
   useEffect(() => { setSelected([]); }, [tickets]);
 
@@ -235,14 +244,7 @@ export default function TicketList() {
   // -------------------------------------------------------------------------
   // Search — debounced 300 ms
   // -------------------------------------------------------------------------
-  const handleSearchChange = (e) => {
-    const val = e.target.value;
-    setSearchInput(val);
-    clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => {
-      dispatch(setTicketsFilter({ search: val }));
-    }, 300);
-  };
+  const handleSearchChange = (e) => setSearchInput(e.target.value);
 
   const handleSearchSubmit = (e) => {
     e.preventDefault();
@@ -262,6 +264,7 @@ export default function TicketList() {
       priority:   '',
       assigneeId: '',
       projectId:  '',
+      groupId:    '',
     }));
   };
 
@@ -621,6 +624,20 @@ export default function TicketList() {
                   <option key={p} value={p}>{fmtLabel(p)}</option>
                 ))}
               </select>
+
+              {/* Group — coerce to Number so Redux state matches integer group.id */}
+              {groups.length > 0 && (
+                <select
+                  value={filters.groupId || ''}
+                  onChange={(e) => dispatch(setTicketsFilter({ groupId: e.target.value ? Number(e.target.value) : '' }))}
+                  className="px-2 py-1.5 border border-gray-300 rounded-lg text-[11px] bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="">All Groups</option>
+                  {groups.map((g) => (
+                    <option key={g.id} value={g.id}>{g.name}</option>
+                  ))}
+                </select>
+              )}
 
               {/* Agent / Assignee — only shown to roles that can access the users list */}
               {canListUsers && (

@@ -176,6 +176,7 @@ const pmNavItems = {
       ],
     },
     { to: '/pm/my-tasks', label: 'My Tasks', icon: HiOutlineCheckCircle },
+    { to: '/pm/settings', label: 'Settings', icon: HiOutlineCog },
   ],
   senior_manager: [
     { to: '/pm/dashboard', label: 'PM Dashboard', icon: HiOutlineHome },
@@ -188,6 +189,7 @@ const pmNavItems = {
       ],
     },
     { to: '/pm/my-tasks', label: 'My Tasks', icon: HiOutlineCheckCircle },
+    { to: '/pm/settings', label: 'Settings', icon: HiOutlineCog },
   ],
   hr_admin: [
     { to: '/pm/dashboard', label: 'PM Dashboard', icon: HiOutlineHome },

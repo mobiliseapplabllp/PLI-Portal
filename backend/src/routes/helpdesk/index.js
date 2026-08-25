@@ -48,12 +48,14 @@ router.use('/solutions', solutionsRouter);
 router.use(authenticate, helpdeskAuth);
 
 router.use('/tickets',       ticketsRouter);
+router.use('/assignees',     require('./assignees.routes'));
 router.use('/groups',        groupsRouter);
 router.use('/projects',      hdProjectsRouter);
 router.use('/options',       hdOptionsRouter);
 router.use('/announcements', announcementsRouter);
 router.use('/dashboard',     hdDashboardRouter);
 router.use('/attachments',   attachmentsRouter);
+router.use('/tickets/:ticketId/documents', require('./hdDocuments.routes'));
 router.use('/user-groups',   require('./hdUserGroups.routes'));
 
 module.exports = router;

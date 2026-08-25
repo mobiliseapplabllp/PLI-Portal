@@ -28,6 +28,12 @@ import {
 } from '../../api/helpdesk/conversations.api';
 import { getTicketHistoryApi } from '../../api/helpdesk/tickets.api';
 import {
+  getHdDocumentsApi,
+  uploadHdDocumentApi,
+  deleteHdDocumentApi,
+  downloadHdDocumentUrl,
+} from '../../api/helpdesk/helpdesk.api';
+import {
   requestApprovalApi,
   getApprovalStatusApi,
 } from '../../api/helpdesk/approvals.api';
@@ -55,6 +61,7 @@ import {
   HiOutlineSearch,
   HiOutlinePlus,
   HiOutlineLink,
+  HiOutlineDownload,
 } from 'react-icons/hi';
 
 // ---------------------------------------------------------------------------
@@ -62,6 +69,14 @@ import {
 // ---------------------------------------------------------------------------
 
 const STATUS_OPTIONS = ['open', 'in-progress', 'pending', 'on-hold', 'resolved', 'closed'];
+
+const HD_DOC_CATEGORIES = [
+  'SOW / Client Contracts',
+  'Requirement Documents / BRD',
+  'Solution Architecture Documents',
+  'Technical Design Documentation',
+  'Others',
+];
 
 const STATUS_COLORS = {
   'open':        'bg-blue-100 text-blue-700',
@@ -174,6 +189,15 @@ export default function TicketDetail() {
   const [editingResolution, setEditingResolution] = useState(false);
   const [resolutionDraft, setResolutionDraft]     = useState('');
 
+  // ── Documents tab ──────────────────────────────────────────────────────────
+  const [hdDocs, setHdDocs]                           = useState([]);
+  const [hdDocsLoading, setHdDocsLoading]             = useState(false);
+  const [hdDocFile, setHdDocFile]                     = useState(null);
+  const [hdDocCategory, setHdDocCategory]             = useState('SOW / Client Contracts');
+  const [hdDocCategoryOther, setHdDocCategoryOther]   = useState('');
+  const [hdDocUploading, setHdDocUploading]           = useState(false);
+  const [hdDocsLoaded, setHdDocsLoaded]               = useState(false);
+
   // ── All users (for approver picker + assign modal) ─────────────────────────
   const [allUsers, setAllUsers]             = useState([]);
 
@@ -227,10 +251,23 @@ export default function TicketDetail() {
     finally { setHistLoading(false); }
   }, [id]);
 
+  const loadHdDocs = useCallback(async () => {
+    const ticketId = ticket?._id ?? ticket?.id ?? id;
+    if (!ticketId) return;
+    setHdDocsLoading(true);
+    try {
+      const res = await getHdDocumentsApi(ticketId);
+      setHdDocs(res.data?.data || []);
+      setHdDocsLoaded(true);
+    } catch { toast.error('Failed to load documents'); }
+    finally { setHdDocsLoading(false); }
+  }, [id, ticket]);
+
   useEffect(() => {
     if (activeTab === 'conversations') loadConversations();
     if (activeTab === 'history')       loadHistory();
-  }, [activeTab, loadConversations, loadHistory]);
+    if (activeTab === 'documents' && !hdDocsLoaded) loadHdDocs();
+  }, [activeTab, loadConversations, loadHistory, loadHdDocs, hdDocsLoaded]);
 
   // ── Seed resolution draft when ticket loads ────────────────────────────────
   useEffect(() => {
@@ -245,7 +282,7 @@ export default function TicketDetail() {
       await dispatch(updateTicket({ id, data: { status } })).unwrap();
       toast.success('Status updated');
       setShowActions(false);
-    } catch (err) { toast.error(err?.response?.data?.message || err?.message || 'Failed to update status'); }
+    } catch (err) { toast.error(typeof err === 'string' ? err : err?.response?.data?.message || err?.message || 'Failed to update status'); }
   };
 
   const handleDelete = async () => {
@@ -254,7 +291,7 @@ export default function TicketDetail() {
       await dispatch(deleteTicket(id)).unwrap();
       toast.success('Ticket deleted');
       navigate('/helpdesk/tickets');
-    } catch (err) { toast.error(err?.response?.data?.message || err?.message || 'Failed to delete ticket'); }
+    } catch (err) { toast.error(typeof err === 'string' ? err : err?.response?.data?.message || err?.message || 'Failed to delete ticket'); }
   };
 
   const handleDuplicate = () => {
@@ -291,7 +328,7 @@ export default function TicketDetail() {
     try {
       await dispatch(updateTicket({ id, data: { assigneeId: user?._id || user?.id, status: 'in-progress' } })).unwrap();
       toast.success('Ticket picked up and set to In Progress');
-    } catch (err) { toast.error(err?.response?.data?.message || err?.message || 'Failed to pick up ticket'); }
+    } catch (err) { toast.error(typeof err === 'string' ? err : err?.response?.data?.message || err?.message || 'Failed to pick up ticket'); }
   };
 
   const handleSaveResolution = async () => {
@@ -299,7 +336,7 @@ export default function TicketDetail() {
       await dispatch(updateTicket({ id, data: { resolution: resolutionDraft } })).unwrap();
       setEditingResolution(false);
       toast.success('Resolution saved');
-    } catch (err) { toast.error(err?.response?.data?.message || err?.message || 'Failed to save resolution'); }
+    } catch (err) { toast.error(typeof err === 'string' ? err : err?.response?.data?.message || err?.message || 'Failed to save resolution'); }
   };
 
   const handleToggleTask = async (task) => {
@@ -350,6 +387,38 @@ export default function TicketDetail() {
     } catch (err) {
       toast.error(err?.response?.data?.error?.message || 'Failed to respond to approval');
     } finally { setRespondingId(null); }
+  };
+
+  // ── Document handlers ──────────────────────────────────────────────────────
+
+  const handleHdDocUpload = async () => {
+    const ticketId = ticket?._id ?? ticket?.id ?? id;
+    if (!hdDocFile) return toast.error('Select a file first');
+    const fd = new FormData();
+    fd.append('file', hdDocFile);
+    fd.append('category', hdDocCategory === 'Others' ? (hdDocCategoryOther.trim() || 'Others') : hdDocCategory);
+    setHdDocUploading(true);
+    try {
+      await uploadHdDocumentApi(ticketId, fd);
+      toast.success('Document uploaded');
+      setHdDocFile(null);
+      setHdDocCategory('SOW / Client Contracts');
+      setHdDocCategoryOther('');
+      const res = await getHdDocumentsApi(ticketId);
+      setHdDocs(res.data?.data || []);
+    } catch (err) {
+      toast.error(err?.response?.data?.error?.message || 'Upload failed');
+    } finally { setHdDocUploading(false); }
+  };
+
+  const handleHdDocDelete = async (docId) => {
+    const ticketId = ticket?._id ?? ticket?.id ?? id;
+    if (!window.confirm('Delete this document?')) return;
+    try {
+      await deleteHdDocumentApi(ticketId, docId);
+      toast.success('Document deleted');
+      setHdDocs(prev => prev.filter(d => (d._id || d.id) !== docId));
+    } catch { toast.error('Failed to delete document'); }
   };
 
   // ── Assignee remove / weight handlers ─────────────────────────────────────
@@ -421,6 +490,7 @@ export default function TicketDetail() {
   const tabs = [
     { id: 'conversations', label: 'Conversations', icon: HiOutlineChatAlt2 },
     { id: 'details',       label: 'Details',       icon: HiOutlineClipboardList },
+    { id: 'documents',     label: `Documents (${hdDocs.length})`, icon: HiOutlinePaperClip },
     { id: 'resolution',    label: 'Resolution',    icon: HiOutlineDocumentText },
     { id: 'history',       label: 'History',       icon: HiOutlineClock },
     { id: 'checklists',    label: 'Checklists',    icon: HiOutlineCheckCircle },
@@ -577,6 +647,23 @@ export default function TicketDetail() {
             {activeTab === 'details' && (
               <DetailsTab ticket={ticket} />
             )}
+            {activeTab === 'documents' && (
+              <DocumentsTab
+                ticketId={ticket?._id ?? ticket?.id ?? id}
+                docs={hdDocs}
+                loading={hdDocsLoading}
+                uploading={hdDocUploading}
+                docFile={hdDocFile}
+                setDocFile={setHdDocFile}
+                docCategory={hdDocCategory}
+                setDocCategory={setHdDocCategory}
+                docCategoryOther={hdDocCategoryOther}
+                setDocCategoryOther={setHdDocCategoryOther}
+                canManage={canManage}
+                onUpload={handleHdDocUpload}
+                onDelete={handleHdDocDelete}
+              />
+            )}
             {activeTab === 'resolution' && (
               <ResolutionTab
                 ticket={ticket}
@@ -658,7 +745,7 @@ export default function TicketDetail() {
               dispatch(fetchTicketById(id));
               toast.success('Ticket updated');
               setShowEditModal(false);
-            } catch (err) { toast.error(err?.response?.data?.message || err?.message || 'Failed to update ticket'); }
+            } catch (err) { toast.error(typeof err === 'string' ? err : err?.response?.data?.message || err?.message || 'Failed to update ticket'); }
           }}
         />
       )}
@@ -676,7 +763,7 @@ export default function TicketDetail() {
               dispatch(fetchTicketById(id));
               toast.success('Ticket assigned');
               setShowAssignModal(false);
-            } catch (err) { toast.error(err?.response?.data?.message || err?.message || 'Failed to assign ticket'); }
+            } catch (err) { toast.error(typeof err === 'string' ? err : err?.response?.data?.message || err?.message || 'Failed to assign ticket'); }
           }}
         />
       )}
@@ -688,7 +775,7 @@ export default function TicketDetail() {
         />
       )}
       {showReminderModal && (
-        <AddReminderModal ticketId={id} onClose={() => setShowReminderModal(false)} />
+        <AddReminderModal ticketId={id} onClose={() => { setShowReminderModal(false); loadHistory(); }} />
       )}
       {showAddTaskModal && (
         <AddTaskModal
@@ -785,6 +872,19 @@ function ConversationsTab({
   attachFile, setAttachFile, fileInputRef,
   sending, onSend,
 }) {
+  const MAX_ATTACHMENT_SIZE = 5 * 1024 * 1024; // 5 MB
+
+  const handleAttachFileChange = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > MAX_ATTACHMENT_SIZE) {
+      toast.error(`File is too large (${(file.size / 1024 / 1024).toFixed(1)} MB). Maximum size is 5 MB.`);
+      e.target.value = ''; // reset the file input
+      return;
+    }
+    setAttachFile(file);
+  };
+
   return (
     <div className="space-y-4">
       {/* Original ticket description as first card */}
@@ -914,7 +1014,8 @@ function ConversationsTab({
               ref={fileInputRef}
               type="file"
               className="hidden"
-              onChange={e => setAttachFile(e.target.files?.[0] || null)}
+              accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg,.gif,.zip,.txt"
+              onChange={handleAttachFileChange}
             />
           </div>
           <button
@@ -1161,6 +1262,132 @@ function HistoryTab({ history, loading }) {
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// DocumentsTab
+// ---------------------------------------------------------------------------
+
+const HD_DOC_CATEGORY_COLORS = {
+  'SOW / Client Contracts': 'bg-blue-100 text-blue-700',
+  'Requirement Documents / BRD': 'bg-purple-100 text-purple-700',
+  'Solution Architecture Documents': 'bg-emerald-100 text-emerald-700',
+  'Technical Design Documentation': 'bg-orange-100 text-orange-700',
+  'Others': 'bg-gray-100 text-gray-600',
+};
+
+function DocumentsTab({
+  ticketId, docs, loading, uploading,
+  docFile, setDocFile, docCategory, setDocCategory,
+  docCategoryOther, setDocCategoryOther,
+  canManage, onUpload, onDelete,
+}) {
+  const formatBytes = (n) => {
+    if (!n) return '—';
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+    return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* Upload form — managers only */}
+      {canManage && (
+        <div className="border border-dashed border-gray-300 rounded-xl p-4 bg-gray-50 space-y-3">
+          <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide">Upload Document</p>
+          <div className="flex gap-3 flex-wrap items-end">
+            <div>
+              <label className="text-xs text-gray-500 block mb-1">Category</label>
+              <select
+                value={docCategory}
+                onChange={e => setDocCategory(e.target.value)}
+                className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+              >
+                {HD_DOC_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+            {docCategory === 'Others' && (
+              <div>
+                <label className="text-xs text-gray-500 block mb-1">Specify Category</label>
+                <input
+                  value={docCategoryOther}
+                  onChange={e => setDocCategoryOther(e.target.value)}
+                  placeholder="Enter category name"
+                  className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+            )}
+            <div className="flex-1 min-w-40">
+              <label className="text-xs text-gray-500 block mb-1">File</label>
+              <input
+                type="file"
+                onChange={e => setDocFile(e.target.files[0] || null)}
+                className="block w-full text-sm text-gray-600 file:mr-3 file:py-1 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-medium file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
+              />
+            </div>
+            <button
+              onClick={onUpload}
+              disabled={uploading || !docFile}
+              className="px-4 py-1.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors"
+            >
+              {uploading ? 'Uploading…' : 'Upload'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Document list */}
+      {loading ? (
+        <div className="text-center py-8 text-gray-400 text-sm">Loading documents…</div>
+      ) : docs.length === 0 ? (
+        <div className="text-center py-12">
+          <HiOutlineDocumentText className="w-10 h-10 text-gray-200 mx-auto mb-2" />
+          <p className="text-sm text-gray-400">No documents uploaded yet</p>
+          {canManage && <p className="text-xs text-gray-400 mt-1">Use the form above to upload files.</p>}
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {docs.map(doc => {
+            const docId = doc._id || doc.id;
+            const catColor = HD_DOC_CATEGORY_COLORS[doc.category] || 'bg-gray-100 text-gray-600';
+            return (
+              <div key={docId} className="flex items-center gap-3 p-3 rounded-xl border border-gray-200 hover:bg-gray-50 group transition-colors">
+                <HiOutlineDocumentText className="w-8 h-8 text-gray-300 flex-shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-gray-900 truncate">{doc.filename || doc.originalName}</p>
+                  <div className="flex items-center gap-2 mt-0.5 text-xs text-gray-400">
+                    <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${catColor}`}>{doc.category}</span>
+                    <span>{formatBytes(doc.sizeBytes || doc.size)}</span>
+                    {(doc.uploadedBy?.name || doc.uploaderName) && <span>by {doc.uploadedBy?.name || doc.uploaderName}</span>}
+                    {doc.createdAt && <span>{new Date(doc.createdAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</span>}
+                  </div>
+                </div>
+                <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <a
+                    href={downloadHdDocumentUrl(ticketId, docId)}
+                    download
+                    className="p-1.5 hover:bg-blue-50 rounded text-gray-400 hover:text-blue-600 transition-colors"
+                    title="Download"
+                  >
+                    <HiOutlineDownload className="w-4 h-4" />
+                  </a>
+                  {canManage && (
+                    <button
+                      onClick={() => onDelete(docId)}
+                      className="p-1.5 hover:bg-red-50 rounded text-gray-400 hover:text-red-600 transition-colors"
+                      title="Delete"
+                    >
+                      <HiOutlineTrash className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -1636,12 +1863,46 @@ function EditModal({ ticket, groups, allUsers, submitting, onClose, onSave }) {
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    onSave({
-      ...form,
-      dueDate: form.dueDate || null,
-      groupId: form.groupId || null,
-      assigneeId: form.assigneeId || null,
-    });
+
+    // Original values, normalised the same way the form state was initialised
+    const original = {
+      title:        ticket.title        || '',
+      description:  ticket.description  || '',
+      requestType:  ticket.requestType  || 'Incident',
+      status:       ticket.status       || 'open',
+      priority:     ticket.priority     || 'medium',
+      mode:         ticket.mode         || '',
+      category:     ticket.category     || '',
+      impact:       ticket.impact       || '',
+      urgency:      ticket.urgency      || '',
+      dueDate:      toDTLocal(ticket.dueDate),
+      groupId:      ticket.group?._id    || ticket.group?.id    || ticket.groupId    || '',
+      assigneeId:   ticket.assigneeUser?._id || ticket.assignee?._id || ticket.assignee?.id || ticket.assigneeId || '',
+      site:         ticket.site         || '',
+      raisedByTeam: ticket.raisedByTeam || ticket.team || '',
+      resolution:   ticket.resolution   || '',
+    };
+
+    // Build payload containing only fields that actually changed
+    const payload = {};
+    for (const field of Object.keys(original)) {
+      if (String(form[field] ?? '') !== String(original[field] ?? '')) {
+        // Fields that must be sent as null when cleared (not empty string)
+        if (field === 'dueDate' || field === 'groupId' || field === 'assigneeId') {
+          payload[field] = form[field] || null;
+        } else {
+          payload[field] = form[field];
+        }
+      }
+    }
+
+    // Nothing changed — close without making an API call
+    if (Object.keys(payload).length === 0) {
+      onClose();
+      return;
+    }
+
+    onSave(payload);
   };
 
   const set = (key) => (e) => setForm(f => ({ ...f, [key]: e.target.value }));

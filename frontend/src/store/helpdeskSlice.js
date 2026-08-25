@@ -136,9 +136,9 @@ export const fetchGroups = createAsyncThunk(
  */
 export const fetchHdProjects = createAsyncThunk(
   'helpdesk/fetchHdProjects',
-  async (_, { rejectWithValue }) => {
+  async (groupId, { rejectWithValue }) => {
     try {
-      const res = await getHdProjectsApi();
+      const res = await getHdProjectsApi(groupId);
       return res.data.data;
     } catch (err) {
       return rejectWithValue(err.response?.data?.error?.message || 'Failed to load projects');
@@ -210,22 +210,6 @@ export const fetchDashboardStats = createAsyncThunk(
   },
 );
 
-/**
- * Fetch ALL configurable helpdesk field options in one request.
- * Returns an object keyed by type: { category: [{id,name}], mode: [...], ... }
- * Status and Priority are MySQL ENUMs — they are NOT included here.
- */
-export const fetchHdOptions = createAsyncThunk(
-  'helpdesk/fetchHdOptions',
-  async (_, { rejectWithValue }) => {
-    try {
-      const res = await getAllHdOptionsApi();
-      return res.data.data;
-    } catch (err) {
-      return rejectWithValue(err.response?.data?.error?.message || 'Failed to load field options');
-    }
-  },
-);
 
 // ---------------------------------------------------------------------------
 // Initial state

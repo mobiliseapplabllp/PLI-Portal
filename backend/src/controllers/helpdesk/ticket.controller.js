@@ -36,7 +36,7 @@ const MAX_PAGE_SIZE     = 100;
 const TRACKED_FIELDS = [
   'title', 'description', 'status', 'priority', 'category',
   'requestType', 'mode', 'impact', 'urgency', 'resolution', 'site', 'raisedByTeam',
-  'assigneeId', 'groupId', 'projectId', 'dueDate',
+  'assigneeId', 'groupId', 'projectId', 'dueDate', 'billable',
 ];
 
 // â”€â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -210,6 +210,7 @@ const getTicket = async (req, res, next) => {
         { model: HdProject, as: 'project',       attributes: ['id', 'name'] },
         { model: User,      as: 'assigneeUser',  attributes: ['id', 'name', 'email'], required: false, constraints: false },
         { model: User,      as: 'requesterUser', attributes: ['id', 'name', 'email'], required: false, constraints: false },
+        { model: HdTicket,  as: 'linkedTicket',  attributes: ['id', 'reqNumber', 'title', 'status', 'priority'], required: false },
       ],
     });
 

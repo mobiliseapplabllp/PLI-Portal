@@ -23,6 +23,7 @@ const HdSolution        = require('./HdSolution');
 const HdAnnouncement    = require('./HdAnnouncement');
 const HdReminder        = require('./HdReminder');
 const HdAttachment      = require('./HdAttachment');
+const HdDocument        = require('./HdDocument');
 const User              = require('../User');
 
 // â”€â”€ Ticket â†” Group / Project â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -85,6 +86,11 @@ HdTask.belongsTo(User, { foreignKey: 'assignedTo', as: 'assigneeUser', constrain
 HdTicket.hasMany(HdReminder, { foreignKey: 'ticketId', as: 'reminders', onDelete: 'CASCADE' });
 HdReminder.belongsTo(HdTicket, { foreignKey: 'ticketId', as: 'ticket' });
 
+// ── Ticket ↔ Documents ──────────────────────────────────────────────────────
+HdDocument.belongsTo(HdTicket, { foreignKey: 'ticketId', as: 'ticket', constraints: false });
+HdDocument.belongsTo(User, { foreignKey: 'uploadedById', as: 'uploadedBy', constraints: false });
+HdTicket.hasMany(HdDocument, { foreignKey: 'ticketId', as: 'documents', constraints: false });
+
 // â”€â”€ User â†” HdGroup (helpdesk group assignment) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 User.belongsTo(HdGroup, { foreignKey: 'hdGroupId', as: 'hdGroup',  constraints: false });
 HdGroup.hasMany(User,   { foreignKey: 'hdGroupId', as: 'members', constraints: false });
@@ -102,6 +108,7 @@ module.exports = {
   HdAnnouncement,
   HdReminder,
   HdAttachment,
+  HdDocument,
   // Re-export User so consumers can `const { HdTicket, User } = require('.../helpdesk')` if needed
   User,
 };

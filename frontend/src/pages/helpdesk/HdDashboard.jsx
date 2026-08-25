@@ -1121,7 +1121,13 @@ function AvailabilityTab() {
                     </span>
                   </td>
                   <td className="px-5 py-3 text-gray-600 text-sm">
-                    {u.group?.name ?? u.department ?? u.group_name ?? '—'}
+                    {typeof u.group?.name === 'string' && u.group.name
+                      ? u.group.name
+                      : typeof u.department === 'string' && u.department
+                      ? u.department
+                      : typeof u.group_name === 'string' && u.group_name
+                      ? u.group_name
+                      : '—'}
                   </td>
                   <td className="px-5 py-3">
                     <button

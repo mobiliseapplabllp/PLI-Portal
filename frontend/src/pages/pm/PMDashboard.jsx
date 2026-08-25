@@ -5,14 +5,25 @@ import { fetchProjects } from '../../store/pmSlice';
 import {
   HiOutlineFolderOpen, HiOutlineCheckCircle, HiOutlineClock,
   HiOutlineExclamation, HiOutlineFlag, HiOutlineArrowRight,
+  HiOutlineChartBar,
 } from 'react-icons/hi';
+import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 
 const STATUS_COLORS = {
-  planning: 'bg-gray-100 text-gray-700',
-  active: 'bg-emerald-100 text-emerald-700',
-  on_hold: 'bg-yellow-100 text-yellow-700',
-  completed: 'bg-blue-100 text-blue-700',
-  cancelled: 'bg-red-100 text-red-700',
+  // New status names
+  'Yet to Start': 'bg-gray-100 text-gray-700',
+  'Active':       'bg-emerald-100 text-emerald-700',
+  'On Hold':      'bg-yellow-100 text-yellow-700',
+  'On Track':     'bg-blue-100 text-blue-700',
+  'Cancelled':    'bg-red-100 text-red-700',
+  'Delayed':      'bg-orange-100 text-orange-700',
+  'Completed':    'bg-blue-100 text-blue-700',
+  // Legacy names (backward compat)
+  planning:   'bg-gray-100 text-gray-700',
+  active:     'bg-emerald-100 text-emerald-700',
+  on_hold:    'bg-yellow-100 text-yellow-700',
+  completed:  'bg-blue-100 text-blue-700',
+  cancelled:  'bg-red-100 text-red-700',
 };
 
 const OVERALL_COLORS = {
@@ -43,9 +54,10 @@ export default function PMDashboard() {
 
   useEffect(() => { dispatch(fetchProjects()); }, [dispatch]);
 
-  const active = projects.filter(p => p.status === 'active');
-  const completed = projects.filter(p => p.status === 'completed');
-  const onHold = projects.filter(p => p.status === 'on_hold');
+  // Status filters — support both new names and legacy
+  const active    = projects.filter(p => p.status === 'Active'    || p.status === 'active');
+  const completed = projects.filter(p => p.status === 'Completed' || p.status === 'completed');
+  const onHold    = projects.filter(p => p.status === 'On Hold'   || p.status === 'on_hold');
 
   // Collect upcoming milestone deadlines across all projects
   const today = new Date().toISOString().slice(0, 10);
@@ -61,6 +73,15 @@ export default function PMDashboard() {
   });
   upcomingMilestones.sort((a, b) => a.daysLeft - b.daysLeft);
 
+  // billingType is the correct field (projectType is now the category like Signed/Demo Prototype)
+  const billable    = projects.filter(p => p.billingType === 'Billable');
+  const nonBillable = projects.filter(p => p.billingType === 'Non-Billable');
+
+  const pieData = [
+    { name: 'Billable',     value: billable.length,    color: '#10b981' },
+    { name: 'Non-Billable', value: nonBillable.length, color: '#6b7280' },
+  ].filter(d => d.value > 0);
+
   return (
     <div className="space-y-6">
       <div>
@@ -69,12 +90,83 @@ export default function PMDashboard() {
       </div>
 
       {/* Stat Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard label="Total Projects" value={projects.length} icon={HiOutlineFolderOpen} color="bg-blue-100 text-blue-600" />
-        <StatCard label="Active" value={active.length} icon={HiOutlineClock} color="bg-emerald-100 text-emerald-600" />
-        <StatCard label="Completed" value={completed.length} icon={HiOutlineCheckCircle} color="bg-indigo-100 text-indigo-600" />
-        <StatCard label="On Hold" value={onHold.length} icon={HiOutlineExclamation} color="bg-yellow-100 text-yellow-600" />
+      <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
+        <StatCard label="Total Projects"  value={projects.length}    icon={HiOutlineFolderOpen}  color="bg-blue-100 text-blue-600" />
+        <StatCard label="Active"          value={active.length}      icon={HiOutlineClock}        color="bg-emerald-100 text-emerald-600" />
+        <StatCard label="Completed"       value={completed.length}   icon={HiOutlineCheckCircle}  color="bg-indigo-100 text-indigo-600" />
+        <StatCard label="On Hold"         value={onHold.length}      icon={HiOutlineExclamation}  color="bg-yellow-100 text-yellow-600" />
+        <StatCard label="Billable"        value={billable.length}    icon={HiOutlineFlag}         color="bg-green-100 text-green-600" />
+        <StatCard label="Non-Billable"    value={nonBillable.length} icon={HiOutlineChartBar}     color="bg-gray-100 text-gray-600" />
       </div>
+
+      {/* Billable vs Non-Billable breakdown */}
+      {projects.length > 0 && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+          {/* Pie Chart */}
+          <div className="bg-white rounded-xl border border-gray-200 p-5">
+            <h2 className="font-semibold text-gray-900 mb-4 text-sm">Billing Type Distribution</h2>
+            {pieData.length > 0 ? (
+              <ResponsiveContainer width="100%" height={180}>
+                <PieChart>
+                  <Pie data={pieData} cx="50%" cy="50%" innerRadius={50} outerRadius={75} paddingAngle={3} dataKey="value">
+                    {pieData.map((entry, idx) => (
+                      <Cell key={idx} fill={entry.color} />
+                    ))}
+                  </Pie>
+                  <Tooltip formatter={(value, name) => [`${value} projects`, name]} />
+                  <Legend />
+                </PieChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="h-44 flex items-center justify-center text-gray-400 text-sm">No data</div>
+            )}
+          </div>
+
+          {/* Billable Projects List */}
+          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+            <div className="px-4 py-3 border-b border-gray-100 bg-emerald-50">
+              <h2 className="font-semibold text-emerald-700 text-sm">💰 Billable Projects ({billable.length})</h2>
+            </div>
+            <div className="divide-y divide-gray-50 max-h-48 overflow-auto">
+              {billable.length === 0
+                ? <div className="p-4 text-center text-gray-400 text-xs">None</div>
+                : billable.map(p => {
+                    const ms = p.milestones || [];
+                    const done = ms.filter(m => m.status === 'completed').length;
+                    return (
+                      <div key={p._id || p.id} onClick={() => navigate(`/pm/projects/${p._id || p.id}`)}
+                        className="px-4 py-2.5 hover:bg-gray-50 cursor-pointer flex justify-between items-center text-xs">
+                        <span className="font-medium text-gray-800 truncate">{p.name}</span>
+                        <span className="text-gray-500 ml-2 shrink-0">{done}/{ms.length} ✓</span>
+                      </div>
+                    );
+                  })}
+            </div>
+          </div>
+
+          {/* Non-Billable Projects List */}
+          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+            <div className="px-4 py-3 border-b border-gray-100 bg-gray-50">
+              <h2 className="font-semibold text-gray-600 text-sm">🔧 Non-Billable Projects ({nonBillable.length})</h2>
+            </div>
+            <div className="divide-y divide-gray-50 max-h-48 overflow-auto">
+              {nonBillable.length === 0
+                ? <div className="p-4 text-center text-gray-400 text-xs">None</div>
+                : nonBillable.map(p => {
+                    const ms = p.milestones || [];
+                    const done = ms.filter(m => m.status === 'completed').length;
+                    return (
+                      <div key={p._id || p.id} onClick={() => navigate(`/pm/projects/${p._id || p.id}`)}
+                        className="px-4 py-2.5 hover:bg-gray-50 cursor-pointer flex justify-between items-center text-xs">
+                        <span className="font-medium text-gray-800 truncate">{p.name}</span>
+                        <span className="text-gray-500 ml-2 shrink-0">{done}/{ms.length} ✓</span>
+                      </div>
+                    );
+                  })}
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
         {/* Active Projects */}
@@ -171,6 +263,7 @@ export default function PMDashboard() {
                 <tr>
                   <th className="px-5 py-3 text-left">Project</th>
                   <th className="px-5 py-3 text-left">Status</th>
+                  <th className="px-5 py-3 text-left">Type</th>
                   <th className="px-5 py-3 text-left">Manager</th>
                   <th className="px-5 py-3 text-left">End Date</th>
                   <th className="px-5 py-3 text-left">Progress</th>
@@ -191,6 +284,20 @@ export default function PMDashboard() {
                         <span className={`px-2 py-0.5 rounded-full text-xs font-semibold capitalize ${STATUS_COLORS[p.status] || 'bg-gray-100 text-gray-700'}`}>
                           {p.status?.replace(/_/g, ' ')}
                         </span>
+                      </td>
+                      <td className="px-5 py-3">
+                        <div className="flex flex-col gap-1">
+                          {p.billingType && (
+                            <span className={`px-2 py-0.5 rounded-full text-xs font-semibold w-fit ${p.billingType === 'Billable' ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-600'}`}>
+                              {p.billingType === 'Billable' ? '💰' : '🔧'} {p.billingType}
+                            </span>
+                          )}
+                          {p.projectType && (
+                            <span className="px-2 py-0.5 rounded text-xs bg-blue-50 text-blue-600 border border-blue-100 w-fit">
+                              {p.projectType}
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td className="px-5 py-3 text-gray-600">{p.projectManager?.name || '—'}</td>
                       <td className="px-5 py-3 text-gray-600">

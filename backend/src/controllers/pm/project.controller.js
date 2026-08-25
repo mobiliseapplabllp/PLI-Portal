@@ -17,8 +17,32 @@ const createProject = async (req, res, next) => {
 };
 
 const updateProject = async (req, res, next) => {
-  try { sendSuccess(res, await projectService.updateProject(req.params.id, req.body, req.user), 'Project updated'); }
-  catch (e) { next(e); }
+  try {
+    const { id } = req.params;
+    const user = req.user;
+
+    // Managers who are not the assigned project manager/owner can only update endDate
+    if (user.role === 'manager') {
+      const project = await projectService.getProject(id);
+      if (project) {
+        const isProjectOwner =
+          String(project.ownerId) === String(user._id) ||
+          String(project.managerId) === String(user._id);
+        if (!isProjectOwner) {
+          const { endDate } = req.body;
+          return sendSuccess(
+            res,
+            await projectService.updateProject(id, { endDate }, user),
+            'Project end date updated'
+          );
+        }
+      }
+    }
+
+    sendSuccess(res, await projectService.updateProject(id, req.body, user), 'Project updated');
+  } catch (e) {
+    next(e);
+  }
 };
 
 const deleteProject = async (req, res, next) => {

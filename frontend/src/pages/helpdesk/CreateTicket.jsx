@@ -11,7 +11,7 @@
  * react-hot-toast, PLI API wrappers.
  */
 import { useState, useEffect, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import toast from 'react-hot-toast';
 import {
@@ -80,6 +80,14 @@ const MODE_VALUE = {
   'Phone Call': 'phone',
 };
 
+const HD_DOC_CATEGORIES = [
+  'SOW / Client Contracts',
+  'Requirement Documents / BRD',
+  'Solution Architecture Documents',
+  'Technical Design Documentation',
+  'Others',
+];
+
 const PRIORITY_COLORS = {
   Low:      { active: 'bg-green-100 border-green-300 text-green-700',  idle: 'border-gray-300 hover:bg-gray-50' },
   Medium:   { active: 'bg-yellow-100 border-yellow-300 text-yellow-700', idle: 'border-gray-300 hover:bg-gray-50' },
@@ -104,6 +112,8 @@ const EMPTY_FORM = {
   raisedByTeam:   '',         // group name string (matches original's formData.team)
   groupId:        '',         // INT — PLI uses ID not name
   assigneeId:     '',         // UUID — PLI primary assignee
+  billable:       'Non-Billable',
+  docFiles:       [],         // array of {file, category, categoryOther}
 };
 
 // ── Shared style helpers (compact text-xs, matching original) ────────────────
@@ -124,6 +134,7 @@ const ERR  = 'text-red-500 text-[10px] mt-0.5';
 export default function CreateTicket() {
   const dispatch   = useDispatch();
   const navigate   = useNavigate();
+  const location   = useLocation();
   const submitting = useSelector(selectSubmitting);
   const hdOptions  = useSelector(selectHdOptions);
 
@@ -135,7 +146,28 @@ export default function CreateTicket() {
   const optUrgency     = (hdOptions.urgency     || []).map(o => o.name);
 
   // ── Data state ──────────────────────────────────────────────────────────────
-  const [formData,    setFormData]    = useState(EMPTY_FORM);
+  const [formData,    setFormData]    = useState(() => {
+    const src = location.state?.duplicateFrom;
+    if (!src) return EMPTY_FORM;
+    return {
+      ...EMPTY_FORM,
+      title:          src.title        ? `Copy of ${src.title}` : '',
+      description:    src.description  || '',
+      category:       src.category     || '',
+      mode:           src.mode         || EMPTY_FORM.mode,
+      requestType:    src.requestType  || EMPTY_FORM.requestType,
+      priority:       src.priority     || EMPTY_FORM.priority,
+      impact:         src.impact       || EMPTY_FORM.impact,
+      urgency:        src.urgency      || EMPTY_FORM.urgency,
+      groupId:        src.groupId      || '',
+      assigneeId:     '',   // do NOT copy assignee — must be re-chosen
+      requesterName:  src.requesterName || src.requesterUser?.name || '',
+      requesterEmail: src.requesterEmail || src.requesterUser?.email || '',
+      projectId:      src.projectId    || '',
+      raisedByTeam:   src.raisedByTeam || '',
+      dueDate:        '',   // do NOT copy dueDate
+    };
+  });
   const [groups,      setGroups]      = useState([]);
   const [groupUsers,  setGroupUsers]  = useState([]);
   const [projects,    setProjects]    = useState([]);
@@ -143,6 +175,12 @@ export default function CreateTicket() {
   const [saving,      setSaving]      = useState(false);
   const [submitError, setSubmitError] = useState('');
   const [attachment,  setAttachment]  = useState(null);
+
+  // ── Document entries ────────────────────────────────────────────────────────
+  const [docEntries,              setDocEntries]              = useState([]); // [{file, category, categoryOther}]
+  const [pendingDocCategory,      setPendingDocCategory]      = useState('SOW / Client Contracts');
+  const [pendingDocCategoryOther, setPendingDocCategoryOther] = useState('');
+  const [pendingDocFile,          setPendingDocFile]          = useState(null);
 
   // ── Requester search ────────────────────────────────────────────────────────
   const [requesters,            setRequesters]            = useState([]);
@@ -315,6 +353,16 @@ export default function CreateTicket() {
         toast.error('Unexpected server response — ticket may have been created. Refresh the list.');
         return;
       }
+      // Upload any queued documents
+      if (docEntries.length > 0 && ticketId) {
+        const { uploadHdDocumentApi } = await import('../../api/helpdesk/helpdesk.api');
+        await Promise.allSettled(docEntries.map(entry => {
+          const fd = new FormData();
+          fd.append('file', entry.file);
+          fd.append('category', entry.category === 'Others' ? (entry.categoryOther || 'Others') : entry.category);
+          return uploadHdDocumentApi(ticketId, fd);
+        }));
+      }
       navigate(`/helpdesk/tickets/${ticketId}`);
     } catch (err) {
       const msg =
@@ -326,6 +374,20 @@ export default function CreateTicket() {
     } finally {
       setSaving(false);
     }
+  };
+
+  // ── Attachment file-size guard ──────────────────────────────────────────────
+  const MAX_ATTACHMENT_SIZE = 5 * 1024 * 1024; // 5 MB
+
+  const handleFileChange = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    if (file.size > MAX_ATTACHMENT_SIZE) {
+      toast.error(`File is too large (${(file.size / 1024 / 1024).toFixed(1)} MB). Maximum size is 5 MB.`);
+      e.target.value = ''; // reset the file input
+      return;
+    }
+    setAttachment(file);
   };
 
   // Current priority's display label (e.g. 'medium' → 'Medium')
@@ -627,6 +689,30 @@ export default function CreateTicket() {
                 </div>
               </div>
 
+              {/* ── Billing Type ─────────────────────────────────────────────── */}
+              <div className="bg-white rounded-lg border border-gray-200 p-4">
+                <h2 className="text-xs font-semibold text-gray-800 mb-3 uppercase tracking-wide">
+                  Billing Type
+                </h2>
+                <div className="flex gap-3">
+                  {['Billable', 'Non-Billable'].map(t => (
+                    <button
+                      key={t}
+                      type="button"
+                      onClick={() => setFormData(prev => ({ ...prev, billable: t }))}
+                      className={`flex-1 py-2 rounded border-2 text-xs font-semibold transition-colors
+                        ${formData.billable === t
+                          ? t === 'Billable'
+                            ? 'border-emerald-500 bg-emerald-50 text-emerald-700'
+                            : 'border-gray-400 bg-gray-100 text-gray-700'
+                          : 'border-gray-200 text-gray-400 hover:border-gray-300'}`}
+                    >
+                      {t === 'Billable' ? '💰 Billable' : '🔧 Non-Billable'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
             </div>
             {/* ═════════════════ END LEFT COLUMN ══════════════════════════ */}
 
@@ -774,28 +860,86 @@ export default function CreateTicket() {
                 </div>
               </div>
 
-              {/* ── Attachment (PLI enhancement — not in original) ──────── */}
+              {/* ── Attachment ────────────────────────────────────────────── */}
               <div className="bg-white rounded-lg border border-gray-200 p-4">
                 <h2 className="text-xs font-semibold text-gray-800 mb-3 uppercase tracking-wide">
                   Attachment
                 </h2>
                 <input
                   type="file"
-                  onChange={e => setAttachment(e.target.files[0] || null)}
-                  className="w-full text-xs text-gray-500
-                    file:mr-3 file:py-1 file:px-3
-                    file:rounded file:border-0
-                    file:text-xs file:font-medium
-                    file:bg-blue-50 file:text-blue-700
-                    hover:file:bg-blue-100"
+                  accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg,.gif,.zip,.txt"
+                  onChange={handleFileChange}
+                  className="w-full text-xs text-gray-500 file:mr-3 file:py-1 file:px-3 file:rounded file:border-0 file:text-xs file:font-medium file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
                 />
                 {attachment && (
                   <p className="text-[10px] text-gray-500 mt-1">
-                    Selected:{' '}
-                    <span className="font-medium">{attachment.name}</span>{' '}
-                    ({(attachment.size / 1024).toFixed(1)} KB)
+                    Selected: <span className="font-medium">{attachment.name}</span> ({(attachment.size / 1024).toFixed(1)} KB)
                   </p>
                 )}
+              </div>
+
+              {/* ── Documents ─────────────────────────────────────────────── */}
+              <div className="bg-white rounded-lg border border-gray-200 p-4">
+                <h2 className="text-xs font-semibold text-gray-800 mb-3 uppercase tracking-wide">
+                  Documents
+                </h2>
+                <div className="space-y-2 mb-3">
+                  <div className="flex gap-2 items-end flex-wrap">
+                    <div>
+                      <label className={LBL}>Category</label>
+                      <select
+                        value={pendingDocCategory}
+                        onChange={e => setPendingDocCategory(e.target.value)}
+                        className={sel()}
+                      >
+                        {HD_DOC_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                      </select>
+                    </div>
+                    {pendingDocCategory === 'Others' && (
+                      <div>
+                        <label className={LBL}>Specify</label>
+                        <input
+                          value={pendingDocCategoryOther}
+                          onChange={e => setPendingDocCategoryOther(e.target.value)}
+                          placeholder="Category name"
+                          className={inp()}
+                        />
+                      </div>
+                    )}
+                    <div>
+                      <label className={LBL}>File</label>
+                      <input
+                        type="file"
+                        onChange={e => setPendingDocFile(e.target.files[0] || null)}
+                        className="text-xs text-gray-500 file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:text-xs file:bg-blue-50 file:text-blue-700"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!pendingDocFile) return;
+                        setDocEntries(prev => [...prev, { file: pendingDocFile, category: pendingDocCategory, categoryOther: pendingDocCategoryOther }]);
+                        setPendingDocFile(null);
+                        setPendingDocCategoryOther('');
+                      }}
+                      disabled={!pendingDocFile}
+                      className="px-3 py-1.5 bg-emerald-600 text-white rounded text-xs font-medium hover:bg-emerald-700 disabled:opacity-50 transition-colors"
+                    >
+                      Add
+                    </button>
+                  </div>
+                  {docEntries.length > 0 && (
+                    <div className="space-y-1 mt-2">
+                      {docEntries.map((e, i) => (
+                        <div key={i} className="flex items-center justify-between bg-gray-50 rounded px-2 py-1 text-[10px]">
+                          <span className="text-gray-700 truncate max-w-[160px]">{e.file.name}</span>
+                          <span className="text-gray-500 mx-2">{e.category === 'Others' ? (e.categoryOther || 'Others') : e.category}</span>
+                          <button type="button" onClick={() => setDocEntries(prev => prev.filter((_, j) => j !== i))} className="text-red-400 hover:text-red-600 ml-1">✕</button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
 
               {/* ── Action buttons at bottom of right column (matches original) */}

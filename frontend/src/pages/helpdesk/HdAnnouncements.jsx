@@ -13,7 +13,7 @@ import {
   selectAnnouncements,
 } from '../../store/helpdeskSlice';
 import api from '../../api/axios';
-import { HiOutlineSpeakerphone, HiOutlinePlus, HiOutlineX } from 'react-icons/hi';
+import { HiOutlineSpeakerphone, HiOutlinePlus, HiOutlineX, HiOutlineTrash } from 'react-icons/hi';
 
 const ADMIN_ROLES = ['admin', 'manager', 'senior_manager'];
 
@@ -31,6 +31,7 @@ export default function HdAnnouncements() {
   const [showForm, setShowForm] = useState(false);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({ title: '', body: '', expiresAt: '' });
+  const [deletingId, setDeletingId] = useState(null);
 
   useEffect(() => { dispatch(fetchAnnouncements()); }, [dispatch]);
 
@@ -52,6 +53,20 @@ export default function HdAnnouncements() {
     } catch (err) {
       toast.error(err?.response?.data?.error?.message || 'Failed to create announcement');
     } finally { setSaving(false); }
+  };
+
+  const handleDeleteAnnouncement = async (id) => {
+    if (!window.confirm('Delete this announcement? This cannot be undone.')) return;
+    setDeletingId(id);
+    try {
+      await api.delete(`/helpdesk/announcements/${id}`);
+      toast.success('Announcement deleted');
+      dispatch(fetchAnnouncements());
+    } catch (err) {
+      toast.error(err?.response?.data?.error?.message || 'Failed to delete announcement');
+    } finally {
+      setDeletingId(null);
+    }
   };
 
   const active = announcements.filter(a => !isExpired(a.expiresAt));
@@ -145,11 +160,23 @@ export default function HdAnnouncements() {
                   <HiOutlineSpeakerphone className="w-5 h-5 text-blue-500 flex-shrink-0 mt-0.5" />
                   <h3 className="font-semibold text-gray-900">{a.title}</h3>
                 </div>
-                {a.expiresAt && (
-                  <span className="text-xs text-gray-400 flex-shrink-0">
-                    Expires {new Date(a.expiresAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
-                  </span>
-                )}
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  {a.expiresAt && (
+                    <span className="text-xs text-gray-400">
+                      Expires {new Date(a.expiresAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
+                    </span>
+                  )}
+                  {canManage && (
+                    <button
+                      onClick={() => handleDeleteAnnouncement(a.id || a._id)}
+                      disabled={deletingId === (a.id || a._id)}
+                      className="p-1 text-gray-400 hover:text-red-500 disabled:opacity-40 transition-colors"
+                      title="Delete announcement"
+                    >
+                      <HiOutlineTrash className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
               </div>
               <p className="text-sm text-gray-600 mt-2 leading-relaxed">{a.body}</p>
               <p className="text-xs text-gray-400 mt-3">
@@ -169,9 +196,21 @@ export default function HdAnnouncements() {
                       <HiOutlineSpeakerphone className="w-5 h-5 text-gray-400 flex-shrink-0 mt-0.5" />
                       <h3 className="font-medium text-gray-600">{a.title}</h3>
                     </div>
-                    <span className="text-xs text-red-400 flex-shrink-0">
-                      Expired {a.expiresAt ? new Date(a.expiresAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : ''}
-                    </span>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <span className="text-xs text-red-400">
+                        Expired {a.expiresAt ? new Date(a.expiresAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : ''}
+                      </span>
+                      {canManage && (
+                        <button
+                          onClick={() => handleDeleteAnnouncement(a.id || a._id)}
+                          disabled={deletingId === (a.id || a._id)}
+                          className="p-1 text-gray-400 hover:text-red-500 disabled:opacity-40 transition-colors"
+                          title="Delete announcement"
+                        >
+                          <HiOutlineTrash className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
                   </div>
                   <p className="text-sm text-gray-500 mt-2 leading-relaxed">{a.body}</p>
                 </div>

@@ -28,7 +28,14 @@ const getStats = async (req, res, next) => {
       HdTicket.count({ where: { status: TICKET_STATUS.PENDING } }),
       HdTicket.count({ where: { status: TICKET_STATUS.RESOLVED } }),
       HdTicket.count({ where: { status: TICKET_STATUS.CLOSED } }),
-      HdTicket.count({ where: { slaBreached: true } }),
+      // BUG M10 FIX: exclude closed/resolved tickets from the sla-breached (overdue) count
+      // so the dashboard only shows tickets that still need action.
+      HdTicket.count({
+        where: {
+          slaBreached: true,
+          status: { [Op.notIn]: [TICKET_STATUS.CLOSED, TICKET_STATUS.RESOLVED] },
+        },
+      }),
     ]);
 
     return sendSuccess(res, { total, open, inProgress, pending, resolved, closed, slaBreached }, 'Stats fetched');
@@ -222,7 +229,13 @@ const getMyStats = async (req, res, next) => {
  */
 const getUnassignedCount = async (req, res, next) => {
   try {
-    const count = await HdTicket.count({ where: { assigneeId: null } });
+    // Also exclude closed/resolved tickets from the unassigned count — they no longer need assignment.
+    const count = await HdTicket.count({
+      where: {
+        assigneeId: null,
+        status: { [Op.notIn]: [TICKET_STATUS.CLOSED, TICKET_STATUS.RESOLVED] },
+      },
+    });
     const total = await HdTicket.count();
     return sendSuccess(res, { count, total }, 'Unassigned count fetched');
   } catch (err) { next(err); }
@@ -235,7 +248,13 @@ const getUnassignedCount = async (req, res, next) => {
  */
 const getSlaStats = async (req, res, next) => {
   try {
-    const breached = await HdTicket.count({ where: { slaBreached: true } });
+    // BUG M10 FIX: exclude closed/resolved tickets from the breached count
+    const breached = await HdTicket.count({
+      where: {
+        slaBreached: true,
+        status: { [Op.notIn]: [TICKET_STATUS.CLOSED, TICKET_STATUS.RESOLVED] },
+      },
+    });
     const total    = await HdTicket.count();
     return sendSuccess(res, { breached, total }, 'SLA stats fetched');
   } catch (err) { next(err); }

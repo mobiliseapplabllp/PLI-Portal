@@ -197,7 +197,7 @@ export default function AppRoutes() {
           <Route path="/pm/projects/:id/daily-log" element={<RoleRoute roles={ALL_ROLES}><DailyLogForm /></RoleRoute>} />
           <Route path="/pm/projects/:id/daily-logs" element={<RoleRoute roles={ALL_ROLES}><DailyLogHistory /></RoleRoute>} />
           <Route path="/pm/my-tasks" element={<RoleRoute roles={ALL_ROLES}><MyTasks /></RoleRoute>} />
-          <Route path="/pm/settings" element={<RoleRoute roles={['admin']}><PMSettings /></RoleRoute>} />
+          <Route path="/pm/settings" element={<RoleRoute roles={['admin', 'manager', 'senior_manager']}><PMSettings /></RoleRoute>} />
 
           {/* CSAT routes */}
           <Route path="/csat/client-organisations" element={<RoleRoute roles={['admin', 'manager', 'senior_manager']}><ClientOrgsPage /></RoleRoute>} />
