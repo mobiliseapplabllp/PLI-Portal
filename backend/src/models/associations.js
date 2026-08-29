@@ -29,6 +29,8 @@ const PmStatus                   = require('./pm/PmStatus');
 const PmMilestoneTemplate        = require('./pm/PmMilestoneTemplate');
 const PmStatusReport             = require('./pm/PmStatusReport');
 const PmRaidItem                 = require('./pm/PmRaidItem');
+const PmMilestoneDateLog         = require('./pm/PmMilestoneDateLog');
+const PmAllocationApproval       = require('./pm/PmAllocationApproval');
 const PmFinancialDetail          = require('./pm/PmFinancialDetail');
 const PmClosure                  = require('./pm/PmClosure');
 
@@ -132,10 +134,19 @@ ProjectNotificationRecipient.belongsTo(User,    { foreignKey: 'userId',    as: '
 PmStatusReport.belongsTo(Project, { foreignKey: 'projectId',  as: 'project',   constraints: false });
 PmStatusReport.belongsTo(User,    { foreignKey: 'createdById', as: 'createdBy', constraints: false });
 
-PmRaidItem.belongsTo(Project, { foreignKey: 'projectId',  as: 'project',   constraints: false });
-PmRaidItem.belongsTo(User,    { foreignKey: 'createdById', as: 'createdBy', constraints: false });
+PmRaidItem.belongsTo(Project, { foreignKey: 'projectId',  as: 'project',        constraints: false });
+PmRaidItem.belongsTo(User,    { foreignKey: 'createdById', as: 'createdBy',       constraints: false });
+PmRaidItem.belongsTo(User,    { foreignKey: 'ownerId',     as: 'accountableUser', constraints: false });
 
 PmFinancialDetail.belongsTo(Project, { foreignKey: 'projectId', as: 'project', constraints: false });
+
+PmMilestoneDateLog.belongsTo(Milestone, { foreignKey: 'milestoneId', as: 'milestone', constraints: false });
+PmMilestoneDateLog.belongsTo(User,      { foreignKey: 'changedById',  as: 'changedBy', constraints: false });
+
+PmAllocationApproval.belongsTo(Project,      { foreignKey: 'projectId',     as: 'project',   constraints: false });
+PmAllocationApproval.belongsTo(User,         { foreignKey: 'userId',        as: 'user',      constraints: false });
+PmAllocationApproval.belongsTo(User,         { foreignKey: 'requestedById', as: 'requestedBy', constraints: false });
+PmAllocationApproval.belongsTo(User,         { foreignKey: 'approvedById',  as: 'approvedBy', constraints: false });
 
 PmClosure.belongsTo(Project, { foreignKey: 'projectId',   as: 'project',   constraints: false });
 PmClosure.belongsTo(User,    { foreignKey: 'signedOffById',as: 'signedOffBy', constraints: false });
@@ -204,6 +215,7 @@ module.exports = {
   Project, ProjectMember, Milestone, Task, DailyStatusLog, ProjectNotificationRecipient, PmSettings, PmDocument,
   PmProjectType, PmStatus, PmMilestoneTemplate,
   PmStatusReport, PmRaidItem, PmFinancialDetail, PmClosure,
+  PmMilestoneDateLog, PmAllocationApproval,
   // CSAT
   ClientOrganisation, ClientEmployee, Survey, SurveyQuestion,
   SurveyDispatch, SurveyRecipient, SurveyResponse,

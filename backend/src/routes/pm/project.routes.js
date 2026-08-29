@@ -16,6 +16,9 @@ router.delete('/:id', authorize('admin'), ctrl.deleteProject);
 // All tasks for a project (flat, no milestone filter) — avoids N+1 in MyTasks
 router.get('/:id/tasks', authorize(...ALL), taskCtrl.getAllProjectTasks);
 
+// Members availability (batch — must be before /:id/members to avoid param conflict)
+router.get('/:id/members/availability', authorize(...ALL), ctrl.getMembersAvailability);
+
 // Members
 router.get('/:id/members', authorize(...ALL), ctrl.getMembers);
 router.post('/:id/members', authorize(...MANAGERS), ctrl.addMember);
@@ -26,5 +29,15 @@ router.delete('/:id/members/:memberId', authorize(...MANAGERS), ctrl.removeMembe
 router.get('/:id/recipients', authorize(...MANAGERS), ctrl.getRecipients);
 router.post('/:id/recipients', authorize(...MANAGERS), ctrl.addRecipient);
 router.delete('/:id/recipients/:recipientId', authorize(...MANAGERS), ctrl.removeRecipient);
+
+// Allocation
+router.get('/:id/allocation-preview',                 authorize(...MANAGERS), ctrl.getAllocationPreview);
+router.post('/:id/allocation-approval',               authorize(...MANAGERS), ctrl.requestAllocationApproval);
+// Route points to respondToAllocationApproval (full impl); respondAllocationApproval is intentionally removed.
+router.patch('/:id/allocation-approval/:approvalId',  authorize('admin','senior_manager','md','director'), ctrl.respondToAllocationApproval);
+
+// Allocation approval inbox (source project manager sees and responds to incoming requests)
+router.get('/:id/allocation-approvals',               authorize(...MANAGERS), ctrl.getProjectAllocationApprovals);
+router.patch('/:id/allocation-approvals/:approvalId', authorize(...MANAGERS), ctrl.respondToAllocationApproval);
 
 module.exports = router;

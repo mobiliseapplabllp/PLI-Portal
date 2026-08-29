@@ -17,10 +17,35 @@ const reminderCtrl = require('../../controllers/helpdesk/reminder.controller');
 router.get('/',              ticketCtrl.listTickets);
 router.post('/',             upload.single('attachment'), ticketCtrl.createTicket);
 router.post('/bulk-assign',  ticketCtrl.bulkAssign);
+// Permission guard mirrors the bulkAssign check: admin or canAssign required.
+// The controller performs the same check for defence-in-depth.
+router.post('/bulk-upload',
+  (req, res, next) => {
+    if (!req.hdUser?.isAdmin && !req.hdUser?.permissions?.canAssign) {
+      return res.status(403).json({ success: false, message: 'You do not have permission to bulk upload tickets' });
+    }
+    next();
+  },
+  ticketCtrl.bulkUpload,
+);
+
+// Static sub-paths must come before /:id to avoid param capture
+router.get('/template/import', ticketCtrl.getImportTemplate);
+router.get('/export',          ticketCtrl.exportTickets);
 
 router.get('/:id',           ticketCtrl.getTicket);
+// Authorization enforced inside updateTicket (owner or admin/canAssign required)
 router.put('/:id',           ticketCtrl.updateTicket);
-router.delete('/:id',        ticketCtrl.deleteTicket);
+// Admin-only guard duplicated at route level for defence-in-depth
+router.delete('/:id',
+  (req, res, next) => {
+    if (!req.hdUser?.isAdmin) {
+      return res.status(403).json({ success: false, message: 'Only admins can delete tickets' });
+    }
+    next();
+  },
+  ticketCtrl.deleteTicket,
+);
 
 // â”€â”€ History â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 router.get('/:id/history',   ticketCtrl.getHistory);

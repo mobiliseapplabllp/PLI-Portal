@@ -12,7 +12,8 @@ import {
   HiOutlineCash, HiOutlineCheckCircle, HiOutlineExclamationCircle,
   HiOutlineClipboard,
 } from 'react-icons/hi';
-import { updateProjectApi, addMemberApi, removeMemberApi } from '../../api/pm/projects.api';
+import { updateProjectApi, addMemberApi, updateMemberApi, removeMemberApi } from '../../api/pm/projects.api';
+import { MEMBER_ROLES } from './CreateProject';
 import {
   getProjectDocumentsApi, uploadProjectDocumentApi,
   deleteProjectDocumentApi, downloadProjectDocumentUrl,
@@ -21,6 +22,8 @@ import { getTodayLogApi } from '../../api/pm/dailyLogs.api';
 import { getUsersApi } from '../../api/users.api';
 import { getPmStatusesApi } from '../../api/pm/config.api';
 import api from '../../api/axios';
+import ResourceAvailabilityCard from '../../components/pm/ResourceAvailabilityCard';
+import AllocationApprovalPanel from '../../components/pm/AllocationApprovalPanel';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
@@ -97,16 +100,32 @@ export default function ProjectDetail() {
   const { id }   = useParams();
   const navigate = useNavigate();
   const dispatch = useDispatch();
-  const { activeProject: project, loading, error } = useSelector(s => s.pm);
+  const { activeProject: project, projectLoading, projectError } = useSelector(s => s.pm);
   const { user } = useSelector(s => s.auth);
 
   const [activeTab,     setActiveTab]     = useState('overview');
   const [allUsers,      setAllUsers]      = useState([]);
   const [pmStatuses,    setPmStatuses]    = useState([]);
   const [addingMember,  setAddingMember]  = useState(false);
-  const [memberForm,    setMemberForm]    = useState({ userId: '', role: '', responsibilities: '' });
+  const [memberForm,    setMemberForm]    = useState({ userId: '', role: '', allocationPct: null, allocationFrom: null, allocationTo: null });
+  const [editingMemberId, setEditingMemberId] = useState(null);
+  const [editMemberForm,  setEditMemberForm]  = useState({ allocationPct: null, allocationFrom: null, allocationTo: null });
   const [statusUpdating,setStatusUpdating]= useState(false);
+  const [showAllocationPreview, setShowAllocationPreview] = useState(false);
+  const [allocationPreview,     setAllocationPreview]     = useState([]);
+  const [previewLoading,        setPreviewLoading]        = useState(false);
   const [todayLog,      setTodayLog]      = useState(null);
+  const [teamView, setTeamView] = useState(() => {
+    try { return localStorage.getItem('pm_team_view') || 'list'; } catch { return 'list'; }
+  });
+  const handleTeamViewToggle = (v) => {
+    setTeamView(v);
+    try { localStorage.setItem('pm_team_view', v); } catch {}
+  };
+
+  // Batch availability for Team Setup tab
+  const [membersAvailability, setMembersAvailability] = useState({});
+  const [availabilityLoading, setAvailabilityLoading] = useState(false);
 
   // Edit project modal
   const [showEdit,  setShowEdit]  = useState(false);
@@ -194,6 +213,45 @@ export default function ProjectDetail() {
     }
   }, [activeTab, id]);
 
+  // Allocation preview fetch
+  useEffect(() => {
+    if (!showAllocationPreview) return;
+    setPreviewLoading(true);
+    const params = new URLSearchParams();
+    const firstWithDates = (project?.members || []).find(m => m.allocationFrom && m.allocationTo);
+    if (firstWithDates) {
+      params.set('fromDate', firstWithDates.allocationFrom.slice(0, 10));
+      params.set('toDate', firstWithDates.allocationTo.slice(0, 10));
+    }
+    api.get(`/pm/projects/${id}/allocation-preview?${params}`)
+      .then(res => setAllocationPreview(res.data?.data ?? []))
+      .catch(() => toast.error('Failed to load allocation preview'))
+      .finally(() => setPreviewLoading(false));
+  }, [showAllocationPreview, id]);
+
+  // Reset allocation preview when navigating to a different project
+  useEffect(() => {
+    setShowAllocationPreview(false);
+  }, [id]);
+
+  // Batch-fetch cross-project availability for all team members when Team tab is active
+  useEffect(() => {
+    const memberList = project?.members || [];
+    if (!id || memberList.length === 0) return;
+    setAvailabilityLoading(true);
+    api.get(`/pm/projects/${id}/members/availability`)
+      .then(res => {
+        const data = res.data?.data || [];
+        const map = {};
+        data.forEach(d => { map[String(d.userId)] = d; });
+        setMembersAvailability(map);
+      })
+      .catch(() => {}) // non-fatal — cards render fine without availability
+      .finally(() => setAvailabilityLoading(false));
+  // Depend on the actual set of userIds, not just count — swapping one member
+  // for another keeps the count identical but must still trigger a re-fetch.
+  }, [id, (project?.members || []).map(m => m.userId).join(',')]);
+
   // Reload RAID when filter changes
   useEffect(() => {
     if (activeTab === 'raid' && id) {
@@ -222,7 +280,7 @@ export default function ProjectDetail() {
       await addMemberApi(id, memberForm);
       toast.success('Member added');
       dispatch(fetchProjectById(id));
-      setMemberForm({ userId: '', role: '', responsibilities: '' });
+      setMemberForm({ userId: '', role: '', allocationPct: null, allocationFrom: null, allocationTo: null });
       setAddingMember(false);
     } catch (err) { toast.error(err.response?.data?.message || 'Failed to add member'); }
   };
@@ -232,6 +290,31 @@ export default function ProjectDetail() {
     catch { toast.error('Failed to remove member'); }
   };
 
+  const openEditMember = (m) => {
+    setEditingMemberId(m._id || m.id);
+    setEditMemberForm({
+      allocationPct:  m.allocationPct  ?? null,
+      allocationFrom: m.allocationFrom ? m.allocationFrom.slice(0, 10) : null,
+      allocationTo:   m.allocationTo   ? m.allocationTo.slice(0, 10)   : null,
+    });
+  };
+
+  const handleUpdateMember = async (memberId) => {
+    try {
+      await updateMemberApi(id, memberId, {
+        // Explicit null/undefined check — 0 is a valid allocationPct and must not be coerced to null
+        allocationPct:  (editMemberForm.allocationPct != null && editMemberForm.allocationPct !== '')
+          ? Number(editMemberForm.allocationPct)
+          : null,
+        allocationFrom: editMemberForm.allocationFrom || null,
+        allocationTo:   editMemberForm.allocationTo   || null,
+      });
+      toast.success('Allocation updated');
+      setEditingMemberId(null);
+      dispatch(fetchProjectById(id));
+    } catch (err) { toast.error(err.response?.data?.message || 'Failed to update allocation'); }
+  };
+
   // ── Edit project ────────────────────────────────────────────────────────────
   const openEdit = () => {
     setEditForm({
@@ -239,8 +322,10 @@ export default function ProjectDetail() {
       description:   project.description || '',
       purpose:       project.purpose || '',
       clientName:    project.clientName || '',
-      startDate:     project.startDate ? project.startDate.slice(0, 10) : '',
-      endDate:       project.endDate ? project.endDate.slice(0, 10) : '',
+      startDate:        project.startDate        ? project.startDate.slice(0, 10)        : '',
+      endDate:          project.endDate          ? project.endDate.slice(0, 10)          : '',
+      actualStartDate:  project.actualStartDate  ? project.actualStartDate.slice(0, 10)  : '',
+      actualEndDate:    project.actualEndDate    ? project.actualEndDate.slice(0, 10)    : '',
       notifyClient:  project.notifyClient ?? false,
       billingType:   project.billingType || 'Non-Billable',
       projectType:   project.projectType || '',
@@ -252,7 +337,9 @@ export default function ProjectDetail() {
     if (!editForm.name?.trim()) return toast.error('Project name is required');
     setEditSaving(true);
     try {
-      await updateProjectApi(id, editForm);
+      // Exclude startDate / endDate (planned dates are locked after creation)
+      const { startDate, endDate, ...updatePayload } = editForm;
+      await updateProjectApi(id, updatePayload);
       toast.success('Project updated');
       setShowEdit(false);
       dispatch(fetchProjectById(id));
@@ -358,7 +445,7 @@ export default function ProjectDetail() {
   };
 
   // ── Loading / error ─────────────────────────────────────────────────────────
-  if (loading) {
+  if (projectLoading) {
     return (
       <div className="space-y-4 animate-pulse">
         <div className="h-8 bg-gray-200 rounded w-1/3" />
@@ -371,7 +458,7 @@ export default function ProjectDetail() {
     return (
       <div className="flex flex-col items-center justify-center py-24 text-center">
         <p className="text-lg font-semibold text-gray-700 mb-2">Project not found</p>
-        <p className="text-sm text-gray-400 mb-6">{error || 'This project may have been deleted or you may not have access.'}</p>
+        <p className="text-sm text-gray-400 mb-6">{projectError || 'This project may have been deleted or you may not have access.'}</p>
         <button onClick={() => navigate('/pm/projects')} className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm hover:bg-emerald-700 transition-colors">
           Back to Projects
         </button>
@@ -386,7 +473,7 @@ export default function ProjectDetail() {
   const topMs      = milestones.filter(m => !m.parentMilestoneId);
   const total      = topMs.length || milestones.length;
   const completedMs= milestones.filter(m => m.status === 'completed').length;
-  const delayedMs  = milestones.filter(m => m.status === 'delayed' || (m.endDate && m.endDate < today && m.status !== 'completed')).length;
+  const delayedMs  = milestones.filter(m => m.status === 'delayed' || (m.plannedEndDate && m.plannedEndDate < today && m.status !== 'completed')).length;
   const pct        = total > 0 ? Math.round((completedMs / total) * 100) : 0;
 
   const TABS = [
@@ -521,9 +608,9 @@ export default function ProjectDetail() {
             )}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 pt-2 border-t border-gray-50">
               {[
-                ['Start Date', fmtDate(project.startDate)],
-                ['End Date',   fmtDate(project.endDate)],
-                ['Client',     project.clientName || '—'],
+                ['Planned Start', fmtDate(project.startDate)],
+                ['Planned End',   fmtDate(project.endDate)],
+                ['Client',        project.clientName || '—'],
                 ['Notify Client', project.notifyClient ? 'Yes' : 'No'],
               ].map(([l, v]) => (
                 <div key={l}>
@@ -545,7 +632,7 @@ export default function ProjectDetail() {
             ) : (
               <div className="space-y-2">
                 {milestones.filter(m => !m.parentMilestoneId).map(m => {
-                  const isDelayed = m.endDate && m.endDate < today && m.status !== 'completed';
+                  const isDelayed = m.plannedEndDate && m.plannedEndDate < today && m.status !== 'completed';
                   return (
                     <div key={m._id || m.id} className="flex items-center gap-3">
                       <div className="w-1/3 text-xs text-gray-700 truncate font-medium">{m.name}</div>
@@ -571,7 +658,9 @@ export default function ProjectDetail() {
 
       {/* ═══ TAB: TEAM ════════════════════════════════════════════════════════ */}
       {activeTab === 'team' && (
-        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+        <>
+          <AllocationApprovalPanel projectId={id} canManage={canManage} />
+          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
           <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
             <div>
               <h3 className="font-semibold text-gray-900">Team Members</h3>
@@ -582,60 +671,461 @@ export default function ProjectDetail() {
                 </div>
               )}
             </div>
-            {canManage && (
-              <button onClick={() => setAddingMember(true)} className="flex items-center gap-1.5 text-xs px-3 py-1.5 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors">
-                <HiOutlineUserAdd className="w-3.5 h-3.5" /> Add Member
+            <div className="flex items-center gap-2">
+              {/* Card / List view toggle */}
+              <div className="flex items-center rounded-md border border-gray-200 overflow-hidden">
+                <button onClick={() => handleTeamViewToggle('list')} title="List view"
+                  className={`px-2.5 py-1.5 text-sm transition ${teamView === 'list' ? 'bg-gray-100 text-gray-900' : 'text-gray-400 hover:text-gray-600'}`}>
+                  ☰
+                </button>
+                <button onClick={() => handleTeamViewToggle('card')} title="Card view"
+                  className={`px-2.5 py-1.5 text-sm transition ${teamView === 'card' ? 'bg-gray-100 text-gray-900' : 'text-gray-400 hover:text-gray-600'}`}>
+                  ⊞
+                </button>
+              </div>
+              <button
+                onClick={() => setShowAllocationPreview(true)}
+                className="text-sm text-emerald-600 hover:text-emerald-700 flex items-center gap-1.5 font-medium"
+              >
+                📊 Preview Allocation
               </button>
-            )}
+              {canManage && (
+                <button onClick={() => setAddingMember(true)} className="flex items-center gap-1.5 text-xs px-3 py-1.5 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors">
+                  <HiOutlineUserAdd className="w-3.5 h-3.5" /> Add Member
+                </button>
+              )}
+            </div>
           </div>
           {addingMember && (
-            <div className="px-5 py-4 bg-emerald-50 border-b border-emerald-100">
-              <div className="flex gap-3 flex-wrap items-end">
+            <div className="px-5 py-4 bg-blue-50 border-b border-blue-100">
+              <p className="text-xs font-semibold text-blue-700 mb-3">Add Team Member</p>
+              {/* Row 1 — Member | Role */}
+              <div className="grid grid-cols-2 gap-3 mb-3">
                 <div>
-                  <label className="text-xs font-medium text-gray-600 block mb-1">User</label>
-                  <select value={memberForm.userId} onChange={e => setMemberForm(f => ({ ...f, userId: e.target.value }))} className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm">
-                    <option value="">Select user</option>
+                  <label className="text-xs font-medium text-gray-600 block mb-1">Member <span className="text-red-500">*</span></label>
+                  <select
+                    value={memberForm.userId}
+                    onChange={e => setMemberForm(f => ({ ...f, userId: e.target.value }))}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white"
+                  >
+                    <option value="">Select member…</option>
                     {allUsers.filter(u => !members.some(m => m.userId === (u._id || u.id))).map(u => (
-                      <option key={u._id || u.id} value={u._id || u.id}>{u.name} ({u.role})</option>
+                      <option key={u._id || u.id} value={u._id || u.id}>{u.name} ({u.role?.replace(/_/g,' ')})</option>
                     ))}
                   </select>
                 </div>
                 <div>
                   <label className="text-xs font-medium text-gray-600 block mb-1">Role in Project</label>
-                  <input value={memberForm.role} onChange={e => setMemberForm(f => ({ ...f, role: e.target.value }))} placeholder="e.g. Frontend Dev" className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm w-36" />
+                  <select
+                    value={memberForm.role}
+                    onChange={e => setMemberForm(f => ({ ...f, role: e.target.value }))}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white"
+                  >
+                    <option value="">Select role…</option>
+                    {MEMBER_ROLES.map(r => (
+                      <option key={r} value={r}>{r}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              {/* Row 2 — Allocation % | From Date | To Date — same 3-col grid */}
+              <div className="grid grid-cols-3 gap-3 mb-3">
+                <div>
+                  <label className="text-xs font-medium text-gray-600 block mb-1">Allocation %</label>
+                  <input
+                    type="number" min="1" max="100"
+                    value={memberForm.allocationPct || ''}
+                    onChange={e => setMemberForm(f => ({ ...f, allocationPct: e.target.value ? Number(e.target.value) : null }))}
+                    placeholder="e.g. 50"
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                  />
                 </div>
                 <div>
-                  <label className="text-xs font-medium text-gray-600 block mb-1">Responsibilities</label>
-                  <input value={memberForm.responsibilities} onChange={e => setMemberForm(f => ({ ...f, responsibilities: e.target.value }))} placeholder="Brief note..." className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm w-48" />
+                  <label className="text-xs font-medium text-gray-600 block mb-1">From Date</label>
+                  <input
+                    type="date"
+                    value={memberForm.allocationFrom || ''}
+                    onChange={e => setMemberForm(f => ({ ...f, allocationFrom: e.target.value || null }))}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                  />
                 </div>
-                <button onClick={handleAddMember} className="px-4 py-1.5 bg-emerald-600 text-white rounded-lg text-sm hover:bg-emerald-700 transition-colors">Add</button>
+                <div>
+                  <label className="text-xs font-medium text-gray-600 block mb-1">To Date</label>
+                  <input
+                    type="date"
+                    value={memberForm.allocationTo || ''}
+                    onChange={e => setMemberForm(f => ({ ...f, allocationTo: e.target.value || null }))}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                  />
+                </div>
+              </div>
+              {/* Availability card — shows when a person is selected */}
+              {memberForm.userId && (
+                <div className="mt-3 border-t border-gray-100 pt-3">
+                  <ResourceAvailabilityCard
+                    userId={memberForm.userId}
+                    fromDate={memberForm.allocationFrom || null}
+                    toDate={memberForm.allocationTo || null}
+                    newPct={memberForm.allocationPct ? Number(memberForm.allocationPct) : null}
+                    onSuggestionSelect={(suggestion) => {
+                      if (suggestion.type === 'reduce_pct' && suggestion.suggestedPct !== undefined) {
+                        setMemberForm(f => ({ ...f, allocationPct: suggestion.suggestedPct }));
+                      }
+                      if (suggestion.type === 'shift_dates' && suggestion.suggestedFromDate) {
+                        setMemberForm(f => ({ ...f, allocationFrom: suggestion.suggestedFromDate }));
+                      }
+                      if (suggestion.type === 'request_approval' && suggestion.targetProjectName) {
+                        toast(`Contact the manager of "${suggestion.targetProjectName}" to release capacity first.`);
+                      }
+                    }}
+                  />
+                </div>
+              )}
+              <div className="flex gap-2">
+                <button onClick={handleAddMember} className="px-4 py-1.5 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 transition-colors">Add Member</button>
                 <button onClick={() => setAddingMember(false)} className="px-3 py-1.5 text-gray-500 hover:bg-gray-100 rounded-lg text-sm transition-colors">Cancel</button>
               </div>
             </div>
           )}
+          {/* Summary bar */}
+          {members.length > 0 && (
+            <div className="px-5 pt-4">
+              <div className="flex items-center gap-4 p-3 bg-gray-50 border border-gray-100 rounded-lg mb-4 text-sm">
+                <span className="text-gray-500">{members.length} member{members.length !== 1 ? 's' : ''}</span>
+                <span className="text-gray-300">|</span>
+                <span className="text-gray-500">
+                  Avg allocation: <span className="font-medium text-gray-700">
+                    {members.filter(m => m.allocationPct !== null && m.allocationPct !== undefined).length > 0
+                      ? Math.round(members.filter(m => m.allocationPct !== null && m.allocationPct !== undefined).reduce((s, m) => s + m.allocationPct, 0) / members.filter(m => m.allocationPct !== null && m.allocationPct !== undefined).length)
+                      : '—'}%
+                  </span>
+                </span>
+              </div>
+            </div>
+          )}
+
           {members.length === 0 ? (
             <div className="p-8 text-center text-gray-400 text-sm">No team members assigned</div>
+          ) : teamView === 'card' ? (
+            /* ── Card view ── */
+            <div className="p-5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {members.map(m => {
+                const mid = m._id || m.id;
+                const isEditing = editingMemberId === mid;
+                return (
+                  <div key={mid} className="bg-white border border-gray-200 rounded-xl p-4 hover:shadow-md transition">
+                    {/* Header: avatar + name + role */}
+                    <div className="flex items-start justify-between mb-3">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 font-semibold text-sm flex-shrink-0">
+                          {m.user?.name?.charAt(0)?.toUpperCase() || '?'}
+                        </div>
+                        <div>
+                          <p className="font-medium text-gray-900 text-sm">{m.user?.name || 'Unknown'}</p>
+                          <p className="text-xs text-gray-500">{m.role || m.user?.role?.replace(/_/g, ' ')}</p>
+                        </div>
+                      </div>
+                      {canManage && (
+                        <div className="flex gap-1.5 flex-shrink-0">
+                          <button
+                            onClick={() => isEditing ? setEditingMemberId(null) : openEditMember(m)}
+                            className="text-xs text-blue-500 hover:text-blue-700 transition-colors"
+                            title="Edit allocation"
+                          >
+                            {isEditing ? 'Cancel' : '✏'}
+                          </button>
+                          <button onClick={() => handleRemoveMember(mid)} className="text-xs text-red-500 hover:text-red-700 transition-colors" title="Remove">✕</button>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Allocation bar */}
+                    <div className="mb-3">
+                      {m.allocationPct !== null && m.allocationPct !== undefined ? (
+                        <>
+                          <div className="flex items-center justify-between text-xs text-gray-500 mb-1">
+                            <span>Allocation</span>
+                            <span className="font-medium text-gray-700">{m.allocationPct}%</span>
+                          </div>
+                          <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                            <div className={`h-full rounded-full transition-all ${m.allocationPct > 80 ? 'bg-amber-500' : 'bg-emerald-500'}`}
+                              style={{ width: `${Math.min(m.allocationPct, 100)}%` }} />
+                          </div>
+                        </>
+                      ) : (
+                        <span className="text-xs text-gray-400 italic">No allocation data</span>
+                      )}
+                    </div>
+
+                    {/* Duration */}
+                    {(m.allocationFrom || m.allocationTo) && (
+                      <div className="text-xs text-gray-500 flex items-center gap-1">
+                        <span>📅</span>
+                        <span>{m.allocationFrom?.slice(0, 10) || '?'} → {m.allocationTo?.slice(0, 10) || 'ongoing'}</span>
+                      </div>
+                    )}
+
+                    {/* Designation */}
+                    {m.user?.designation && (
+                      <div className="mt-2 text-xs text-gray-400">{m.user.designation}</div>
+                    )}
+
+                    {/* Status badge */}
+                    {m.allocationStatus && m.allocationStatus !== 'active' && (
+                      <div className={`mt-2 inline-block px-2 py-0.5 rounded-full text-xs font-medium ${
+                        m.allocationStatus === 'pending' ? 'bg-amber-100 text-amber-700' :
+                        m.allocationStatus === 'approved' ? 'bg-emerald-100 text-emerald-700' :
+                        'bg-gray-100 text-gray-600'
+                      }`}>
+                        {m.allocationStatus}
+                      </div>
+                    )}
+
+                    {/* ── Cross-project availability (batch fetched) ── */}
+                    {(() => {
+                      const avail = membersAvailability[String(m.userId)];
+                      if (!avail) return availabilityLoading ? (
+                        <div className="mt-3 pt-3 border-t border-gray-100">
+                          <div className="h-2 bg-gray-100 rounded animate-pulse w-full mb-1" />
+                          <div className="h-2 bg-gray-100 rounded animate-pulse w-2/3" />
+                        </div>
+                      ) : null;
+
+                      if (avail.hasNoData) return (
+                        <div className="mt-3 pt-3 border-t border-gray-100">
+                          <span className="text-xs text-gray-400">&#9898; No cross-project data</span>
+                        </div>
+                      );
+
+                      const barColor = avail.isOverAllocated ? 'bg-red-500' :
+                                       avail.totalCommitted > 80 ? 'bg-amber-500' : 'bg-emerald-500';
+                      const pct = Math.min(avail.totalCommitted, 100);
+
+                      return (
+                        <div className="mt-3 pt-3 border-t border-gray-100 space-y-1.5">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs text-gray-400 font-medium uppercase tracking-wide">Overall capacity</span>
+                            <span className={`text-xs font-semibold ${avail.isOverAllocated ? 'text-red-600' : avail.totalCommitted > 80 ? 'text-amber-600' : 'text-emerald-600'}`}>
+                              {avail.totalCommitted}% committed
+                            </span>
+                          </div>
+                          {/* Capacity bar */}
+                          <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                            <div className={`h-full rounded-full transition-all ${barColor}`}
+                              style={{ width: `${pct}%` }} />
+                          </div>
+                          {/* Stats row */}
+                          <div className="flex items-center justify-between text-xs text-gray-400">
+                            <span>{avail.freeCapacity}% free &middot; {avail.projectCount} project{avail.projectCount !== 1 ? 's' : ''}</span>
+                            {avail.nextFreeDate && (
+                              <span>Free from {avail.nextFreeDate}</span>
+                            )}
+                          </div>
+                          {/* Over-allocated warning */}
+                          {avail.isOverAllocated && (
+                            <div className="flex items-center gap-1 text-xs text-red-600 bg-red-50 rounded px-2 py-1">
+                              <span>&#9888;</span>
+                              <span>Over-allocated by {avail.totalCommitted - 100}%</span>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
+
+                    {/* Inline allocation edit form */}
+                    {isEditing && (
+                      <div className="mt-3 bg-blue-50 border border-blue-100 rounded-lg p-3">
+                        <p className="text-xs font-semibold text-blue-700 mb-2">Set Allocation for {m.user?.name}</p>
+                        <div className="grid grid-cols-1 gap-2">
+                          <div>
+                            <label className="text-xs text-gray-600 block mb-1">Allocation %</label>
+                            <input
+                              type="number" min="1" max="100"
+                              value={editMemberForm.allocationPct || ''}
+                              onChange={e => setEditMemberForm(f => ({ ...f, allocationPct: e.target.value ? Number(e.target.value) : null }))}
+                              placeholder="e.g. 50"
+                              className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-xs text-gray-600 block mb-1">From Date</label>
+                            <input
+                              type="date"
+                              value={editMemberForm.allocationFrom || ''}
+                              onChange={e => setEditMemberForm(f => ({ ...f, allocationFrom: e.target.value || null }))}
+                              className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-xs text-gray-600 block mb-1">To Date</label>
+                            <input
+                              type="date"
+                              value={editMemberForm.allocationTo || ''}
+                              onChange={e => setEditMemberForm(f => ({ ...f, allocationTo: e.target.value || null }))}
+                              className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"
+                            />
+                          </div>
+                        </div>
+                        <div className="flex gap-2 mt-2">
+                          <button
+                            onClick={() => handleUpdateMember(mid)}
+                            className="px-3 py-1.5 bg-emerald-600 text-white rounded text-xs font-medium hover:bg-emerald-700"
+                          >
+                            Save
+                          </button>
+                          <button
+                            onClick={() => setEditingMemberId(null)}
+                            className="px-3 py-1.5 text-gray-500 hover:bg-gray-100 rounded text-xs"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           ) : (
+            /* ── List view (enhanced) ── */
             <div className="divide-y divide-gray-50">
-              {members.map(m => (
-                <div key={m._id || m.id} className="px-5 py-3 flex items-center gap-4">
-                  <div className="w-9 h-9 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center text-sm font-bold flex-shrink-0">
-                    {m.user?.name?.charAt(0).toUpperCase() || '?'}
+              {members.map((m, idx) => {
+                const mid = m._id || m.id;
+                const isEditing = editingMemberId === mid;
+                return (
+                  <div key={mid} className={`px-5 py-3 ${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}`}>
+                    <div className="flex items-center gap-4">
+                      <div className="w-9 h-9 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center text-sm font-bold flex-shrink-0">
+                        {m.user?.name?.charAt(0).toUpperCase() || '?'}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-gray-900">{m.user?.name}</p>
+                        <p className="text-xs text-gray-500">{m.user?.email} · {m.user?.role?.replace(/_/g, ' ')}</p>
+                        {m.role && <p className="text-xs text-emerald-700 mt-0.5">{m.role}</p>}
+                      </div>
+                      <div className="text-right flex-shrink-0 min-w-[120px]">
+                        {m.allocationPct != null ? (
+                          <>
+                            <span className="text-sm font-semibold text-emerald-700">{m.allocationPct}%</span>
+                            <div className="mt-1 h-1.5 bg-gray-100 rounded-full overflow-hidden w-24 ml-auto">
+                              <div className={`h-full rounded-full ${m.allocationPct > 80 ? 'bg-amber-500' : 'bg-emerald-500'}`}
+                                style={{ width: `${Math.min(m.allocationPct, 100)}%` }} />
+                            </div>
+                          </>
+                        ) : (
+                          <span className="text-xs text-gray-400 italic">No data</span>
+                        )}
+                        {m.allocationFrom && m.allocationTo && (
+                          <div className="text-xs text-gray-400 mt-0.5">
+                            {m.allocationFrom.slice(0, 10)} – {m.allocationTo.slice(0, 10)}
+                          </div>
+                        )}
+                        {m.allocationStatus && m.allocationStatus !== 'active' && (
+                          <div className={`mt-1 inline-block px-1.5 py-0.5 rounded-full text-xs font-medium ${
+                            m.allocationStatus === 'pending' ? 'bg-amber-100 text-amber-700' :
+                            m.allocationStatus === 'approved' ? 'bg-emerald-100 text-emerald-700' :
+                            'bg-gray-100 text-gray-600'
+                          }`}>
+                            {m.allocationStatus}
+                          </div>
+                        )}
+                      </div>
+                      {/* Overall cross-project capacity */}
+                      {(() => {
+                        const avail = membersAvailability[String(m.userId)];
+                        if (!avail || avail.hasNoData) return (
+                          <div className="flex-shrink-0 w-28 text-center">
+                            {availabilityLoading
+                              ? <div className="h-2 bg-gray-100 rounded animate-pulse w-full" />
+                              : <span className="text-xs text-gray-400">—</span>}
+                          </div>
+                        );
+                        return (
+                          <div className="flex-shrink-0 w-28">
+                            <p className="text-xs text-gray-400 mb-1">Overall</p>
+                            <div className="flex items-center gap-1.5">
+                              <div className="w-14 h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                                <div className={`h-full rounded-full ${avail.isOverAllocated ? 'bg-red-400' : avail.totalCommitted > 80 ? 'bg-amber-400' : 'bg-emerald-400'}`}
+                                  style={{ width: `${Math.min(avail.totalCommitted, 100)}%` }} />
+                              </div>
+                              <span className={`text-xs font-medium ${avail.isOverAllocated ? 'text-red-600' : 'text-gray-600'}`}>
+                                {avail.totalCommitted}%
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })()}
+                      {canManage && (
+                        <div className="flex gap-2 flex-shrink-0">
+                          <button
+                            onClick={() => isEditing ? setEditingMemberId(null) : openEditMember(m)}
+                            className="text-xs text-blue-500 hover:text-blue-700 transition-colors"
+                            title="Edit allocation"
+                          >
+                            {isEditing ? 'Cancel' : '✏ Edit'}
+                          </button>
+                          <button onClick={() => handleRemoveMember(mid)} className="text-xs text-red-500 hover:text-red-700 transition-colors">Remove</button>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Inline allocation edit form */}
+                    {isEditing && (
+                      <div className="mt-3 ml-13 pl-13 bg-blue-50 border border-blue-100 rounded-lg p-3">
+                        <p className="text-xs font-semibold text-blue-700 mb-2">Set Allocation for {m.user?.name}</p>
+                        <div className="grid grid-cols-3 gap-2">
+                          <div>
+                            <label className="text-xs text-gray-600 block mb-1">Allocation %</label>
+                            <input
+                              type="number" min="1" max="100"
+                              value={editMemberForm.allocationPct || ''}
+                              onChange={e => setEditMemberForm(f => ({ ...f, allocationPct: e.target.value ? Number(e.target.value) : null }))}
+                              placeholder="e.g. 50"
+                              className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-xs text-gray-600 block mb-1">From Date</label>
+                            <input
+                              type="date"
+                              value={editMemberForm.allocationFrom || ''}
+                              onChange={e => setEditMemberForm(f => ({ ...f, allocationFrom: e.target.value || null }))}
+                              className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-xs text-gray-600 block mb-1">To Date</label>
+                            <input
+                              type="date"
+                              value={editMemberForm.allocationTo || ''}
+                              onChange={e => setEditMemberForm(f => ({ ...f, allocationTo: e.target.value || null }))}
+                              className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"
+                            />
+                          </div>
+                        </div>
+                        <div className="flex gap-2 mt-2">
+                          <button
+                            onClick={() => handleUpdateMember(mid)}
+                            className="px-3 py-1.5 bg-emerald-600 text-white rounded text-xs font-medium hover:bg-emerald-700"
+                          >
+                            Save
+                          </button>
+                          <button
+                            onClick={() => setEditingMemberId(null)}
+                            className="px-3 py-1.5 text-gray-500 hover:bg-gray-100 rounded text-xs"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-gray-900">{m.user?.name}</p>
-                    <p className="text-xs text-gray-500">{m.user?.email} · {m.user?.role?.replace(/_/g, ' ')}</p>
-                    {m.role && <p className="text-xs text-emerald-700 mt-0.5">Project Role: {m.role}</p>}
-                    {m.responsibilities && <p className="text-xs text-gray-400 mt-0.5">{m.responsibilities}</p>}
-                  </div>
-                  {canManage && (
-                    <button onClick={() => handleRemoveMember(m._id || m.id)} className="text-xs text-red-500 hover:text-red-700 transition-colors">Remove</button>
-                  )}
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
+        </>
       )}
 
       {/* ═══ TAB: PROJECT PLAN ════════════════════════════════════════════════ */}
@@ -667,7 +1157,7 @@ export default function ProjectDetail() {
             <div className="space-y-3">
               {milestones.filter(m => !m.parentMilestoneId).map((m, idx) => {
                 const subs = milestones.filter(s => s.parentMilestoneId && String(s.parentMilestoneId) === String(m._id || m.id));
-                const isDelayed = m.endDate && m.endDate < today && m.status !== 'completed';
+                const isDelayed = m.plannedEndDate && m.plannedEndDate < today && m.status !== 'completed';
                 return (
                   <div key={m._id || m.id} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
                     {/* Default milestone header */}
@@ -678,13 +1168,20 @@ export default function ProjectDetail() {
                           <span className="font-semibold text-gray-900 text-sm">{m.name}</span>
                           {m.isDefault && <span className="text-xs px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-600 border border-emerald-100">Default</span>}
                         </div>
-                        <div className="flex items-center gap-3 mt-0.5 text-xs text-gray-400">
+                        <div className="flex flex-wrap items-center gap-3 mt-0.5 text-xs text-gray-400">
                           {m.weightPercentage != null
                             ? <span className="text-emerald-600 font-semibold">{m.weightPercentage}%</span>
                             : m.minPct != null && <span className="text-gray-400">Range: {m.minPct}–{m.maxPct}%</span>
                           }
-                          {m.startDate && <span>{fmtDate(m.startDate)}</span>}
-                          {m.endDate && <span className={isDelayed ? 'text-red-500 font-semibold' : ''}>→ {fmtDate(m.endDate)}</span>}
+                          {m.plannedStartDate && <span>{fmtDate(m.plannedStartDate)}</span>}
+                          {m.plannedEndDate && <span className={isDelayed ? 'text-red-500 font-semibold' : ''}>→ {fmtDate(m.plannedEndDate)}</span>}
+                          {(m.actualStartDate || m.actualEndDate) && (
+                            <div className="flex items-center gap-1 basis-full text-xs text-emerald-600">
+                              <span>✓</span>
+                              {m.actualStartDate && <span>{fmtDate(m.actualStartDate)}</span>}
+                              {m.actualEndDate && <span>→ {fmtDate(m.actualEndDate)}</span>}
+                            </div>
+                          )}
                           {m.accountableUser && <span>👤 {m.accountableUser.name}</span>}
                         </div>
                       </div>
@@ -705,16 +1202,23 @@ export default function ProjectDetail() {
                     {subs.length > 0 && (
                       <div className="divide-y divide-gray-50">
                         {subs.map(s => {
-                          const sDelayed = s.endDate && s.endDate < today && s.status !== 'completed';
+                          const sDelayed = s.plannedEndDate && s.plannedEndDate < today && s.status !== 'completed';
                           return (
                             <div key={s._id || s.id} className="flex items-center gap-4 pl-12 pr-5 py-2.5">
                               <div className="w-1.5 h-1.5 rounded-full bg-gray-300 flex-shrink-0" />
                               <div className="flex-1 min-w-0">
                                 <p className="text-sm text-gray-800">{s.name}</p>
-                                <div className="flex items-center gap-3 mt-0.5 text-xs text-gray-400">
+                                <div className="flex flex-wrap items-center gap-3 mt-0.5 text-xs text-gray-400">
                                   {s.weightPercentage != null && <span>{s.weightPercentage}%</span>}
-                                  {s.startDate && <span>{fmtDate(s.startDate)}</span>}
-                                  {s.endDate && <span className={sDelayed ? 'text-red-500' : ''}>→ {fmtDate(s.endDate)}</span>}
+                                  {s.plannedStartDate && <span>{fmtDate(s.plannedStartDate)}</span>}
+                                  {s.plannedEndDate && <span className={sDelayed ? 'text-red-500' : ''}>→ {fmtDate(s.plannedEndDate)}</span>}
+                                  {(s.actualStartDate || s.actualEndDate) && (
+                                    <div className="flex items-center gap-1 basis-full text-xs text-emerald-600">
+                                      <span>✓</span>
+                                      {s.actualStartDate && <span>{fmtDate(s.actualStartDate)}</span>}
+                                      {s.actualEndDate && <span>→ {fmtDate(s.actualEndDate)}</span>}
+                                    </div>
+                                  )}
                                   {s.accountableUser && <span>👤 {s.accountableUser.name}</span>}
                                 </div>
                               </div>
@@ -930,7 +1434,7 @@ export default function ProjectDetail() {
                 <div>
                   <label className="text-xs font-medium text-gray-600 block mb-1">Status</label>
                   <select value={raidForm.status} onChange={e => setRaidForm(f => ({ ...f, status: e.target.value }))} className={inputCls}>
-                    {['Open','In Progress','Closed','Mitigated'].map(v => <option key={v}>{v}</option>)}
+                    {['Open','In Progress','Closed','Deferred'].map(v => <option key={v}>{v}</option>)}
                   </select>
                 </div>
                 <div>
@@ -981,7 +1485,7 @@ export default function ProjectDetail() {
                       <td className="px-4 py-3 text-xs text-gray-600">{r.impact || '—'}</td>
                       <td className="px-4 py-3 text-xs text-gray-600">{r.probability || '—'}</td>
                       <td className="px-4 py-3">
-                        <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${r.status === 'Open' ? 'bg-orange-100 text-orange-700' : r.status === 'Closed' || r.status === 'Mitigated' ? 'bg-gray-100 text-gray-500' : 'bg-blue-100 text-blue-700'}`}>{r.status}</span>
+                        <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${r.status === 'Open' ? 'bg-orange-100 text-orange-700' : r.status === 'Closed' || r.status === 'Deferred' ? 'bg-gray-100 text-gray-500' : 'bg-blue-100 text-blue-700'}`}>{r.status}</span>
                       </td>
                       <td className="px-4 py-3 text-xs text-gray-400">{fmtDate(r.raisedDate)}</td>
                       {canManage && (
@@ -1241,6 +1745,171 @@ export default function ProjectDetail() {
         </div>
       )}
 
+      {/* ═══ ALLOCATION PREVIEW MODAL ══════════════════════════════════════ */}
+      {showAllocationPreview && (
+        <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[85vh] flex flex-col">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
+              <div>
+                <h3 className="text-base font-semibold text-gray-800">Resource Allocation Preview</h3>
+                <p className="text-xs text-gray-400 mt-0.5">Cross-project load for each team member</p>
+              </div>
+              <button onClick={() => setShowAllocationPreview(false)} className="text-gray-400 hover:text-gray-600 text-xl leading-none">✕</button>
+            </div>
+
+            <div className="overflow-y-auto p-5 space-y-3">
+              {previewLoading ? (
+                <div className="flex items-center justify-center py-12 gap-2">
+                  <div className="w-4 h-4 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
+                  <span className="text-sm text-gray-400">Loading allocation data…</span>
+                </div>
+              ) : allocationPreview.length === 0 ? (
+                <div className="text-center py-12">
+                  <p className="text-2xl mb-2">📊</p>
+                  <p className="text-sm font-medium text-gray-600">No allocation data yet</p>
+                  <p className="text-xs text-gray-400 mt-1">Set Allocation %, From Date, and To Date for team members first.</p>
+                </div>
+              ) : (
+                allocationPreview.map(member => {
+                  const thisAlloc  = member.allAllocations?.find(a => a.projectId === id);
+                  const otherAllocs = (member.allAllocations || []).filter(a => a.projectId !== id);
+                  const totalPct   = (member.allAllocations || []).reduce((s, a) => s + (a.pct || 0), 0);
+                  const isUnset    = member.allocationPct == null;
+                  const isOverloaded = totalPct > 100;
+                  const isHigh     = totalPct > 80 && totalPct <= 100;
+                  const barColor   = isOverloaded ? 'bg-red-500' : isHigh ? 'bg-amber-400' : 'bg-emerald-500';
+                  const borderCls  = isOverloaded ? 'border-red-200 bg-red-50' : isUnset ? 'border-amber-200 bg-amber-50' : 'border-gray-200';
+                  // Find earliest free-up date (latest allocationTo across all active allocations)
+                  const freeDate = (member.allAllocations || [])
+                    .filter(a => a.to)
+                    .sort((a, b) => new Date(b.to) - new Date(a.to))[0]?.to;
+
+                  return (
+                    <div key={member.userId} className={`rounded-lg border p-4 ${borderCls}`}>
+                      {/* Header row */}
+                      <div className="flex items-start justify-between gap-3 mb-3">
+                        <div className="flex items-center gap-2.5">
+                          <div className="w-8 h-8 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center text-xs font-bold flex-shrink-0">
+                            {member.user?.name?.charAt(0).toUpperCase() || '?'}
+                          </div>
+                          <div>
+                            <p className="text-sm font-semibold text-gray-900">{member.user?.name}</p>
+                            <p className="text-xs text-gray-500">{member.user?.email}</p>
+                          </div>
+                        </div>
+                        <div className="text-right flex-shrink-0">
+                          {isUnset ? (
+                            <span className="inline-block px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-700">⚠ Allocation not set</span>
+                          ) : isOverloaded ? (
+                            <span className="inline-block px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-700">🔴 Overloaded {totalPct}%</span>
+                          ) : isHigh ? (
+                            <span className="inline-block px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-700">⚠ High {totalPct}%</span>
+                          ) : (
+                            <span className="inline-block px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-700">✅ {totalPct}% total</span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Allocation bar */}
+                      {!isUnset && (
+                        <div className="mb-3">
+                          <div className="flex justify-between text-xs text-gray-500 mb-1">
+                            <span>Total load across all projects</span>
+                            <span className="font-medium">{totalPct}% / 100%</span>
+                          </div>
+                          <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                            <div
+                              className={`h-2 rounded-full transition-all ${barColor}`}
+                              style={{ width: `${Math.min(totalPct, 100)}%` }}
+                            />
+                          </div>
+                          {totalPct > 100 && (
+                            <p className="text-xs text-red-500 mt-1">⚠ {totalPct - 100}% over capacity</p>
+                          )}
+                        </div>
+                      )}
+
+                      {/* This project */}
+                      {!isUnset && (
+                        <div className="flex items-center gap-2 mb-2">
+                          <span className="w-2 h-2 rounded-full bg-emerald-500 flex-shrink-0" />
+                          <span className="text-xs font-semibold text-emerald-700">{project?.name || 'This project'}</span>
+                          <span className="text-xs font-bold text-gray-800 ml-auto">{member.allocationPct}%</span>
+                          {member.allocationFrom && member.allocationTo && (
+                            <span className="text-xs text-gray-400">{member.allocationFrom.slice(0,10)} → {member.allocationTo.slice(0,10)}</span>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Other projects */}
+                      {otherAllocs.length > 0 && (
+                        <div className="space-y-1.5 mt-2">
+                          <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Also involved in:</p>
+                          {otherAllocs.map((a, i) => (
+                            <div key={i} className="flex items-center gap-2">
+                              <span className="w-2 h-2 rounded-full bg-gray-300 flex-shrink-0" />
+                              <span className="text-xs text-gray-700 flex-1 truncate">{a.projectName || 'Unknown project'}</span>
+                              <span className="text-xs font-semibold text-gray-700">{a.pct}%</span>
+                              {a.from && a.to && (
+                                <span className="text-xs text-gray-400">{a.from.slice(0,10)} → {a.to.slice(0,10)}</span>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* Free-up date */}
+                      {freeDate && !isUnset && (
+                        <div className="mt-2.5 pt-2 border-t border-gray-100 flex items-center gap-1.5">
+                          <span className="text-xs text-gray-400">🗓 Fully free from:</span>
+                          <span className="text-xs font-semibold text-emerald-600">{freeDate.slice(0,10)}</span>
+                          <span className="text-xs text-gray-400">
+                            (in {Math.max(0, Math.ceil((new Date(freeDate) - new Date()) / 86400000))} days)
+                          </span>
+                        </div>
+                      )}
+
+                      {/* Conflict details */}
+                      {member.hasConflict && (member.conflicts || []).length > 0 && (
+                        <div className="mt-2.5 pt-2 border-t border-red-100">
+                          <p className="text-xs font-semibold text-red-600 mb-1">⚠ Conflict weeks:</p>
+                          {(member.conflicts || []).slice(0, 3).map((c, i) => (
+                            <p key={i} className="text-xs text-red-500">
+                              Week of {c.date}: {c.totalPct}% ({c.projects.map(p => `${p.projectName} ${p.pct}%`).join(' + ')})
+                            </p>
+                          ))}
+                          {member.conflicts.length > 3 && (
+                            <p className="text-xs text-red-400 mt-1">…and {member.conflicts.length - 3} more conflict weeks</p>
+                          )}
+                        </div>
+                      )}
+
+                      {/* No allocation set - prompt */}
+                      {isUnset && (
+                        <p className="text-xs text-amber-700 mt-1">
+                          Click <strong>✏ Edit</strong> on this member in the Team tab to set allocation % and dates.
+                        </p>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            <div className="px-5 py-3 border-t border-gray-200 flex items-center justify-between">
+              <p className="text-xs text-gray-400">
+                {allocationPreview.filter(m => m.hasConflict).length > 0
+                  ? `🔴 ${allocationPreview.filter(m => m.hasConflict).length} member(s) have over-allocation conflicts`
+                  : allocationPreview.filter(m => m.allocationPct == null).length > 0
+                  ? `⚠ ${allocationPreview.filter(m => m.allocationPct == null).length} member(s) have no allocation set`
+                  : '✅ All allocations look good'}
+              </p>
+              <button onClick={() => setShowAllocationPreview(false)} className="px-4 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50">Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ═══ EDIT PROJECT MODAL ══════════════════════════════════════════════ */}
       {showEdit && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
@@ -1286,15 +1955,47 @@ export default function ProjectDetail() {
                 <textarea value={editForm.purpose || ''} onChange={e => setEditForm(f => ({ ...f, purpose: e.target.value }))} rows={2} className={inputCls} />
               </div>
 
-              {/* Dates */}
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="text-xs font-medium text-gray-600 block mb-1">Start Date</label>
-                  <input type="date" value={editForm.startDate || ''} onChange={e => setEditForm(f => ({ ...f, startDate: e.target.value }))} className={inputCls} />
+              {/* Planned dates — read-only after creation */}
+              <div>
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Planned Dates <span className="normal-case font-normal text-gray-400">(set at creation — locked)</span></p>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-xs font-medium text-gray-600 block mb-1">Planned Start Date</label>
+                    <div className="w-full px-3 py-2 border border-gray-100 rounded-lg text-sm bg-gray-50 text-gray-500 select-none">
+                      {editForm.startDate ? new Date(editForm.startDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-gray-600 block mb-1">Planned End Date</label>
+                    <div className="w-full px-3 py-2 border border-gray-100 rounded-lg text-sm bg-gray-50 text-gray-500 select-none">
+                      {editForm.endDate ? new Date(editForm.endDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}
+                    </div>
+                  </div>
                 </div>
-                <div>
-                  <label className="text-xs font-medium text-gray-600 block mb-1">End Date</label>
-                  <input type="date" value={editForm.endDate || ''} onChange={e => setEditForm(f => ({ ...f, endDate: e.target.value }))} className={inputCls} />
+              </div>
+
+              {/* Actual dates — editable post-creation */}
+              <div>
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Actual Dates</p>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-xs font-medium text-gray-600 block mb-1">Actual Start Date</label>
+                    <input
+                      type="date"
+                      value={editForm.actualStartDate || ''}
+                      onChange={e => setEditForm(f => ({ ...f, actualStartDate: e.target.value }))}
+                      className={inputCls}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-gray-600 block mb-1">Actual End Date</label>
+                    <input
+                      type="date"
+                      value={editForm.actualEndDate || ''}
+                      onChange={e => setEditForm(f => ({ ...f, actualEndDate: e.target.value }))}
+                      className={inputCls}
+                    />
+                  </div>
                 </div>
               </div>
 

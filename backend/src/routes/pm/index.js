@@ -14,13 +14,22 @@ const taskCtrl           = require('../../controllers/pm/task.controller');
 const pmConfigRoutes     = require('./pmConfig.routes');
 const statusReportRoutes = require('./statusReport.routes');
 const raidRoutes         = require('./raid.routes');
+const raidCtrl           = require('../../controllers/pm/raid.controller');
 const financialRoutes    = require('./financial.routes');
 const closureRoutes      = require('./closure.routes');
+const projectCtrl        = require('../../controllers/pm/project.controller');
 
 router.use(authenticate);
 
-const ALL = ['admin', 'manager', 'senior_manager', 'employee', 'hr_admin', 'final_approver', 'md', 'director'];
+const ALL      = ['admin', 'manager', 'senior_manager', 'employee', 'hr_admin', 'final_approver', 'md', 'director'];
+const MANAGERS = ['admin', 'manager', 'senior_manager'];
 router.get('/my-tasks', authorize(...ALL), taskCtrl.getMyTasks);
+
+// ── User resource availability ────────────────────────────────────────────────
+router.get('/users/:userId/availability', authorize(...ALL), projectCtrl.getUserAvailability);
+
+// ── RAID summary (must be before /projects/:id catch-all) ────────────────────
+router.get('/projects/raid-summary', authorize(...MANAGERS), raidCtrl.raidSummary);
 
 // ── Core project routes ───────────────────────────────────────────────────────
 router.use('/projects', projectRoutes);
@@ -44,8 +53,14 @@ router.use('/settings', pmSettingsRoutes);
 router.use('/projects/:projectId/documents', documentRoutes);
 router.use('/projects/:projectId/milestones/:milestoneId/documents', documentRoutes);
 
-// ── Flat milestone router — exposes export/import at /api/pm/milestones/* ────
-router.use('/milestones', milestoneRoutes);
+// ── Flat milestone routes — import/export only at /api/pm/milestones/* ────────
+const milestoneCtrl = require('../../controllers/pm/milestone.controller');
+const upload        = require('../../middleware/upload');
+const ADMIN_ONLY    = ['admin'];
+router.get('/milestones/export',           authorize(...ALL),        milestoneCtrl.exportMilestones);
+router.get('/milestones/import/template',  authorize(...ALL),        milestoneCtrl.getMilestoneImportTemplate);
+router.post('/milestones/import/validate', authorize(...ADMIN_ONLY), upload.single('file'), milestoneCtrl.validateMilestoneImport);
+router.post('/milestones/import/commit',   authorize(...ADMIN_ONLY), milestoneCtrl.commitMilestoneImport);
 
 // ── Dashboard stats ───────────────────────────────────────────────────────────
 router.use('/dashboard', require('./pmDashboard.routes'));

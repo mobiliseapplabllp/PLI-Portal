@@ -9,6 +9,10 @@ const ProjectMember = sequelize.define(
     userId: { type: DataTypes.UUID, allowNull: false },
     role: { type: DataTypes.STRING(100), allowNull: true },
     responsibilities: { type: DataTypes.TEXT, allowNull: true },
+    allocationPct:    { type: DataTypes.TINYINT.UNSIGNED, allowNull: true },
+    allocationFrom:   { type: DataTypes.DATEONLY, allowNull: true },
+    allocationTo:     { type: DataTypes.DATEONLY, allowNull: true },
+    allocationStatus: { type: DataTypes.ENUM('active','pending','approved','rejected'), defaultValue: 'active', allowNull: false },
   },
   {
     tableName: 'pm_project_members',

@@ -61,6 +61,7 @@ import SurveyApprovalDetailPage from '../pages/csat/SurveyApprovalDetailPage';
 import MyApprovalRequestsPage from '../pages/csat/MyApprovalRequestsPage';
 
 // PM pages
+import UnifiedDashboard from '../pages/pm/UnifiedDashboard';
 import PMDashboard from '../pages/pm/PMDashboard';
 import ProjectList from '../pages/pm/ProjectList';
 import CreateProject from '../pages/pm/CreateProject';
@@ -187,7 +188,7 @@ export default function AppRoutes() {
           <Route path="/admin/audit-logs" element={<RoleRoute roles={['admin']}><AuditLogs /></RoleRoute>} />
 
           {/* PM routes — accessible to all roles */}
-          <Route path="/pm/dashboard" element={<RoleRoute roles={ALL_ROLES}><PMDashboard /></RoleRoute>} />
+          <Route path="/pm/dashboard" element={<RoleRoute roles={ALL_ROLES}><UnifiedDashboard /></RoleRoute>} />
           <Route path="/pm/projects" element={<RoleRoute roles={ALL_ROLES}><ProjectList /></RoleRoute>} />
           <Route path="/pm/projects/create" element={<RoleRoute roles={PM_CREATORS}><CreateProject /></RoleRoute>} />
           <Route path="/pm/projects/:id" element={<RoleRoute roles={ALL_ROLES}><ProjectDetail /></RoleRoute>} />

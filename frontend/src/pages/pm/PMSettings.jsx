@@ -1,5 +1,6 @@
-import { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useSelector } from 'react-redux';
 import toast from 'react-hot-toast';
 import {
   HiOutlineArrowLeft,
@@ -15,7 +16,24 @@ import {
   HiOutlineMail,
   HiOutlinePlay,
   HiOutlineSave,
+  HiOutlineOfficeBuilding,
 } from 'react-icons/hi';
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+} from '@dnd-kit/core';
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  verticalListSortingStrategy,
+  useSortable,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import api from '../../api/axios';
 import {
   getProjectTypesApi, createProjectTypeApi, updateProjectTypeApi, deleteProjectTypeApi,
@@ -23,14 +41,21 @@ import {
   getMilestoneTemplatesApi, createMilestoneTemplateApi, updateMilestoneTemplateApi,
   deleteMilestoneTemplateApi, validateTemplateRangesApi,
 } from '../../api/pm/config.api';
+import {
+  getClientOrgsApi, createClientOrgApi, updateClientOrgApi, deleteClientOrgApi,
+  getClientEmployeesApi, createClientEmployeeApi, deleteClientEmployeeApi,
+} from '../../api/csat.api';
+import { getUsersApi } from '../../api/users.api';
 
 const getId = (item) => item?._id || item?.id || '';
 
 const TABS = [
   { label: 'Project Types',        icon: HiOutlineTag },
-  { label: 'Statuses',             icon: HiOutlineColorSwatch },
   { label: 'Milestone Templates',  icon: HiOutlineTemplate },
+  { label: 'Statuses',             icon: HiOutlineColorSwatch },
   { label: 'Scheduler',            icon: HiOutlineClock },
+  { label: 'Client Orgs',          icon: HiOutlineOfficeBuilding },
+  { label: 'Email Alerts',         icon: HiOutlineMail },
 ];
 
 // ─── Reusable Toggle Switch ───────────────────────────────────────────────────
@@ -278,15 +303,15 @@ function ProjectTypesTab() {
 function StatusesTab() {
   const [statuses, setStatuses] = useState([]);
   const [loading,  setLoading]  = useState(true);
-  const [addForm,  setAddForm]  = useState({ name: '', color: '#10b981', isActive: true });
+  const [addForm,  setAddForm]  = useState({ name: '', color: '#10b981', isActive: true, forProject: true, forMilestone: true, forSubMilestone: false });
   const [adding,   setAdding]   = useState(false);
   const [editId,   setEditId]   = useState(null);
-  const [editData, setEditData] = useState({ name: '', color: '#10b981', isActive: true });
+  const [editData, setEditData] = useState({ name: '', color: '#10b981', isActive: true, forProject: true, forMilestone: true, forSubMilestone: false });
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const r = await getPmStatusesApi();
+      const r = await api.get('/pm/config/statuses/all');
       setStatuses(r.data.data ?? r.data ?? []);
     } catch {
       toast.error('Failed to load statuses');
@@ -299,11 +324,14 @@ function StatusesTab() {
 
   const handleAdd = async () => {
     if (!addForm.name.trim()) return toast.error('Name is required');
+    if (!addForm.forProject && !addForm.forMilestone && !addForm.forSubMilestone) {
+      return toast.error('At least one scope (Project, Milestone, or Sub-milestone) must be selected');
+    }
     setAdding(true);
     try {
       await createPmStatusApi({ ...addForm, name: addForm.name.trim() });
       toast.success('Status added');
-      setAddForm({ name: '', color: '#10b981', isActive: true });
+      setAddForm({ name: '', color: '#10b981', isActive: true, forProject: true, forMilestone: true, forSubMilestone: false });
       await load();
     } catch (e) {
       toast.error(e?.response?.data?.message || 'Failed to add status');
@@ -314,7 +342,14 @@ function StatusesTab() {
 
   const startEdit = (item) => {
     setEditId(getId(item));
-    setEditData({ name: item.name, color: item.color || '#10b981', isActive: item.isActive ?? true });
+    setEditData({
+      name:            item.name,
+      color:           item.color || '#10b981',
+      isActive:        item.isActive ?? true,
+      forProject:      item.forProject ?? true,
+      forMilestone:    item.forMilestone ?? true,
+      forSubMilestone: item.forSubMilestone ?? false,
+    });
   };
 
   const handleUpdate = async (id) => {
@@ -345,6 +380,16 @@ function StatusesTab() {
       await load();
     } catch (e) {
       toast.error(e?.response?.data?.message || 'Failed to toggle');
+    }
+  };
+
+  const handleScopeToggle = async (statusId, field, value) => {
+    try {
+      setStatuses(prev => prev.map(s => s._id === statusId ? { ...s, [field]: value } : s));
+      await api.put(`/pm/config/statuses/${statusId}`, { [field]: value });
+    } catch (err) {
+      setStatuses(prev => prev.map(s => s._id === statusId ? { ...s, [field]: !value } : s));
+      toast.error('Failed to update scope');
     }
   };
 
@@ -393,6 +438,24 @@ function StatusesTab() {
             {adding ? 'Adding…' : 'Add'}
           </button>
         </div>
+        <div className="mt-3">
+          <label className="text-sm font-medium text-gray-700 block mb-2">Scope</label>
+          <div className="flex gap-4">
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={addForm.forProject ?? true} onChange={e => setAddForm(f => ({ ...f, forProject: e.target.checked }))} className="w-4 h-4 text-primary-600 rounded" />
+              Project
+            </label>
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={addForm.forMilestone ?? true} onChange={e => setAddForm(f => ({ ...f, forMilestone: e.target.checked }))} className="w-4 h-4 text-primary-600 rounded" />
+              Milestone
+            </label>
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={addForm.forSubMilestone ?? false} onChange={e => setAddForm(f => ({ ...f, forSubMilestone: e.target.checked }))} className="w-4 h-4 text-primary-600 rounded" />
+              Sub-Milestone
+            </label>
+          </div>
+          <p className="text-xs text-gray-400 mt-1">At least one scope must be selected</p>
+        </div>
       </div>
 
       {/* List */}
@@ -408,6 +471,9 @@ function StatusesTab() {
                   <th className={thCls + ' text-center w-28'}>Color</th>
                   <th className={thCls + ' text-center w-24'}>System</th>
                   <th className={thCls + ' text-center w-24'}>Active</th>
+                  <th className={thCls + ' text-center w-24'}>Project</th>
+                  <th className={thCls + ' text-center w-28'}>Milestone</th>
+                  <th className={thCls + ' text-center w-32'}>Sub-Milestone</th>
                   <th className={thCls + ' text-right w-28'}>Actions</th>
                 </tr>
               </thead>
@@ -455,6 +521,30 @@ function StatusesTab() {
                               onChange={() => setEditData(p => ({ ...p, isActive: !p.isActive }))}
                             />
                           </td>
+                          <td className="px-4 py-2 text-center">
+                            <input
+                              type="checkbox"
+                              checked={editData.forProject ?? true}
+                              onChange={e => setEditData(p => ({ ...p, forProject: e.target.checked }))}
+                              className="w-4 h-4 text-primary-600 rounded"
+                            />
+                          </td>
+                          <td className="px-4 py-2 text-center">
+                            <input
+                              type="checkbox"
+                              checked={editData.forMilestone ?? true}
+                              onChange={e => setEditData(p => ({ ...p, forMilestone: e.target.checked }))}
+                              className="w-4 h-4 text-primary-600 rounded"
+                            />
+                          </td>
+                          <td className="px-4 py-2 text-center">
+                            <input
+                              type="checkbox"
+                              checked={editData.forSubMilestone ?? false}
+                              onChange={e => setEditData(p => ({ ...p, forSubMilestone: e.target.checked }))}
+                              className="w-4 h-4 text-primary-600 rounded"
+                            />
+                          </td>
                           <td className="px-4 py-2">
                             <div className="flex justify-end gap-1">
                               <button
@@ -476,7 +566,14 @@ function StatusesTab() {
                         </>
                       ) : (
                         <>
-                          <td className="px-4 py-3 font-medium text-gray-800">{item.name}</td>
+                          <td className="px-4 py-3 font-medium text-gray-800">
+                            {item.name}
+                            <div className="flex gap-1 mt-1">
+                              {(item.forProject ?? true)      && <span className="text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded">Project</span>}
+                              {(item.forMilestone ?? true)    && <span className="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded">Milestone</span>}
+                              {item.forSubMilestone           && <span className="text-[10px] bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded">Sub-Milestone</span>}
+                            </div>
+                          </td>
                           <td className="px-4 py-3">
                             <div className="flex items-center justify-center gap-2">
                               <div
@@ -494,6 +591,30 @@ function StatusesTab() {
                           </td>
                           <td className="px-4 py-3 text-center">
                             <Toggle checked={!!item.isActive} onChange={() => handleToggleActive(item)} />
+                          </td>
+                          <td className="px-4 py-3 text-center">
+                            <input
+                              type="checkbox"
+                              checked={item.forProject ?? true}
+                              onChange={() => handleScopeToggle(item._id, 'forProject', !(item.forProject ?? true))}
+                              className="w-4 h-4 text-primary-600 rounded"
+                            />
+                          </td>
+                          <td className="px-4 py-3 text-center">
+                            <input
+                              type="checkbox"
+                              checked={item.forMilestone ?? true}
+                              onChange={() => handleScopeToggle(item._id, 'forMilestone', !(item.forMilestone ?? true))}
+                              className="w-4 h-4 text-primary-600 rounded"
+                            />
+                          </td>
+                          <td className="px-4 py-3 text-center">
+                            <input
+                              type="checkbox"
+                              checked={item.forSubMilestone ?? false}
+                              onChange={() => handleScopeToggle(item._id, 'forSubMilestone', !(item.forSubMilestone ?? false))}
+                              className="w-4 h-4 text-primary-600 rounded"
+                            />
                           </td>
                           <td className="px-4 py-3">
                             <div className="flex justify-end gap-1">
@@ -529,6 +650,57 @@ function StatusesTab() {
   );
 }
 
+// ─── DnD: Sortable milestone template row ────────────────────────────────────
+function SortableTemplateRow({ template, onEdit, onDelete, canDelete }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: template._id || template.id });
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+  };
+  return (
+    <tr ref={setNodeRef} style={style} className="hover:bg-gray-50/70 transition-colors">
+      <td className="px-4 py-3">
+        <button
+          {...attributes}
+          {...listeners}
+          className="cursor-grab active:cursor-grabbing text-gray-400 hover:text-gray-600 p-1"
+          title="Drag to reorder"
+        >
+          ⠿
+        </button>
+      </td>
+      <td className="px-4 py-3 font-medium text-gray-800">{template.name}</td>
+      <td className="px-4 py-3 text-center">
+        <span className="inline-flex items-center gap-0.5 px-2.5 py-0.5 bg-emerald-50 text-emerald-700 rounded-full text-xs font-medium border border-emerald-100">
+          {template.minPct}% – {template.maxPct}%
+        </span>
+      </td>
+      <td className="px-4 py-3 text-center text-gray-500">{template.sortOrder ?? 0}</td>
+      <td className="px-4 py-3">
+        <div className="flex justify-end gap-1">
+          <button
+            onClick={() => onEdit(template)}
+            className="p-1.5 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
+            title="Edit"
+          >
+            <HiOutlinePencil className="w-4 h-4" />
+          </button>
+          {canDelete && (
+            <button
+              onClick={() => onDelete(template._id || template.id)}
+              className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+              title="Delete"
+            >
+              <HiOutlineTrash className="w-4 h-4" />
+            </button>
+          )}
+        </div>
+      </td>
+    </tr>
+  );
+}
+
 // ─── Tab 3: Milestone Templates ───────────────────────────────────────────────
 function MilestoneTemplatesTab() {
   const [templates,     setTemplates]     = useState([]);
@@ -541,6 +713,46 @@ function MilestoneTemplatesTab() {
   const [editId,        setEditId]        = useState(null);
   const [editData,      setEditData]      = useState({});
   const typeInitialized                   = useRef(false);
+
+  const sensors = useSensors(
+    useSensor(PointerSensor),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+
+  const handleTemplateDragEnd = (event) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+
+    // Build the current ordered list for this type only
+    const typeTemplates = templates
+      .filter(t => t.projectType === selectedType)
+      .slice()
+      .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+
+    const oldIndex = typeTemplates.findIndex(t => (t._id || t.id) === active.id);
+    const newIndex = typeTemplates.findIndex(t => (t._id || t.id) === over.id);
+    if (oldIndex === -1 || newIndex === -1) return;
+
+    const reordered = arrayMove(typeTemplates, oldIndex, newIndex);
+
+    // Build order map so filteredTemplates (which sorts by sortOrder) shows new order
+    const newOrderMap = {};
+    reordered.forEach((t, i) => { newOrderMap[t._id || t.id] = i + 1; });
+
+    // Optimistic state update: patch sortOrder in-place for this type's templates
+    setTemplates(prev => prev.map(t => {
+      const id = t._id || t.id;
+      return newOrderMap[id] !== undefined ? { ...t, sortOrder: newOrderMap[id] } : t;
+    }));
+
+    // Persist to backend — only send this type's templates, 1-based order
+    const payload = reordered.map((t, i) => ({ id: t._id || t.id, order: i + 1 }));
+    api.put('/pm/config/milestone-templates/reorder', payload)
+      .catch(() => {
+        toast.error('Failed to save template order');
+        load(); // Revert to server state on error
+      });
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -784,110 +996,98 @@ function MilestoneTemplatesTab() {
           </p>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-gray-50 border-b border-gray-100">
-                <tr>
-                  <th className={thCls + ' text-left'}>Name</th>
-                  <th className={thCls + ' text-center w-40'}>Range (%)</th>
-                  <th className={thCls + ' text-center w-28'}>Sort Order</th>
-                  <th className={thCls + ' text-right w-28'}>Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-50">
-                {filteredTemplates.map(item => {
-                  const id = getId(item);
-                  const isEditing = editId === id;
-                  return (
-                    <tr key={id} className="hover:bg-gray-50/70 transition-colors">
-                      {isEditing ? (
-                        <>
-                          <td className="px-4 py-2">
-                            <input
-                              type="text"
-                              value={editData.name}
-                              onChange={e => setEditData(p => ({ ...p, name: e.target.value }))}
-                              className={editInputCls}
-                              autoFocus
-                            />
-                          </td>
-                          <td className="px-4 py-2">
-                            <div className="flex items-center justify-center gap-1">
-                              <input
-                                type="number" min="0" max="100"
-                                value={editData.minPct}
-                                onChange={e => setEditData(p => ({ ...p, minPct: e.target.value }))}
-                                className={editInputCls + ' w-16 text-center'}
-                              />
-                              <span className="text-gray-400 text-xs shrink-0">–</span>
-                              <input
-                                type="number" min="0" max="100"
-                                value={editData.maxPct}
-                                onChange={e => setEditData(p => ({ ...p, maxPct: e.target.value }))}
-                                className={editInputCls + ' w-16 text-center'}
-                              />
-                            </div>
-                          </td>
-                          <td className="px-4 py-2 text-center">
-                            <input
-                              type="number"
-                              value={editData.sortOrder}
-                              onChange={e => setEditData(p => ({ ...p, sortOrder: e.target.value }))}
-                              className={editInputCls + ' w-16 text-center mx-auto'}
-                            />
-                          </td>
-                          <td className="px-4 py-2">
-                            <div className="flex justify-end gap-1">
-                              <button
-                                onClick={() => handleUpdate(id)}
-                                className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
-                                title="Save"
-                              >
-                                <HiOutlineCheck className="w-4 h-4" />
-                              </button>
-                              <button
-                                onClick={() => setEditId(null)}
-                                className="p-1.5 text-gray-400 hover:bg-gray-100 rounded-lg transition-colors"
-                                title="Cancel"
-                              >
-                                <HiOutlineX className="w-4 h-4" />
-                              </button>
-                            </div>
-                          </td>
-                        </>
-                      ) : (
-                        <>
-                          <td className="px-4 py-3 font-medium text-gray-800">{item.name}</td>
-                          <td className="px-4 py-3 text-center">
-                            <span className="inline-flex items-center gap-0.5 px-2.5 py-0.5 bg-emerald-50 text-emerald-700 rounded-full text-xs font-medium border border-emerald-100">
-                              {item.minPct}% – {item.maxPct}%
-                            </span>
-                          </td>
-                          <td className="px-4 py-3 text-center text-gray-500">{item.sortOrder ?? 0}</td>
-                          <td className="px-4 py-3">
-                            <div className="flex justify-end gap-1">
-                              <button
-                                onClick={() => startEdit(item)}
-                                className="p-1.5 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
-                                title="Edit"
-                              >
-                                <HiOutlinePencil className="w-4 h-4" />
-                              </button>
-                              <button
-                                onClick={() => handleDelete(id)}
-                                className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
-                                title="Delete"
-                              >
-                                <HiOutlineTrash className="w-4 h-4" />
-                              </button>
-                            </div>
-                          </td>
-                        </>
-                      )}
+            <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleTemplateDragEnd}>
+              <SortableContext
+                items={filteredTemplates.filter(t => getId(t) !== editId).map(t => t._id || t.id)}
+                strategy={verticalListSortingStrategy}
+              >
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-50 border-b border-gray-100">
+                    <tr>
+                      <th className="px-4 py-3 w-10"></th>
+                      <th className={thCls + ' text-left'}>Name</th>
+                      <th className={thCls + ' text-center w-40'}>Range (%)</th>
+                      <th className={thCls + ' text-center w-28'}>Sort Order</th>
+                      <th className={thCls + ' text-right w-28'}>Actions</th>
                     </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                  </thead>
+                  <tbody className="divide-y divide-gray-50">
+                    {filteredTemplates.map(item => {
+                      const id = getId(item);
+                      const isEditing = editId === id;
+                      if (isEditing) {
+                        return (
+                          <tr key={id} className="hover:bg-gray-50/70 transition-colors">
+                            <td className="px-4 py-2"></td>
+                            <td className="px-4 py-2">
+                              <input
+                                type="text"
+                                value={editData.name}
+                                onChange={e => setEditData(p => ({ ...p, name: e.target.value }))}
+                                className={editInputCls}
+                                autoFocus
+                              />
+                            </td>
+                            <td className="px-4 py-2">
+                              <div className="flex items-center justify-center gap-1">
+                                <input
+                                  type="number" min="0" max="100"
+                                  value={editData.minPct}
+                                  onChange={e => setEditData(p => ({ ...p, minPct: e.target.value }))}
+                                  className={editInputCls + ' w-16 text-center'}
+                                />
+                                <span className="text-gray-400 text-xs shrink-0">–</span>
+                                <input
+                                  type="number" min="0" max="100"
+                                  value={editData.maxPct}
+                                  onChange={e => setEditData(p => ({ ...p, maxPct: e.target.value }))}
+                                  className={editInputCls + ' w-16 text-center'}
+                                />
+                              </div>
+                            </td>
+                            <td className="px-4 py-2 text-center">
+                              <input
+                                type="number"
+                                value={editData.sortOrder}
+                                onChange={e => setEditData(p => ({ ...p, sortOrder: e.target.value }))}
+                                className={editInputCls + ' w-16 text-center mx-auto'}
+                              />
+                            </td>
+                            <td className="px-4 py-2">
+                              <div className="flex justify-end gap-1">
+                                <button
+                                  onClick={() => handleUpdate(id)}
+                                  className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
+                                  title="Save"
+                                >
+                                  <HiOutlineCheck className="w-4 h-4" />
+                                </button>
+                                <button
+                                  onClick={() => setEditId(null)}
+                                  className="p-1.5 text-gray-400 hover:bg-gray-100 rounded-lg transition-colors"
+                                  title="Cancel"
+                                >
+                                  <HiOutlineX className="w-4 h-4" />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      }
+                      return (
+                        <SortableTemplateRow
+                          key={id}
+                          template={item}
+                          onEdit={startEdit}
+                          onDelete={handleDelete}
+                          canDelete={!item.isSystem}
+                        />
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </SortableContext>
+            </DndContext>
           </div>
         )}
       </div>
@@ -917,13 +1117,15 @@ function SchedulerTab() {
       const r = await api.get('/pm/settings');
       const s = r.data.data ?? r.data ?? {};
       setForm({
-        dailyReportEnabled:  s.dailyReportEnabled  ?? true,
-        dailyReportTime:     s.dailyReportTime      ?? '09:00',
-        consolidatedReport:  s.consolidatedReport   ?? false,
-        reportCcEmails:      Array.isArray(s.reportCcEmails) ? s.reportCcEmails : [],
-        allowedCreatorRoles: Array.isArray(s.allowedCreatorRoles)
+        dailyReportEnabled:         s.dailyReportEnabled         ?? true,
+        dailyReportTime:            s.dailyReportTime             ?? '09:00',
+        consolidatedReport:         s.consolidatedReport          ?? false,
+        reportCcEmails:             Array.isArray(s.reportCcEmails) ? s.reportCcEmails : [],
+        allowedCreatorRoles:        Array.isArray(s.allowedCreatorRoles)
           ? s.allowedCreatorRoles
           : ['admin', 'manager', 'senior_manager'],
+        helpdeskDailyReportEnabled: s.helpdeskDailyReportEnabled  ?? false,
+        helpdeskDailyReportTime:    s.helpdeskDailyReportTime      ?? '09:00',
       });
     } catch {
       toast.error('Failed to load scheduler settings');
@@ -1084,6 +1286,42 @@ function SchedulerTab() {
         </div>
       </div>
 
+      {/* Helpdesk Daily Report */}
+      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+        <div className="px-5 py-4 border-b border-gray-100 bg-gray-50">
+          <h3 className="text-sm font-semibold text-gray-800 flex items-center gap-2">
+            <HiOutlineClock className="w-4 h-4 text-emerald-600" />
+            Helpdesk Daily Report
+          </h3>
+          <p className="text-xs text-gray-500 mt-0.5">
+            Automated email with daily helpdesk activity summary.
+          </p>
+        </div>
+        <div className="px-5 py-5 space-y-5">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium text-gray-700">Enable Helpdesk Daily Report</p>
+              <p className="text-xs text-gray-400 mt-0.5">Sends a daily helpdesk activity summary</p>
+            </div>
+            <Toggle
+              checked={form.helpdeskDailyReportEnabled}
+              onChange={() => setF('helpdeskDailyReportEnabled', !form.helpdeskDailyReportEnabled)}
+            />
+          </div>
+          {form.helpdeskDailyReportEnabled && (
+            <div>
+              <label className="text-xs font-medium text-gray-600 block mb-1">Report Time (24-hr HH:MM)</label>
+              <input
+                type="time"
+                value={form.helpdeskDailyReportTime}
+                onChange={e => setF('helpdeskDailyReportTime', e.target.value)}
+                className={`${inputCls} w-40`}
+              />
+            </div>
+          )}
+        </div>
+      </div>
+
       {/* Who can create projects */}
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
         <div className="px-5 py-4 border-b border-gray-100 bg-gray-50">
@@ -1123,6 +1361,531 @@ function SchedulerTab() {
         >
           <HiOutlineSave className="w-4 h-4" />
           {saving ? 'Saving…' : 'Save Settings'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Tab 5: Client Organisations ─────────────────────────────────────────────
+function ClientOrgsTab() {
+  const { user } = useSelector(s => s.auth);
+  const isAdmin = user?.role === 'admin';
+
+  // list state
+  const [orgs,    setOrgs]    = useState([]);
+  const [page,    setPage]    = useState(1);
+  const [pages,   setPages]   = useState(1);
+  const [search,  setSearch]  = useState('');
+  const [loading, setLoading] = useState(true);
+
+  // modal state
+  const [showModal,  setShowModal]  = useState(false);
+  const [editingOrg, setEditingOrg] = useState(null);
+  const [modalForm,  setModalForm]  = useState({ name: '', industry: '', managedById: '', description: '' });
+  const [saving,     setSaving]     = useState(false);
+
+  // users for managed-by dropdown
+  const [users, setUsers] = useState([]);
+
+  // employee sub-panel state
+  const [expandedOrgId, setExpandedOrgId] = useState(null);
+  const [employees,     setEmployees]     = useState({});
+  const [empForm,       setEmpForm]       = useState({ name: '', email: '', designation: '', department: '' });
+  const [empSaving,     setEmpSaving]     = useState(false);
+
+  const load = useCallback(async (p, q) => {
+    setLoading(true);
+    try {
+      const r = await getClientOrgsApi({ search: q, page: p, limit: 15, isActive: true });
+      const d = r.data?.data ?? {};
+      setOrgs(Array.isArray(d) ? d : (d.rows ?? d.docs ?? []));
+      setPages(d.pages ?? d.totalPages ?? 1);
+    } catch {
+      toast.error('Failed to load client organisations');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { load(page, search); }, [page, search, load]);
+
+  useEffect(() => {
+    getUsersApi({ limit: 200 })
+      .then(r => {
+        const d = r.data?.data ?? r.data ?? [];
+        setUsers(Array.isArray(d) ? d : (d.rows ?? d.docs ?? []));
+      })
+      .catch(() => {});
+  }, []);
+
+  const loadEmployees = async (orgId) => {
+    try {
+      const r = await getClientEmployeesApi(orgId);
+      setEmployees(prev => ({ ...prev, [orgId]: r.data?.data ?? [] }));
+    } catch {
+      toast.error('Failed to load members');
+    }
+  };
+
+  const toggleExpand = async (orgId) => {
+    if (expandedOrgId === orgId) {
+      setExpandedOrgId(null);
+    } else {
+      setExpandedOrgId(orgId);
+      if (!employees[orgId]) await loadEmployees(orgId);
+    }
+  };
+
+  const openCreate = () => {
+    setEditingOrg(null);
+    setModalForm({ name: '', industry: '', managedById: '', description: '' });
+    setShowModal(true);
+  };
+
+  const openEdit = (org) => {
+    setEditingOrg(org);
+    setModalForm({
+      name:        org.name ?? '',
+      industry:    org.industry ?? '',
+      managedById: getId(org.managedBy) || org.managedById || '',
+      description: org.description ?? '',
+    });
+    setShowModal(true);
+  };
+
+  const closeModal = () => {
+    setShowModal(false);
+    setEditingOrg(null);
+  };
+
+  const handleModalSave = async () => {
+    if (!modalForm.name.trim()) return toast.error('Organisation name is required');
+    setSaving(true);
+    try {
+      if (editingOrg) {
+        await updateClientOrgApi(getId(editingOrg), modalForm);
+        toast.success('Organisation updated');
+      } else {
+        await createClientOrgApi(modalForm);
+        toast.success('Organisation created');
+      }
+      closeModal();
+      await load(page, search);
+    } catch (e) {
+      toast.error(e?.response?.data?.message || 'Failed to save organisation');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDelete = async (id) => {
+    if (!window.confirm('Delete this client organisation?')) return;
+    try {
+      await deleteClientOrgApi(id);
+      toast.success('Organisation deleted');
+      if (expandedOrgId === id) setExpandedOrgId(null);
+      await load(page, search);
+    } catch (e) {
+      toast.error(e?.response?.data?.message || 'Cannot delete — may be in use');
+    }
+  };
+
+  const handleAddEmployee = async (orgId) => {
+    if (!empForm.name.trim()) return toast.error('Employee name is required');
+    if (!empForm.email.trim()) return toast.error('Employee email is required');
+    setEmpSaving(true);
+    try {
+      await createClientEmployeeApi(orgId, empForm);
+      toast.success('Member added');
+      setEmpForm({ name: '', email: '', designation: '', department: '' });
+      await loadEmployees(orgId);
+    } catch (e) {
+      toast.error(e?.response?.data?.message || 'Failed to add member');
+    } finally {
+      setEmpSaving(false);
+    }
+  };
+
+  const handleRemoveEmployee = async (orgId, empId) => {
+    if (!window.confirm('Remove this member?')) return;
+    try {
+      await deleteClientEmployeeApi(orgId, empId);
+      toast.success('Member removed');
+      await loadEmployees(orgId);
+    } catch (e) {
+      toast.error(e?.response?.data?.message || 'Failed to remove member');
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* Toolbar */}
+      <div className="flex items-center gap-3">
+        <input
+          type="text"
+          value={search}
+          onChange={e => { setSearch(e.target.value); setPage(1); }}
+          placeholder="Search organisations…"
+          className={inputCls + ' flex-1'}
+        />
+        {isAdmin && (
+          <button
+            onClick={openCreate}
+            className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 text-white text-sm font-medium rounded-lg hover:bg-emerald-700 transition-colors whitespace-nowrap"
+          >
+            <HiOutlinePlus className="w-4 h-4" />
+            New Organisation
+          </button>
+        )}
+      </div>
+
+      {/* Table */}
+      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+        {loading ? (
+          <div className="text-center py-12 text-gray-400 text-sm">Loading client organisations…</div>
+        ) : orgs.length === 0 ? (
+          <p className="text-center text-gray-400 py-10 text-sm">No client organisations found.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 border-b border-gray-100">
+                <tr>
+                  <th className={thCls + ' text-left'}>Organisation Name</th>
+                  <th className={thCls + ' text-left'}>Industry</th>
+                  <th className={thCls + ' text-left'}>Managed By</th>
+                  <th className={thCls + ' text-right w-40'}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {orgs.map(org => {
+                  const id = getId(org);
+                  const empList = employees[id] ?? [];
+                  const isExpanded = expandedOrgId === id;
+                  const managedByName = org.managedBy?.name ?? org.managedByName ?? '—';
+                  return (
+                    <React.Fragment key={id}>
+                      <tr className="border-b border-gray-50 hover:bg-gray-50/70 transition-colors">
+                        <td className="px-4 py-3 font-medium text-gray-800">{org.name}</td>
+                        <td className="px-4 py-3 text-gray-600">{org.industry || '—'}</td>
+                        <td className="px-4 py-3 text-gray-600">{managedByName}</td>
+                        <td className="px-4 py-3">
+                          <div className="flex justify-end items-center gap-1">
+                            <button
+                              onClick={() => toggleExpand(id)}
+                              className="px-2 py-1 text-xs text-gray-500 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors whitespace-nowrap"
+                              title="Show members"
+                            >
+                              {'👥'} Members ({isExpanded ? empList.length : '…'})
+                            </button>
+                            {isAdmin && (
+                              <>
+                                <button
+                                  onClick={() => openEdit(org)}
+                                  className="p-1.5 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
+                                  title="Edit"
+                                >
+                                  <HiOutlinePencil className="w-4 h-4" />
+                                </button>
+                                <button
+                                  onClick={() => handleDelete(id)}
+                                  className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                                  title="Delete"
+                                >
+                                  <HiOutlineTrash className="w-4 h-4" />
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                      {isExpanded && (
+                        <tr key={id + '-emp'} className="bg-gray-50/60">
+                          <td colSpan={4} className="px-6 pb-4">
+                            <div className="pt-3 space-y-3">
+                              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Members</p>
+                              {empList.length === 0 ? (
+                                <p className="text-sm text-gray-400">No members yet.</p>
+                              ) : (
+                                <table className="w-full text-sm">
+                                  <thead>
+                                    <tr>
+                                      <th className="text-left text-xs font-semibold text-gray-400 pb-1.5 pr-4">Name</th>
+                                      <th className="text-left text-xs font-semibold text-gray-400 pb-1.5 pr-4">Email</th>
+                                      <th className="text-left text-xs font-semibold text-gray-400 pb-1.5 pr-4">Designation</th>
+                                      {isAdmin && <th className="w-8" />}
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-gray-100">
+                                    {empList.map(emp => {
+                                      const eid = getId(emp);
+                                      return (
+                                        <tr key={eid}>
+                                          <td className="py-1.5 pr-4 text-gray-700">{emp.name}</td>
+                                          <td className="py-1.5 pr-4 text-gray-500">{emp.email}</td>
+                                          <td className="py-1.5 pr-4 text-gray-500">{emp.designation || '—'}</td>
+                                          {isAdmin && (
+                                            <td>
+                                              <button
+                                                onClick={() => handleRemoveEmployee(id, eid)}
+                                                className="p-1 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors"
+                                                title="Remove"
+                                              >
+                                                <HiOutlineX className="w-3.5 h-3.5" />
+                                              </button>
+                                            </td>
+                                          )}
+                                        </tr>
+                                      );
+                                    })}
+                                  </tbody>
+                                </table>
+                              )}
+                              {isAdmin && (
+                                <div className="border-t border-gray-200 pt-3">
+                                  <p className="text-xs font-semibold text-gray-500 mb-2">+ Add Member</p>
+                                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                                    <input
+                                      type="text"
+                                      placeholder="Name *"
+                                      value={empForm.name}
+                                      onChange={e => setEmpForm(p => ({ ...p, name: e.target.value }))}
+                                      className={inputCls}
+                                    />
+                                    <input
+                                      type="email"
+                                      placeholder="Email *"
+                                      value={empForm.email}
+                                      onChange={e => setEmpForm(p => ({ ...p, email: e.target.value }))}
+                                      className={inputCls}
+                                    />
+                                    <input
+                                      type="text"
+                                      placeholder="Designation"
+                                      value={empForm.designation}
+                                      onChange={e => setEmpForm(p => ({ ...p, designation: e.target.value }))}
+                                      className={inputCls}
+                                    />
+                                    <input
+                                      type="text"
+                                      placeholder="Department"
+                                      value={empForm.department}
+                                      onChange={e => setEmpForm(p => ({ ...p, department: e.target.value }))}
+                                      className={inputCls}
+                                    />
+                                  </div>
+                                  <button
+                                    onClick={() => handleAddEmployee(id)}
+                                    disabled={empSaving}
+                                    className="mt-2 flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 text-white text-xs font-medium rounded-lg hover:bg-emerald-700 disabled:opacity-50 transition-colors"
+                                  >
+                                    <HiOutlinePlus className="w-3.5 h-3.5" />
+                                    {empSaving ? 'Adding…' : 'Add Member'}
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Pagination */}
+      {pages > 1 && (
+        <div className="flex justify-center items-center gap-3">
+          <button
+            onClick={() => setPage(p => Math.max(1, p - 1))}
+            disabled={page === 1}
+            className="px-4 py-2 text-sm font-medium text-gray-600 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 disabled:opacity-40 transition-colors"
+          >
+            Prev
+          </button>
+          <span className="text-sm text-gray-500">Page {page} of {pages}</span>
+          <button
+            onClick={() => setPage(p => Math.min(pages, p + 1))}
+            disabled={page === pages}
+            className="px-4 py-2 text-sm font-medium text-gray-600 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 disabled:opacity-40 transition-colors"
+          >
+            Next
+          </button>
+        </div>
+      )}
+
+      {/* Create / Edit Modal */}
+      {showModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm px-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-5">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold text-gray-800">
+                {editingOrg ? 'Edit Organisation' : 'New Organisation'}
+              </h2>
+              <button
+                onClick={closeModal}
+                className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+              >
+                <HiOutlineX className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-gray-600 mb-1.5">
+                  Name <span className="text-red-400">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={modalForm.name}
+                  onChange={e => setModalForm(p => ({ ...p, name: e.target.value }))}
+                  placeholder="Organisation name"
+                  className={inputCls}
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-600 mb-1.5">Industry</label>
+                <input
+                  type="text"
+                  value={modalForm.industry}
+                  onChange={e => setModalForm(p => ({ ...p, industry: e.target.value }))}
+                  placeholder="e.g. Technology, Finance…"
+                  className={inputCls}
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-600 mb-1.5">Managed By</label>
+                <select
+                  value={modalForm.managedById}
+                  onChange={e => setModalForm(p => ({ ...p, managedById: e.target.value }))}
+                  className={inputCls}
+                >
+                  <option value="">— Select user —</option>
+                  {users.map(u => (
+                    <option key={getId(u)} value={getId(u)}>{u.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-600 mb-1.5">Description</label>
+                <textarea
+                  rows={3}
+                  value={modalForm.description}
+                  onChange={e => setModalForm(p => ({ ...p, description: e.target.value }))}
+                  placeholder="Optional description…"
+                  className={inputCls + ' resize-none'}
+                />
+              </div>
+            </div>
+            <div className="flex justify-end gap-3 pt-2">
+              <button
+                onClick={closeModal}
+                className="px-4 py-2 text-sm text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleModalSave}
+                disabled={saving}
+                className="flex items-center gap-2 px-5 py-2 bg-emerald-600 text-white text-sm font-medium rounded-lg hover:bg-emerald-700 disabled:opacity-50 transition-colors"
+              >
+                <HiOutlineSave className="w-4 h-4" />
+                {saving ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Tab 6: Email Alerts ──────────────────────────────────────────────────────
+function EmailAlertsTab() {
+  const [form, setForm] = useState({
+    emailAlertOnProjectCreate:    false,
+    emailAlertOnMilestoneComplete: false,
+    emailAlertOnRaidRaised:       false,
+  });
+  const [loading,   setLoading]   = useState(true);
+  const [saving,    setSaving]    = useState(false);
+  const [loadError, setLoadError] = useState(null);
+
+  useEffect(() => {
+    api.get('/pm/settings')
+      .then(res => {
+        const s = res.data?.data ?? {};
+        setForm({
+          emailAlertOnProjectCreate:    s.emailAlertOnProjectCreate    ?? false,
+          emailAlertOnMilestoneComplete: s.emailAlertOnMilestoneComplete ?? false,
+          emailAlertOnRaidRaised:       s.emailAlertOnRaidRaised       ?? false,
+        });
+        setLoadError(null); // clear any previous error
+      })
+      .catch(err => {
+        setLoadError('Failed to load email settings. Save is disabled until settings load successfully.');
+        console.error('[EmailAlertsTab] load failed', err);
+      })
+      .finally(() => setLoading(false));
+  }, []);
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await api.put('/pm/settings', form);
+      toast.success('Email alert settings saved');
+    } catch { toast.error('Failed to save'); }
+    finally { setSaving(false); }
+  };
+
+  const toggles = [
+    { key: 'emailAlertOnProjectCreate',    label: 'New project created',    desc: 'Send alert when a new project is created' },
+    { key: 'emailAlertOnMilestoneComplete', label: 'Milestone completed',    desc: 'Send alert when a milestone status changes to completed' },
+    { key: 'emailAlertOnRaidRaised',       label: 'RAID item raised',        desc: 'Send alert when a new RAID item is logged' },
+  ];
+
+  if (loading) return <div className="py-12 text-center text-sm text-gray-400">Loading…</div>;
+
+  return (
+    <div className="space-y-6 py-4">
+      {loadError && (
+        <div className="rounded-md bg-red-50 border border-red-200 p-3 text-sm text-red-700 mb-4">
+          {loadError}
+        </div>
+      )}
+      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+        <div className="px-5 py-4 border-b border-gray-100 bg-gray-50">
+          <h3 className="text-sm font-semibold text-gray-800">Email Alert Triggers</h3>
+          <p className="text-xs text-gray-500 mt-0.5">
+            Recipients use the CC email list configured in the Scheduler tab.
+          </p>
+        </div>
+        <div className="px-5 py-5 divide-y divide-gray-100">
+          {toggles.map(({ key, label, desc }) => (
+            <div key={key} className="flex items-center justify-between py-3 first:pt-0 last:pb-0">
+              <div>
+                <p className="text-sm font-medium text-gray-700">{label}</p>
+                <p className="text-xs text-gray-400 mt-0.5">{desc}</p>
+              </div>
+              <Toggle
+                checked={form[key] || false}
+                onChange={() => setForm(prev => ({ ...prev, [key]: !prev[key] }))}
+              />
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="flex justify-end">
+        <button
+          onClick={handleSave}
+          disabled={!!loadError || saving}
+          className="flex items-center gap-2 px-5 py-2 bg-emerald-600 text-white text-sm font-medium rounded-lg hover:bg-emerald-700 disabled:opacity-50 transition-colors"
+        >
+          <HiOutlineSave className="w-4 h-4" />
+          {saving ? 'Saving…' : 'Save Alert Settings'}
         </button>
       </div>
     </div>
@@ -1181,9 +1944,11 @@ export default function PMSettings() {
       {/* Tab content */}
       <div>
         {activeTab === 0 && <ProjectTypesTab />}
-        {activeTab === 1 && <StatusesTab />}
-        {activeTab === 2 && <MilestoneTemplatesTab />}
+        {activeTab === 1 && <MilestoneTemplatesTab />}
+        {activeTab === 2 && <StatusesTab />}
         {activeTab === 3 && <SchedulerTab />}
+        {activeTab === 4 && <ClientOrgsTab />}
+        {activeTab === 5 && <EmailAlertsTab />}
       </div>
     </div>
   );

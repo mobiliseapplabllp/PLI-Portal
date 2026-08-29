@@ -12,6 +12,7 @@ router.put   ('/project-types/:id',        authorize(...MANAGERS), ctrl.updatePr
 router.delete('/project-types/:id',        authorize(...MANAGERS), ctrl.deleteProjectType);
 
 // ── Project Statuses ──────────────────────────────────────────────────────────
+router.get   ('/statuses/all',             authorize(...MANAGERS), ctrl.getAllStatuses);
 router.get   ('/statuses',                 authorize(...ALL),     ctrl.getStatuses);
 router.post  ('/statuses',                 authorize(...MANAGERS), ctrl.createStatus);
 router.put   ('/statuses/:id',             authorize(...MANAGERS), ctrl.updateStatus);
@@ -20,8 +21,14 @@ router.delete('/statuses/:id',             authorize(...MANAGERS), ctrl.deleteSt
 // ── Milestone Templates ───────────────────────────────────────────────────────
 router.get   ('/milestone-templates',                          authorize(...ALL),     ctrl.getMilestoneTemplates);
 router.post  ('/milestone-templates',                          authorize(...MANAGERS), ctrl.createMilestoneTemplate);
+router.put   ('/milestone-templates/reorder',                  authorize(...MANAGERS), ctrl.reorderMilestoneTemplates);
 router.put   ('/milestone-templates/:id',                      authorize(...MANAGERS), ctrl.updateMilestoneTemplate);
 router.delete('/milestone-templates/:id',                      authorize(...MANAGERS), ctrl.deleteMilestoneTemplate);
 router.get   ('/milestone-templates/:projectType/validate',    authorize(...MANAGERS), ctrl.validateTemplateRanges);
+
+// ── PM Client Orgs ────────────────────────────────────────────────────────────
+router.get   ('/client-orgs',     authorize(...MANAGERS), ctrl.getPmClientOrgs);
+router.post  ('/client-orgs',     authorize(...MANAGERS), ctrl.createPmClientOrg);
+router.delete('/client-orgs/:id', authorize(...MANAGERS), ctrl.deletePmClientOrg);
 
 module.exports = router;

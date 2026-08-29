@@ -22,7 +22,7 @@ const PROJECT_INCLUDE = [
   // Top-level milestones for list-view progress calculation
   {
     model: Milestone, as: 'milestones',
-    attributes: ['id', 'name', 'status', 'endDate', 'completionPercentage', 'weightPercentage', 'isDefault', 'parentMilestoneId', 'order'],
+    attributes: ['id', 'name', 'status', 'plannedEndDate', 'completionPercentage', 'weightPercentage', 'isDefault', 'parentMilestoneId', 'order'],
     include: [{ model: User, as: 'accountableUser', attributes: ['id', 'name'] }],
   },
 ];
@@ -99,6 +99,9 @@ const createProject = async (data, user) => {
   if (!allowed.includes(user.role))
     throw new ForbiddenError(`Your role (${user.role}) is not permitted to create projects`);
 
+  // TODO: add prefix column to pm_project_types to enable auto-prefix
+  // (PmProjectType model currently has no `prefix` field)
+
   const {
     name, description, purpose, clientName, clientEmail, notifyClient,
     managerId, ownerId, accountManagerId,
@@ -118,13 +121,33 @@ const createProject = async (data, user) => {
     createdById: user._id ?? user.id,
   });
 
-  // Auto-create default milestones from template if projectType is set
+  // Auto-create milestones from project type template
   if (project.projectType) {
     try {
       await createDefaultMilestones(project.id, project.projectType);
     } catch (err) {
       console.warn('[createProject] Warning: could not create default milestones:', err.message);
     }
+  }
+
+  // Email alert: notify on project creation if enabled
+  try {
+    const PmSettings = require('../../models/pm/PmSettings');
+    const alertSettings = await PmSettings.findByPk(1);
+    if (alertSettings?.emailAlertOnProjectCreate) {
+      const { sendEmail } = require('../../utils/emailService');
+      const ccList = alertSettings.reportCcEmails || [];
+      if (ccList.length > 0) {
+        await sendEmail(
+          ccList,
+          `[PM] New Project Created: ${project.name}`,
+          `<p>A new project <strong>${project.name}</strong> has been created.</p>
+           <p>Type: ${project.projectType || 'N/A'} | Manager ID: ${project.managerId || 'TBD'}</p>`,
+        );
+      }
+    }
+  } catch (alertErr) {
+    console.error('[PM Alert] Failed to send project creation alert:', alertErr.message);
   }
 
   return project;
@@ -145,7 +168,8 @@ const updateProject = async (id, data, user) => {
     'name', 'description', 'purpose', 'clientName', 'clientEmail', 'notifyClient',
     'managerId', 'ownerId', 'accountManagerId',
     'status', 'billingType', 'projectType',
-    'startDate', 'endDate',
+    'startDate', 'endDate',           // planned dates — UI should only send on creation
+    'actualStartDate', 'actualEndDate', // actual dates — editable post-creation
   ];
   const updateData = {};
   ALLOWED_FIELDS.forEach((key) => { if (key in data) updateData[key] = data[key]; });
@@ -169,10 +193,10 @@ const getProjectSummary = async (id, user) => {
   const total = milestones.length;
   const completed = milestones.filter(m => m.status === 'completed').length;
   const inProgress = milestones.filter(m => m.status === 'in_progress').length;
-  const delayed = milestones.filter(m => m.status === 'delayed' || (m.endDate && m.endDate < today && m.status !== 'completed')).length;
+  const delayed = milestones.filter(m => m.status === 'delayed' || (m.plannedEndDate && m.plannedEndDate < today && m.status !== 'completed')).length;
   const upcoming = milestones.filter(m => {
-    if (!m.endDate) return false;
-    const diff = Math.round((new Date(m.endDate) - new Date(today)) / 86400000);
+    if (!m.plannedEndDate) return false;
+    const diff = Math.round((new Date(m.plannedEndDate) - new Date(today)) / 86400000);
     return diff >= 0 && diff <= 7 && m.status !== 'completed';
   });
 
@@ -184,7 +208,7 @@ const getProjectSummary = async (id, user) => {
 // ── Members ───────────────────────────────────────────────────────────────────
 const getMembers = async (projectId, user) => {
   const project = await Project.findByPk(projectId, {
-    attributes: ['id', 'managerId', 'ownerId'],
+    attributes: ['id', 'managerId', 'ownerId', 'accountManagerId'],
     include: [{ model: ProjectMember, as: 'members', attributes: ['userId'] }],
   });
   if (!project) throw new NotFoundError('Project');
@@ -201,10 +225,23 @@ const addMember = async (projectId, data, user) => {
   if (!canManageProject(user) && String(project.managerId) !== String(user._id)) {
     throw new ForbiddenError('Only project manager or admin can add members');
   }
-  const [member] = await ProjectMember.findOrCreate({
+  const [member, created] = await ProjectMember.findOrCreate({
     where: { projectId, userId: data.userId },
-    defaults: { role: data.role, responsibilities: data.responsibilities },
+    defaults: {
+      role: data.role,
+      responsibilities: data.responsibilities,
+      allocationPct:  data.allocationPct  ?? null,
+      allocationFrom: data.allocationFrom ?? null,
+      allocationTo:   data.allocationTo   ?? null,
+    },
   });
+  // If member already existed, update allocation fields if provided
+  if (!created && (data.allocationPct != null || data.allocationFrom || data.allocationTo)) {
+    if (data.allocationPct  != null) member.allocationPct  = data.allocationPct;
+    if (data.allocationFrom)         member.allocationFrom = data.allocationFrom;
+    if (data.allocationTo)           member.allocationTo   = data.allocationTo;
+    await member.save();
+  }
   return member;
 };
 
@@ -233,7 +270,7 @@ const removeMember = async (projectId, memberId, user) => {
 // ── Notification Recipients ───────────────────────────────────────────────────
 const getRecipients = async (projectId, user) => {
   const project = await Project.findByPk(projectId, {
-    attributes: ['id', 'managerId', 'ownerId'],
+    attributes: ['id', 'managerId', 'ownerId', 'accountManagerId'],
     include: [{ model: ProjectMember, as: 'members', attributes: ['userId'] }],
   });
   if (!project) throw new NotFoundError('Project');

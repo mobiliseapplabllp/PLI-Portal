@@ -27,6 +27,9 @@ import {
 import { getGroupsApi } from '../../api/helpdesk/groups.api';
 import { getUsersApi } from '../../api/users.api';
 import { getHdProjectsApi } from '../../api/helpdesk/hdProjects.api';
+import { downloadHdImportTemplateApi } from '../../api/helpdesk/hdTemplate.api';
+import toast from 'react-hot-toast';
+import * as XLSX from 'xlsx';
 import {
   HiOutlinePlus,
   HiOutlineSearch,
@@ -142,6 +145,10 @@ export default function TicketList() {
   const [showDownloadMenu, setShowDownloadMenu] = useState(false);
   const [downloading,      setDownloading]      = useState(false);
   const downloadMenuRef = useRef(null);
+
+  // Template download
+  const [templateDownloading, setTemplateDownloading] = useState(false);
+  const fileInputRef = useRef(null);
 
   // Operation states
   const [bulkAssigning,      setBulkAssigning]      = useState(false);
@@ -358,51 +365,84 @@ export default function TicketList() {
   // -------------------------------------------------------------------------
   // Bulk Upload (CSV import)
   // -------------------------------------------------------------------------
-  const handleDownloadTemplate = () => {
-    const a = document.createElement('a');
-    a.href     = '/tickets-import-template.csv';
-    a.download = 'tickets-import-template.csv';
-    a.click();
+  const handleDownloadTemplate = async () => {
+    setTemplateDownloading(true);
+    try {
+      await downloadHdImportTemplateApi();
+    } catch {
+      toast.error('Failed to download template');
+    } finally {
+      setTemplateDownloading(false);
+    }
   };
 
   const handleBulkUpload = async () => {
     if (!bulkFile) return;
+    if (bulkFile.size > 2 * 1024 * 1024) {
+      toast.error('File too large — maximum 2MB');
+      return;
+    }
+
     setBulkUploading(true);
     setBulkResult(null);
     try {
-      const text = await bulkFile.text();
-      const lines = text.trim().split(/\r?\n/);
-      if (lines.length < 2) {
-        setBulkResult({ created: 0, errors: [{ msg: 'No valid rows in CSV. Check template format.' }] });
+      let rows = [];
+
+      if (bulkFile.name.endsWith('.xlsx') || bulkFile.name.endsWith('.xls')) {
+        // xlsx parsing using SheetJS
+        const buffer = await bulkFile.arrayBuffer();
+        // Wrap in Uint8Array — sheet_to_json type:'array' expects Uint8Array, not ArrayBuffer
+        const wb = XLSX.read(new Uint8Array(buffer), { type: 'array' });
+        // Use the first sheet that is NOT a helper sheet (those start with '_')
+        const sheetName = wb.SheetNames.find((n) => !n.startsWith('_') && n !== 'Valid Options') || wb.SheetNames[0];
+        const ws = wb.Sheets[sheetName];
+        // range:2 skips the header row (row 1) AND the example row (row 2) so
+        // the template's sample data is never sent to the server as a real ticket.
+        rows = XLSX.utils.sheet_to_json(ws, { defval: '', range: 2 });
+      } else {
+        // CSV parsing
+        const text = await bulkFile.text();
+        const lines = text.trim().split(/\r?\n/);
+        if (lines.length < 2) {
+          setBulkResult({ created: 0, errors: [{ msg: 'No valid rows in CSV. Check template format.' }] });
+          return;
+        }
+        const parseRow = (line) => {
+          const out = []; let cur = ''; let inQ = false;
+          for (const c of line) {
+            if (c === '"') inQ = !inQ;
+            else if (c === ',' && !inQ) { out.push(cur.trim()); cur = ''; }
+            else cur += c;
+          }
+          out.push(cur.trim());
+          return out;
+        };
+        const headers = parseRow(lines[0]).map((h) => h.trim().toLowerCase().replace(/\s+/g, '_'));
+        rows = lines.slice(1).map((l) => {
+          const vals = parseRow(l);
+          const obj  = {};
+          headers.forEach((h, i) => { obj[h] = (vals[i] || '').replace(/^"|"$/g, ''); });
+          return obj;
+        }).filter((r) => Object.values(r).some((v) => v));
+      }
+
+      if (!rows.length) {
+        toast.error('No data rows found in file');
         return;
       }
-      const parseRow = (line) => {
-        const out = []; let cur = ''; let inQ = false;
-        for (const c of line) {
-          if (c === '"') inQ = !inQ;
-          else if (c === ',' && !inQ) { out.push(cur.trim()); cur = ''; }
-          else cur += c;
-        }
-        out.push(cur.trim());
-        return out;
-      };
-      const headers = parseRow(lines[0]).map((h) => h.trim().toLowerCase().replace(/\s+/g, '_'));
-      const rows = lines.slice(1).map((l) => {
-        const vals = parseRow(l);
-        const obj  = {};
-        headers.forEach((h, i) => { obj[h] = (vals[i] || '').replace(/^"|"$/g, ''); });
-        return obj;
-      }).filter((r) => Object.values(r).some((v) => v));
 
       const res    = await bulkUploadTicketsApi(rows);
-      const result = res?.data || res;
-      setBulkResult(result);
-      setBulkFile(null);
-      load();
-    } catch (e) {
-      setBulkResult({ created: 0, errors: [{ msg: e.message || 'Upload failed' }] });
+      const result = res.data?.data || res.data || {};
+      setBulkResult({ ...result, message: res.data?.message || 'Import complete' });
+      load(); // refresh ticket list
+      if (!result.errors?.length && !result.skipped) {
+        setTimeout(() => setShowBulkUpload(false), 1500);
+      }
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Upload failed');
     } finally {
       setBulkUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
@@ -1109,24 +1149,28 @@ export default function TicketList() {
               </button>
             </div>
             <p className="text-sm text-gray-600 mb-4">
-              Import tickets from CSV. Download the template, fill your data, and upload.
+              Import tickets from an Excel (.xlsx) or CSV file. Download the template, fill your data, and upload.
             </p>
             <div className="flex flex-col gap-4">
               <div className="flex gap-2">
                 <button
                   onClick={handleDownloadTemplate}
-                  className="flex items-center gap-2 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 text-sm font-medium"
+                  disabled={templateDownloading}
+                  className="flex items-center gap-2 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  <HiOutlineDownload className="w-4 h-4" />
-                  Download Template
+                  {templateDownloading
+                    ? <HiOutlineRefresh className="w-4 h-4 animate-spin" />
+                    : <HiOutlineDownload className="w-4 h-4" />}
+                  {templateDownloading ? 'Downloading...' : 'Download Template'}
                 </button>
                 <label className="flex items-center gap-2 px-4 py-2 border border-[#2196f3] text-[#2196f3] rounded-lg hover:bg-blue-50 cursor-pointer text-sm font-medium">
                   <HiOutlineUpload className="w-4 h-4" />
-                  {bulkFile ? bulkFile.name : 'Select CSV'}
+                  {bulkFile ? bulkFile.name : 'Select File (.xlsx / .csv)'}
                   <input
                     type="file"
-                    accept=".csv"
+                    accept=".xlsx,.csv"
                     className="hidden"
+                    ref={fileInputRef}
                     onChange={(e) => setBulkFile(e.target.files?.[0] || null)}
                   />
                 </label>
@@ -1134,10 +1178,16 @@ export default function TicketList() {
               {bulkResult && (
                 <div className={`p-3 rounded-lg text-sm ${bulkResult.created > 0 ? 'bg-green-50 text-green-800' : 'bg-amber-50 text-amber-800'}`}>
                   <p className="font-medium">{bulkResult.message}</p>
+                  {bulkResult.created !== undefined && (
+                    <p className="text-sm text-green-600">✓ {bulkResult.created} tickets created</p>
+                  )}
+                  {bulkResult.skipped !== undefined && bulkResult.skipped > 0 && (
+                    <p className="text-sm text-amber-600">⚠ {bulkResult.skipped} rows skipped</p>
+                  )}
                   {bulkResult.errors?.length > 0 && (
                     <ul className="mt-2 text-xs list-disc list-inside">
                       {bulkResult.errors.slice(0, 5).map((e, i) => (
-                        <li key={i}>Row {e.row}: {e.msg}</li>
+                        <li key={i}>Row {e.row}: {e.field ? `[${e.field}] ` : ''}{e.msg}</li>
                       ))}
                       {bulkResult.errors.length > 5 && (
                         <li>...and {bulkResult.errors.length - 5} more</li>

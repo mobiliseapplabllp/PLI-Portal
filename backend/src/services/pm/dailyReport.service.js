@@ -39,20 +39,20 @@ function formatDate(d) {
 function buildMilestoneRows(milestones, today) {
   if (!milestones.length) return '<tr><td colspan="6" style="text-align:center;color:#9ca3af;padding:12px;">No milestones defined</td></tr>';
   return milestones.map(m => {
-    const isDelayed = m.endDate && m.endDate < today && m.status !== 'completed';
+    const isDelayed = m.plannedEndDate && m.plannedEndDate < today && m.status !== 'completed';
     const rowBg = isDelayed ? '#fef2f2' : '';
     const color = MILESTONE_STATUS_COLORS[m.status] || '#6b7280';
-    const label = m.status.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+    const label = (m.status || '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) || 'Unknown';
     return `
       <tr style="background:${rowBg};">
         <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;">${m.name}</td>
         <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;">${m.accountableUser ? m.accountableUser.name : '—'}</td>
-        <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;">${formatDate(m.startDate)}</td>
-        <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;${isDelayed ? 'color:#dc2626;font-weight:600;' : ''}">${formatDate(m.endDate)}${isDelayed ? ' ⚠️' : ''}</td>
+        <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;">${formatDate(m.plannedStartDate)}</td>
+        <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;${isDelayed ? 'color:#dc2626;font-weight:600;' : ''}">${formatDate(m.plannedEndDate)}${isDelayed ? ' ⚠️' : ''}</td>
         <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;">
           <span style="background:${color}20;color:${color};padding:2px 8px;border-radius:12px;font-size:12px;font-weight:600;">${label}</span>
         </td>
-        <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;">${m.completionPercentage}%</td>
+        <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;">${m.completionPercentage ?? 0}%</td>
       </tr>`;
   }).join('');
 }
@@ -65,17 +65,17 @@ function buildEmailHtml(project, milestones, log, today) {
   const total = milestones.length;
   const completed = milestones.filter(m => m.status === 'completed').length;
   const inProgress = milestones.filter(m => m.status === 'in_progress').length;
-  const delayed = milestones.filter(m => m.status === 'delayed' || (m.endDate && m.endDate < today && m.status !== 'completed')).length;
+  const delayed = milestones.filter(m => m.status === 'delayed' || (m.plannedEndDate && m.plannedEndDate < today && m.status !== 'completed')).length;
   const completionPct = total > 0 ? Math.round((completed / total) * 100) : 0;
 
   const upcoming = milestones.filter(m => {
-    if (!m.endDate || m.status === 'completed') return false;
-    const diff = Math.round((new Date(m.endDate) - new Date(today)) / 86400000);
+    if (!m.plannedEndDate || m.status === 'completed') return false;
+    const diff = Math.round((new Date(m.plannedEndDate) - new Date(today)) / 86400000);
     return diff >= 0 && diff <= 7;
   });
 
   const upcomingHtml = upcoming.length
-    ? upcoming.map(m => `<li><strong>${m.name}</strong> — Due ${formatDate(m.endDate)} (${m.accountableUser ? m.accountableUser.name : 'Unassigned'})</li>`).join('')
+    ? upcoming.map(m => `<li><strong>${m.name}</strong> — Due ${formatDate(m.plannedEndDate)} (${m.accountableUser ? m.accountableUser.name : 'Unassigned'})</li>`).join('')
     : '<li style="color:#6b7280;">No upcoming milestones in next 7 days</li>';
 
   const section = (label, content, color = '#1e40af') => content ? `
@@ -173,7 +173,7 @@ async function sendDailyReportForProject(project, { skipCcEmails = false } = {})
   // Use today's manual log if exists, otherwise auto-generate
   let log = await DailyStatusLog.findOne({ where: { projectId: project.id, reportDate: today } });
   if (!log) {
-    const hasDelayed = milestones.some(m => m.status === 'delayed' || (m.endDate && m.endDate < today && m.status !== 'completed'));
+    const hasDelayed = milestones.some(m => m.status === 'delayed' || (m.plannedEndDate && m.plannedEndDate < today && m.status !== 'completed'));
     const hasInProgress = milestones.some(m => m.status === 'in_progress');
     let overallStatus = 'on_track';
     if (hasDelayed) overallStatus = 'delayed';
@@ -245,7 +245,7 @@ async function runAllDailyReports() {
   console.log('[PM DailyReport] Running daily report job...');
   try {
     const activeProjects = await Project.findAll({
-      where: { status: 'active' },
+      where: { status: { [Op.in]: ['Active', 'active'] } },
       include: [
         { model: User, as: 'projectManager', attributes: ['id', 'name', 'email'] },
         { model: User, as: 'owner', attributes: ['id', 'name', 'email'] },
@@ -315,12 +315,12 @@ function buildProjectBlock(project, milestones, log, today, index, total) {
   const overallStatus = log ? log.overallStatus : 'on_track';
   const statusBarColor = { on_track:'#059669', at_risk:'#D97706', delayed:'#DC2626', completed:'#2563EB', on_hold:'#94A3B8' }[overallStatus] || '#94A3B8';
   const completedCount = milestones.filter(m => m.status === 'completed').length;
-  const delayedCount   = milestones.filter(m => m.status === 'delayed' || (m.endDate && m.endDate < today && m.status !== 'completed')).length;
+  const delayedCount   = milestones.filter(m => m.status === 'delayed' || (m.plannedEndDate && m.plannedEndDate < today && m.status !== 'completed')).length;
   const pct = milestones.length ? Math.round((milestones.filter(m => m.status === 'completed').length / milestones.length) * 100) : 0;
   const pctColor = overallStatus === 'delayed' ? '#DC2626' : overallStatus === 'at_risk' ? '#D97706' : '#059669';
 
   const milestoneRows = milestones.length ? milestones.map((m, i) => {
-    const isOverdue = m.endDate && m.endDate < today && m.status !== 'completed';
+    const isOverdue = m.plannedEndDate && m.plannedEndDate < today && m.status !== 'completed';
     const rowBg = i % 2 === 1 ? '#FAFCFF' : '#FFFFFF';
     const mColor = milestoneStatusColor(m.status);
     return `<tr style="background:${rowBg};">
@@ -328,8 +328,8 @@ function buildProjectBlock(project, milestones, log, today, index, total) {
         ${m.name}${isOverdue ? `<span style="display:inline-flex;align-items:center;gap:2px;background:#FEF2F2;color:#DC2626;font-size:9px;font-weight:700;padding:1px 5px;border-radius:4px;margin-left:6px;">⚠ Overdue</span>` : ''}
       </td>
       <td style="padding:9px 12px;border-bottom:1px solid #F1F5F9;font-size:12px;color:#475569;">${m.accountableUser ? m.accountableUser.name : '—'}</td>
-      <td style="padding:9px 12px;border-bottom:1px solid #F1F5F9;font-size:12px;color:#64748B;">${fmtDate(m.startDate)}</td>
-      <td style="padding:9px 12px;border-bottom:1px solid #F1F5F9;font-size:12px;${isOverdue ? 'color:#DC2626;font-weight:700;' : 'color:#64748B;'}">${fmtDate(m.endDate)}</td>
+      <td style="padding:9px 12px;border-bottom:1px solid #F1F5F9;font-size:12px;color:#64748B;">${fmtDate(m.plannedStartDate)}</td>
+      <td style="padding:9px 12px;border-bottom:1px solid #F1F5F9;font-size:12px;${isOverdue ? 'color:#DC2626;font-weight:700;' : 'color:#64748B;'}">${fmtDate(m.plannedEndDate)}</td>
       <td style="padding:9px 12px;border-bottom:1px solid #F1F5F9;">${statusPill(m.status)}</td>
       <td style="padding:9px 12px;border-bottom:1px solid #F1F5F9;">${progressBar(m.completionPercentage || 0, mColor)}</td>
     </tr>`;
@@ -462,7 +462,7 @@ async function buildConsolidatedEmailHtml(projects, recipientLabel) {
     });
     let log = await DailyStatusLog.findOne({ where: { projectId: project.id, reportDate: today } });
     if (!log) {
-      const hasDelayed = milestones.some(m => m.status === 'delayed' || (m.endDate && m.endDate < today && m.status !== 'completed'));
+      const hasDelayed = milestones.some(m => m.status === 'delayed' || (m.plannedEndDate && m.plannedEndDate < today && m.status !== 'completed'));
       const overallStatus = hasDelayed ? 'delayed' : 'on_track';
       log = { overallStatus, completedTasks: null, ongoingTasks: null, blockers: null, upcomingWork: null };
     }
@@ -472,7 +472,7 @@ async function buildConsolidatedEmailHtml(projects, recipientLabel) {
   // Portfolio summary stats
   const totalProjects   = projectData.length;
   const totalMilestones = projectData.reduce((s, d) => s + d.milestones.length, 0);
-  const totalOverdue    = projectData.reduce((s, d) => s + d.milestones.filter(m => m.endDate && m.endDate < today && m.status !== 'completed').length, 0);
+  const totalOverdue    = projectData.reduce((s, d) => s + d.milestones.filter(m => m.plannedEndDate && m.plannedEndDate < today && m.status !== 'completed').length, 0);
   const avgProgress     = totalMilestones
     ? Math.round(projectData.reduce((s, d) => s + d.milestones.reduce((ms, m) => ms + (m.completionPercentage || 0), 0), 0) / totalMilestones)
     : 0;
@@ -486,8 +486,8 @@ async function buildConsolidatedEmailHtml(projects, recipientLabel) {
   const upcoming = [];
   projectData.forEach(({ project, milestones }) => {
     milestones.forEach(m => {
-      if (!m.endDate || m.status === 'completed') return;
-      const diff = Math.round((new Date(m.endDate) - new Date(today)) / 86400000);
+      if (!m.plannedEndDate || m.status === 'completed') return;
+      const diff = Math.round((new Date(m.plannedEndDate) - new Date(today)) / 86400000);
       if (diff >= 0 && diff <= 7) upcoming.push({ ...m.dataValues, projectName: project.name, diff });
     });
   });
@@ -515,7 +515,7 @@ async function buildConsolidatedEmailHtml(projects, recipientLabel) {
           </tr>
         </table>
       </td>
-      <td style="padding:10px 12px;border-bottom:1px solid #F1F5F9;font-size:12px;font-weight:700;color:#475569;text-align:right;">${fmtDate(m.endDate)}</td>
+      <td style="padding:10px 12px;border-bottom:1px solid #F1F5F9;font-size:12px;font-weight:700;color:#475569;text-align:right;">${fmtDate(m.plannedEndDate)}</td>
       <td style="padding:10px 12px;border-bottom:1px solid #F1F5F9;text-align:right;">
         <span style="font-size:11px;font-weight:700;color:${urgency.color};">${urgency.label}</span>
       </td>
@@ -525,7 +525,7 @@ async function buildConsolidatedEmailHtml(projects, recipientLabel) {
   // Portfolio table rows
   const portfolioRows = projectData.map(({ project, milestones, log }, i) => {
     const pct = milestones.length ? Math.round(milestones.filter(m => m.status === 'completed').length / milestones.length * 100) : 0;
-    const del = milestones.filter(m => m.endDate && m.endDate < today && m.status !== 'completed').length;
+    const del = milestones.filter(m => m.plannedEndDate && m.plannedEndDate < today && m.status !== 'completed').length;
     const done = milestones.filter(m => m.status === 'completed').length;
     const pctColor = log.overallStatus === 'delayed' ? '#DC2626' : log.overallStatus === 'at_risk' ? '#D97706' : '#059669';
     return `<tr bgcolor="${i % 2 === 1 ? '#FAFCFF' : '#FFFFFF'}" style="background-color:${i % 2 === 1 ? '#FAFCFF' : '#FFFFFF'};">
@@ -723,7 +723,7 @@ async function runConsolidatedDailyReport() {
 
     // Fetch all active + on_hold projects
     const projects = await Project.findAll({
-      where: { status: ['active', 'on_hold'] },
+      where: { status: { [Op.in]: ['Active', 'active', 'On Hold', 'on_hold'] } },
       include: [
         { model: User, as: 'projectManager', attributes: ['id', 'name', 'email'] },
         { model: User, as: 'owner', attributes: ['id', 'name', 'email'] },

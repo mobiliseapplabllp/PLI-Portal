@@ -35,25 +35,58 @@ export default function GanttView() {
   const [milestones, setMilestones] = useState([]);
   const [loading, setLoading] = useState(true);
   const [tooltip, setTooltip] = useState(null);
+  const [fetchError, setFetchError] = useState(null);
+  const [fetchKey, setFetchKey] = useState(0);
   const chartRef = useRef(null);
 
   useEffect(() => {
+    setLoading(true);
+    setFetchError(null);
     Promise.all([getProjectByIdApi(id), getMilestonesApi(id)])
       .then(([pRes, mRes]) => {
         setProject(pRes.data.data);
         setMilestones(mRes.data.data || []);
+        setFetchError(null);
       })
-      .catch(() => toast.error('Failed to load'))
+      .catch((err) => {
+        toast.error('Failed to load');
+        setFetchError(err?.message || 'Failed to load milestones');
+      })
       .finally(() => setLoading(false));
-  }, [id]);
+  }, [id, fetchKey]);
 
   if (loading) return <div className="p-8 text-center text-gray-400">Loading Gantt chart...</div>;
+
+  if (fetchError) {
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center gap-3">
+          <button onClick={() => navigate(`/pm/projects/${id}`)} className="p-2 hover:bg-gray-100 rounded-lg text-gray-500">
+            <HiOutlineArrowLeft className="w-5 h-5" />
+          </button>
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">Gantt Chart</h1>
+          </div>
+        </div>
+        <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-center text-sm text-red-700">
+          <p className="font-medium">Failed to load Gantt data</p>
+          <p className="text-xs mt-1">{fetchError}</p>
+          <button
+            onClick={() => { setFetchError(null); setLoading(true); setFetchKey(k => k + 1); }}
+            className="mt-2 text-xs underline"
+          >
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
   // Determine chart date range
-  const datesWithData = milestones.filter(m => m.startDate || m.endDate);
+  const datesWithData = milestones.filter(m => m.plannedStartDate || m.plannedEndDate);
   if (datesWithData.length === 0) {
     return (
       <div className="space-y-4">
@@ -73,7 +106,7 @@ export default function GanttView() {
     );
   }
 
-  const allDates = milestones.flatMap(m => [m.startDate, m.endDate].filter(Boolean)).map(d => new Date(d));
+  const allDates = milestones.flatMap(m => [m.plannedStartDate, m.plannedEndDate].filter(Boolean)).map(d => new Date(d));
   let chartStart = new Date(Math.min(...allDates));
   let chartEnd = new Date(Math.max(...allDates));
   // Add padding
@@ -147,10 +180,11 @@ export default function GanttView() {
 
       {/* Gantt Chart */}
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-        <div className="overflow-x-auto" ref={chartRef}>
+        {/* Fix 4: overflow-auto (both axes) + max-height so sticky top-0 on the header works */}
+        <div className="overflow-auto max-h-[calc(100vh-280px)]" ref={chartRef}>
           <div style={{ minWidth: LABEL_WIDTH + chartWidth + 32 }}>
 
-            {/* Header row */}
+            {/* Header row — sticky works because the scroll container now has vertical overflow */}
             <div className="flex border-b border-gray-200 bg-gray-50 sticky top-0 z-10">
               <div style={{ width: LABEL_WIDTH, minWidth: LABEL_WIDTH }} className="px-4 py-2 text-xs font-semibold text-gray-600 border-r border-gray-200 flex-shrink-0">
                 Milestone
@@ -187,20 +221,20 @@ export default function GanttView() {
 
             {/* Milestone rows */}
             {milestones.map((m, rowIdx) => {
-              const isDelayed = m.endDate && m.endDate.slice(0, 10) < todayStr && m.status !== 'completed';
+              const isDelayed = m.plannedEndDate && m.plannedEndDate.slice(0, 10) < todayStr && m.status !== 'completed';
               const color = isDelayed ? STATUS_COLORS.delayed : STATUS_COLORS[m.status] || STATUS_COLORS.not_started;
 
-              const hasStart = Boolean(m.startDate);
-              const hasEnd = Boolean(m.endDate);
-              // For deadline-only milestones show a diamond marker at endDate instead of a bar
+              const hasStart = Boolean(m.plannedStartDate);
+              const hasEnd = Boolean(m.plannedEndDate);
+              // For deadline-only milestones show a diamond marker at plannedEndDate instead of a bar
               const isPointMilestone = !hasStart && hasEnd;
 
               const barStart = hasStart
-                ? Math.max(0, daysBetween(chartStart, new Date(m.startDate)))
+                ? Math.max(0, daysBetween(chartStart, new Date(m.plannedStartDate)))
                 : hasEnd
-                  ? Math.max(0, daysBetween(chartStart, new Date(m.endDate)))
+                  ? Math.max(0, daysBetween(chartStart, new Date(m.plannedEndDate)))
                   : null;
-              const barEnd = hasEnd ? Math.min(totalDays - 1, daysBetween(chartStart, new Date(m.endDate))) : barStart;
+              const barEnd = hasEnd ? Math.min(totalDays - 1, daysBetween(chartStart, new Date(m.plannedEndDate))) : barStart;
               const barWidth = (barStart !== null && !isPointMilestone) ? Math.max(1, (barEnd - barStart + 1)) * DAY_WIDTH : 0;
 
               return (
@@ -290,17 +324,22 @@ export default function GanttView() {
           </div>
         </div>
 
-        {/* Tooltip */}
+        {/* Tooltip — Fix 3: clamp to viewport so it never overflows right/bottom edges */}
         {tooltip && (
           <div
-            style={{ position: 'fixed', left: tooltip.x + 12, top: tooltip.y - 10, zIndex: 100 }}
+            style={{
+              position: 'fixed',
+              left: Math.min(tooltip.x + 12, window.innerWidth - 220),
+              top: Math.min(Math.max(tooltip.y - 10, 0), window.innerHeight - 120),
+              zIndex: 100,
+            }}
             className="bg-gray-900 text-white text-xs rounded-lg px-3 py-2 shadow-lg pointer-events-none max-w-xs"
           >
             <p className="font-semibold">{tooltip.m.name}</p>
             <p className="mt-0.5 text-gray-300 capitalize">{tooltip.m.status?.replace(/_/g, ' ')}</p>
             <p className="text-gray-300">Progress: {tooltip.m.completionPercentage || 0}%</p>
-            {tooltip.m.startDate && <p className="text-gray-300">Start: {new Date(tooltip.m.startDate).toLocaleDateString('en-IN')}</p>}
-            {tooltip.m.endDate && <p className="text-gray-300">Due: {new Date(tooltip.m.endDate).toLocaleDateString('en-IN')}</p>}
+            {tooltip.m.plannedStartDate && <p className="text-gray-300">Start: {new Date(tooltip.m.plannedStartDate).toLocaleDateString('en-IN')}</p>}
+            {tooltip.m.plannedEndDate && <p className="text-gray-300">Due: {new Date(tooltip.m.plannedEndDate).toLocaleDateString('en-IN')}</p>}
             {tooltip.m.accountableUser && <p className="text-gray-300">By: {tooltip.m.accountableUser.name}</p>}
           </div>
         )}

@@ -20,14 +20,16 @@ const Milestone = sequelize.define(
     // ── Core fields ───────────────────────────────────────────────────────────
     name:        { type: DataTypes.STRING(255), allowNull: false },
     description: { type: DataTypes.TEXT, allowNull: true },
-    startDate:   { type: DataTypes.DATEONLY, allowNull: true },
-    endDate:     { type: DataTypes.DATEONLY, allowNull: true },
+    plannedStartDate: { type: DataTypes.DATEONLY, allowNull: true, comment: 'Planned start date' },
+    plannedEndDate:   { type: DataTypes.DATEONLY, allowNull: true, comment: 'Planned end date' },
+    actualStartDate:  { type: DataTypes.DATEONLY, allowNull: true, comment: 'Actual start date' },
+    actualEndDate:    { type: DataTypes.DATEONLY, allowNull: true, comment: 'Actual end date' },
 
     accountableUserId:    { type: DataTypes.UUID, allowNull: true },
 
     status: {
-      type: DataTypes.ENUM(...Object.values(PM_MILESTONE_STATUS)),
-      defaultValue: PM_MILESTONE_STATUS.NOT_STARTED,
+      type: DataTypes.STRING(100),
+      defaultValue: PM_MILESTONE_STATUS.NOT_STARTED, // constant must equal 'not_started' — matches DB DEFAULT
     },
 
     order:               { type: DataTypes.INTEGER, defaultValue: 0 },

@@ -50,7 +50,7 @@ function StatCard({ label, value, icon: Icon, color }) {
 export default function PMDashboard() {
   const dispatch = useDispatch();
   const navigate = useNavigate();
-  const { projects, loading } = useSelector(s => s.pm);
+  const { projects, projectsLoading } = useSelector(s => s.pm);
 
   useEffect(() => { dispatch(fetchProjects()); }, [dispatch]);
 
@@ -177,7 +177,7 @@ export default function PMDashboard() {
               View All <HiOutlineArrowRight className="w-3 h-3" />
             </button>
           </div>
-          {loading ? (
+          {projectsLoading ? (
             <div className="p-8 text-center text-gray-400 text-sm">Loading...</div>
           ) : active.length === 0 ? (
             <div className="p-8 text-center text-gray-400 text-sm">No active projects</div>

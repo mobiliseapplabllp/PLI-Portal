@@ -1,8 +1,10 @@
-const milestoneService = require('../../services/pm/milestone.service');
-const { sendSuccess } = require('../../utils/response');
-const Project   = require('../../models/pm/Project');
-const Milestone = require('../../models/pm/Milestone');
-const User      = require('../../models/User');
+const milestoneService  = require('../../services/pm/milestone.service');
+const { sendSuccess }   = require('../../utils/response');
+const { sequelize }     = require('../../config/database');
+const Project           = require('../../models/pm/Project');
+const Milestone         = require('../../models/pm/Milestone');
+const User              = require('../../models/User');
+const { randomUUID }    = require('crypto');
 
 const getMilestones = async (req, res, next) => {
   try { sendSuccess(res, await milestoneService.getMilestones(req.params.id, req.user)); }
@@ -28,7 +30,31 @@ const createSubMilestone = async (req, res, next) => {
 
 const updateMilestone = async (req, res, next) => {
   try {
-    sendSuccess(res, await milestoneService.updateMilestone(req.params.id, req.params.milestoneId, req.body, req.user), 'Milestone updated');
+    const {
+      name,
+      description,
+      status,
+      weightPercentage,
+      completionPercentage,
+      accountableUserId,
+      type,
+      // plannedStartDate and plannedEndDate are write-once and must go through
+      // PATCH /:milestoneId/planned-dates which has the write-once guard.
+    } = req.body;
+
+    const allowedData = Object.fromEntries(
+      Object.entries({
+        name,
+        description,
+        status,
+        weightPercentage,
+        completionPercentage,
+        accountableUserId,
+        type,
+      }).filter(([, v]) => v !== undefined)
+    );
+
+    sendSuccess(res, await milestoneService.updateMilestone(req.params.id, req.params.milestoneId, allowedData, req.user), 'Milestone updated');
   } catch (e) { next(e); }
 };
 
@@ -41,13 +67,27 @@ const deleteMilestone = async (req, res, next) => {
 
 const updateStatus = async (req, res, next) => {
   try {
-    sendSuccess(res, await milestoneService.updateMilestoneStatus(req.params.id, req.params.milestoneId, req.body.status, req.user), 'Status updated');
+    const { status } = req.body;
+    if (!status) return res.status(400).json({ success: false, message: 'status is required' });
+    if (typeof status !== 'string' || !status.trim()) {
+      return res.status(400).json({ success: false, message: 'Invalid status value' });
+    }
+    const VALID_STATUSES = ['not_started', 'in_progress', 'completed', 'delayed', 'on_hold', 'cancelled'];
+    if (!VALID_STATUSES.includes(status.trim())) {
+      return res.status(400).json({ success: false, message: `Invalid status "${status}". Valid values: ${VALID_STATUSES.join(', ')}` });
+    }
+    sendSuccess(res, await milestoneService.updateMilestoneStatus(req.params.id, req.params.milestoneId, status.trim(), req.user), 'Status updated');
   } catch (e) { next(e); }
 };
 
 const updateProgress = async (req, res, next) => {
   try {
-    sendSuccess(res, await milestoneService.updateMilestoneProgress(req.params.id, req.params.milestoneId, req.body.completionPercentage, req.user), 'Progress updated');
+    const pct = Number(req.body.completionPercentage);
+    if (!Number.isFinite(pct) || pct < 0 || pct > 100) {
+      return res.status(400).json({ success: false, message: 'completionPercentage must be a number between 0 and 100' });
+    }
+    req.body.completionPercentage = pct;
+    sendSuccess(res, await milestoneService.updateMilestoneProgress(req.params.id, req.params.milestoneId, pct, req.user), 'Progress updated');
   } catch (e) { next(e); }
 };
 
@@ -58,6 +98,20 @@ const exportMilestones = async (req, res, next) => {
   try {
     const ExcelJS = require('exceljs');
     const { projectType, status, projectId } = req.query;
+
+    const ADMIN_ROLES = ['admin', 'manager', 'senior_manager'];
+    const isAdminOrManager = ADMIN_ROLES.includes(req.user.role);
+
+    if (!isAdminOrManager) {
+      if (!projectId) {
+        return res.status(403).json({ success: false, message: 'projectId is required for your role to export milestones' });
+      }
+      const ProjectMember = require('../../models/pm/ProjectMember');
+      const membership = await ProjectMember.findOne({ where: { projectId, userId: req.user.id } });
+      if (!membership) {
+        return res.status(403).json({ success: false, message: 'You are not a member of this project' });
+      }
+    }
 
     const projectWhere = {};
     if (projectType) projectWhere.projectType = projectType;
@@ -93,8 +147,10 @@ const exportMilestones = async (req, res, next) => {
       { header: 'Status',           key: 'status',       width: 15 },
       { header: 'Weight %',         key: 'weight',       width: 10 },
       { header: 'Completion %',     key: 'completion',   width: 14 },
-      { header: 'Start Date',       key: 'startDate',    width: 14 },
-      { header: 'End Date',         key: 'endDate',      width: 14 },
+      { header: 'Planned Start', key: 'plannedStartDate', width: 15 },
+      { header: 'Planned End',   key: 'plannedEndDate',   width: 15 },
+      { header: 'Actual Start',  key: 'actualStartDate',  width: 15 },
+      { header: 'Actual End',    key: 'actualEndDate',    width: 15 },
       { header: 'Accountable User', key: 'accountable',  width: 25 },
     ];
     ws.getRow(1).font      = { bold: true, color: { argb: 'FFFFFFFF' } };
@@ -114,8 +170,10 @@ const exportMilestones = async (req, res, next) => {
         status:      m.status,
         weight:      m.weightPercentage ?? '',
         completion:  m.completionPercentage,
-        startDate:   m.startDate,
-        endDate:     m.endDate,
+        plannedStartDate: m.plannedStartDate,
+        plannedEndDate:   m.plannedEndDate,
+        actualStartDate:  m.actualStartDate,
+        actualEndDate:    m.actualEndDate,
         accountable: m.accountableUser ? m.accountableUser.name : '',
       });
     });
@@ -133,15 +191,24 @@ const exportMilestones = async (req, res, next) => {
 const validateMilestoneImport = async (req, res, next) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    if (req.file.size > 2 * 1024 * 1024) {
+      return res.status(400).json({ success: false, message: 'File too large. Maximum size is 2MB.' });
+    }
     const ExcelJS = require('exceljs');
     const wb = new ExcelJS.Workbook();
     await wb.xlsx.load(req.file.buffer);
     const ws = wb.worksheets[0];
     if (!ws) return res.status(400).json({ error: 'No worksheet found in file' });
+    const dataRowCount = ws.rowCount - 1;
+    if (dataRowCount > 1000) {
+      return res.status(400).json({ success: false, message: 'File exceeds 1000 data rows. Please split into smaller files.' });
+    }
     const rows = [], errors = [];
     ws.eachRow((row, rowNumber) => {
       if (rowNumber === 1) return;
-      const [, projectName, milestoneName, description, startDate, endDate, status, completion] = row.values;
+      // Template columns (1-indexed, ExcelJS): A=projectName B=name C=status
+      // D=clientOrg (skipped) E=completionPercentage F=plannedStart G=plannedEnd H=notes→description
+      const [, projectName, milestoneName, status, , completion, startDate, endDate, description] = row.values;
       const rowErrors = [];
       if (!projectName)   rowErrors.push('Project Name is required');
       if (!milestoneName) rowErrors.push('Milestone Name is required');
@@ -155,8 +222,8 @@ const validateMilestoneImport = async (req, res, next) => {
         projectName:          projectName  ? projectName.toString().trim()  : '',
         name:                 milestoneName ? milestoneName.toString().trim() : '',
         description:          description  ? description.toString().trim()  : '',
-        startDate:            startDate || null,
-        endDate:              endDate   || null,
+        plannedStartDate:     startDate || null,
+        plannedEndDate:       endDate   || null,
         status:               status    || 'not_started',
         completionPercentage: Number(completion) || 0,
         errors: rowErrors,
@@ -176,15 +243,66 @@ const commitMilestoneImport = async (req, res, next) => {
     const { rows } = req.body;
     if (!Array.isArray(rows) || rows.length === 0)
       return res.status(400).json({ error: 'No rows provided' });
-    const validRows = rows.filter(r => r.valid);
-    const results   = { inserted: 0, skipped: 0, errors: [] };
-    for (const row of validRows) {
-      try {
-        const project = await Project.findOne({ where: { name: row.projectName } });
-        if (!project) { results.skipped++; results.errors.push({ row: row.rowNumber, error: `Project "${row.projectName}" not found` }); continue; }
-        await Milestone.create({ projectId: project.id, name: row.name, description: row.description || null, startDate: row.startDate || null, endDate: row.endDate || null, status: row.status || 'not_started', completionPercentage: row.completionPercentage || 0 });
+
+    // Server-side re-validation — do not trust client's r.valid flag
+    const validRows = [];
+    const skipped = [];
+    for (const row of rows) {
+      if (!row.name || typeof row.name !== 'string' || !row.name.trim()) {
+        skipped.push({ row, reason: 'Missing name' });
+        continue;
+      }
+      if (!row.projectName) {
+        skipped.push({ row, reason: 'Missing project name' });
+        continue;
+      }
+      if (row.completionPercentage !== undefined && row.completionPercentage !== null) {
+        const pct = Number(row.completionPercentage);
+        if (!Number.isFinite(pct) || pct < 0 || pct > 100) {
+          skipped.push({ row, reason: 'Invalid completionPercentage' });
+          continue;
+        }
+      }
+      validRows.push(row);
+    }
+
+    const results = {
+      inserted: 0,
+      skipped:  skipped.length,
+      errors:   skipped.map(s => ({ row: s.row.rowNumber, error: s.reason })),
+    };
+
+    // Wrap all inserts in one transaction so a mid-batch failure rolls back
+    // already-inserted rows rather than leaving the DB in a partial state.
+    const t = await sequelize.transaction();
+    try {
+      for (const row of validRows) {
+        const project = await Project.findOne({ where: { name: row.projectName }, transaction: t });
+        if (!project) {
+          results.skipped++;
+          results.errors.push({ row: row.rowNumber, error: `Project "${row.projectName}" not found` });
+          continue; // skip this row but do NOT abort the transaction
+        }
+        await Milestone.create({
+          id:                   randomUUID(),
+          projectId:            project.id,
+          name:                 row.name,
+          description:          row.description          || null,
+          plannedStartDate:     row.plannedStartDate      || null,
+          plannedEndDate:       row.plannedEndDate        || null,
+          status:               row.status               || 'not_started',
+          completionPercentage: row.completionPercentage || 0,
+        }, { transaction: t });
         results.inserted++;
-      } catch (e) { results.skipped++; results.errors.push({ row: row.rowNumber, error: e.message }); }
+      }
+      await t.commit();
+    } catch (e) {
+      await t.rollback();
+      return res.status(500).json({
+        success: false,
+        message: 'Import failed — all rows rolled back',
+        error:   e.message,
+      });
     }
     return sendSuccess(res, results, `Import complete: ${results.inserted} inserted, ${results.skipped} skipped`);
   } catch (err) { next(err); }
@@ -197,36 +315,169 @@ const getMilestoneImportTemplate = async (req, res, next) => {
   try {
     const ExcelJS = require('exceljs');
     const wb = new ExcelJS.Workbook();
+
+    // --- Main sheet ---
+    // Column layout (must stay in sync with validateMilestoneImport destructuring):
+    // A=projectName B=name C=status D=clientOrg E=completionPercentage
+    // F=plannedStartDate G=plannedEndDate H=notes(→description in model)
     const ws = wb.addWorksheet('Milestones');
     ws.columns = [
-      { header: 'Project Name *',         key: 'projectName', width: 30 },
-      { header: 'Milestone Name *',        key: 'name',        width: 35 },
-      { header: 'Description',             key: 'description', width: 40 },
-      { header: 'Start Date (YYYY-MM-DD)', key: 'startDate',   width: 22 },
-      { header: 'End Date (YYYY-MM-DD)',   key: 'endDate',     width: 22 },
-      { header: 'Status',                  key: 'status',      width: 15 },
-      { header: 'Completion %',            key: 'completion',  width: 14 },
+      { header: 'Project Name *', key: 'projectName', width: 30 },
+      { header: 'Milestone Name *', key: 'name', width: 35 },
+      { header: 'Status', key: 'status', width: 20 },
+      { header: 'Client Org', key: 'clientOrg', width: 25 },
+      { header: 'Completion %', key: 'completionPercentage', width: 15 },
+      { header: 'Planned Start (YYYY-MM-DD)', key: 'plannedStartDate', width: 25 },
+      { header: 'Planned End (YYYY-MM-DD)', key: 'plannedEndDate', width: 25 },
+      { header: 'Notes', key: 'notes', width: 40 },
     ];
-    ws.getRow(1).font   = { bold: true, color: { argb: 'FFFFFFFF' } };
-    ws.getRow(1).fill   = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF2563EB' } };
-    ws.getRow(1).height = 20;
-    ws.addRow({ projectName: 'Example Project', name: 'Phase 1 Delivery', description: 'Deliver phase 1', startDate: '2024-07-01', endDate: '2024-07-31', status: 'not_started', completion: 0 });
-    ws.getRow(2).font = { italic: true, color: { argb: 'FF6B7280' } };
-    const notes = wb.addWorksheet('Notes');
-    notes.addRow(['Field', 'Notes']);
-    notes.addRow(['Project Name *', 'Must match an existing project name exactly']);
-    notes.addRow(['Status', 'One of: not_started, in_progress, completed, delayed, on_hold, cancelled']);
-    notes.getRow(1).font = { bold: true };
+
+    // Style header row
+    const headerRow = ws.getRow(1);
+    headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 11 };
+    headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1D4ED8' } };
+    headerRow.height = 22;
+    headerRow.alignment = { vertical: 'middle' };
+
+    // Sample row
+    ws.addRow({
+      projectName: 'Example Project',
+      name: 'Design Phase',
+      status: 'not_started',
+      clientOrg: 'Client Name',
+      completionPercentage: 0,
+      plannedStartDate: '2026-01-01',
+      plannedEndDate: '2026-03-31',
+      notes: 'Optional notes',
+    });
+
+    // Freeze first row
+    ws.views = [{ state: 'frozen', xSplit: 0, ySplit: 1, activeCell: 'A2' }];
+
+    // --- Hidden dropdowns sheet ---
+    const dropSheet = wb.addWorksheet('_lists');
+    dropSheet.state = 'veryHidden';
+
+    // Fetch real project names
+    const Project = require('../../models/pm/Project');
+    const projects = await Project.findAll({
+      attributes: ['name'],
+      where: { status: { [require('sequelize').Op.notIn]: ['completed', 'cancelled'] } },
+      order: [['name', 'ASC']],
+      limit: 500,
+    });
+    const projectNames = projects.map(p => p.name);
+
+    // Fetch statuses from DB or use defaults
+    let statusValues = ['not_started', 'in_progress', 'completed', 'on_hold', 'cancelled', 'delayed'];
+    try {
+      const PmStatus = require('../../models/pm/PmStatus');
+      const dbStatuses = await PmStatus.findAll({ where: { forMilestone: true }, attributes: ['value', 'name'] });
+      if (dbStatuses.length) statusValues = dbStatuses.map(s => s.value || s.name);
+    } catch (_) {}
+
+    // Fetch client orgs
+    let clientOrgs = [];
+    try {
+      const ClientOrg = require('../../models/csat/ClientOrganisation');
+      const orgs = await ClientOrg.findAll({ attributes: ['name'], order: [['name', 'ASC']], limit: 200 });
+      clientOrgs = orgs.map(o => o.name);
+    } catch (_) {}
+
+    // Populate hidden sheet columns
+    dropSheet.getColumn(1).values = ['Projects', ...projectNames];
+    dropSheet.getColumn(2).values = ['Statuses', ...statusValues];
+    dropSheet.getColumn(3).values = ['ClientOrgs', ...clientOrgs];
+
+    // Apply data validation to data rows 2–1001
+    const lastProjectRow = projectNames.length + 1;
+    const lastStatusRow = statusValues.length + 1;
+    const lastClientRow = clientOrgs.length + 1;
+
+    for (let i = 2; i <= 1001; i++) {
+      // Project Name dropdown (col A)
+      if (projectNames.length > 0) {
+        ws.getCell(`A${i}`).dataValidation = {
+          type: 'list', allowBlank: false,
+          formulae: [`_lists!$A$2:$A$${lastProjectRow}`],
+          showErrorMessage: true, errorStyle: 'stop',
+          errorTitle: 'Invalid Project', error: 'Select a project from the dropdown',
+        };
+      }
+      // Status dropdown (col C)
+      ws.getCell(`C${i}`).dataValidation = {
+        type: 'list', allowBlank: true,
+        formulae: [`_lists!$B$2:$B$${lastStatusRow}`],
+        showErrorMessage: true, errorStyle: 'warning',
+        errorTitle: 'Invalid Status', error: 'Select a valid status',
+      };
+      // Client Org dropdown (col D)
+      if (clientOrgs.length > 0) {
+        ws.getCell(`D${i}`).dataValidation = {
+          type: 'list', allowBlank: true,
+          formulae: [`_lists!$C$2:$C$${lastClientRow}`],
+        };
+      }
+      // Completion % validation (col E)
+      ws.getCell(`E${i}`).dataValidation = {
+        type: 'whole', allowBlank: true, operator: 'between',
+        formulae: [0, 100],
+        showErrorMessage: true, errorStyle: 'stop',
+        errorTitle: 'Invalid %', error: 'Enter a whole number between 0 and 100',
+      };
+    }
+
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', 'attachment; filename="milestone-import-template.xlsx"');
-    await wb.xlsx.write(res);
-    res.end();
-  } catch (err) { next(err); }
+    const buf = await wb.xlsx.writeBuffer();
+    res.send(buf);
+  } catch (err) {
+    next(err);
+  }
+};
+
+const updatePlannedDates = async (req, res, next) => {
+  try {
+    const { reason, plannedStartDate, plannedEndDate } = req.body;
+    const result = await milestoneService.updateMilestonePlannedDates(
+      req.params.id,
+      req.params.milestoneId,
+      { plannedStartDate, plannedEndDate, reason },
+      req.user
+    );
+    const message = result.alert === 'deadline_near'
+      ? 'Dates updated — deadline is approaching'
+      : 'Planned dates updated';
+    sendSuccess(res, result, message);
+  } catch (e) { next(e); }
+};
+
+const updateActualDates = async (req, res, next) => {
+  try {
+    const { reason, actualStartDate, actualEndDate } = req.body;
+    if (actualStartDate && isNaN(new Date(actualStartDate).getTime())) {
+      return res.status(400).json({ success: false, message: 'Invalid actualStartDate format' });
+    }
+    if (actualEndDate && isNaN(new Date(actualEndDate).getTime())) {
+      return res.status(400).json({ success: false, message: 'Invalid actualEndDate format' });
+    }
+    if (actualStartDate && actualEndDate && new Date(actualStartDate) > new Date(actualEndDate)) {
+      return res.status(400).json({ success: false, message: 'actualStartDate must be before or equal to actualEndDate' });
+    }
+    const result = await milestoneService.updateMilestoneActualDates(
+      req.params.id,
+      req.params.milestoneId,
+      { actualStartDate, actualEndDate, reason },
+      req.user
+    );
+    sendSuccess(res, result, 'Actual dates updated');
+  } catch (e) { next(e); }
 };
 
 module.exports = {
   getMilestones, createMilestone, createSubMilestone,
   updateMilestone, deleteMilestone,
   updateStatus, updateProgress,
+  updatePlannedDates, updateActualDates,
   exportMilestones, validateMilestoneImport, commitMilestoneImport, getMilestoneImportTemplate,
 };

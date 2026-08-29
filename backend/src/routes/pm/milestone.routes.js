@@ -19,8 +19,10 @@ router.get('/',    authorize(...ALL),        ctrl.getMilestones);
 router.post('/',   authorize(...ADMIN_ONLY), ctrl.createMilestone);
 router.put('/:milestoneId',   authorize(...MANAGERS),   ctrl.updateMilestone);   // managers can update (weight%, status)
 router.delete('/:milestoneId', authorize(...ADMIN_ONLY), ctrl.deleteMilestone);  // admin only deletes top-level
-router.patch('/:milestoneId/status',   authorize(...MANAGERS), ctrl.updateStatus);
-router.patch('/:milestoneId/progress', authorize(...MANAGERS), ctrl.updateProgress);
+router.patch('/:milestoneId/status',        authorize(...MANAGERS), ctrl.updateStatus);
+router.patch('/:milestoneId/progress',      authorize(...MANAGERS), ctrl.updateProgress);
+router.patch('/:milestoneId/planned-dates', authorize(...MANAGERS), ctrl.updatePlannedDates);
+router.patch('/:milestoneId/actual-dates',  authorize(...MANAGERS), ctrl.updateActualDates);
 // Sub-milestones: managers can add/edit/delete sub-milestones inside default milestones
 router.post('/:milestoneId/sub', authorize(...MANAGERS), ctrl.createSubMilestone);
 

@@ -1,5 +1,6 @@
 const pmSettingsService = require('../../services/pm/pmSettings.service');
 const { rescheduleProjectDailyReportJob } = require('../../jobs/projectDailyReport.job');
+const { rescheduleHelpdeskDailyReportJob } = require('../../jobs/helpdeskDailyReport.job');
 const { runAllDailyReports, runConsolidatedDailyReport } = require('../../services/pm/dailyReport.service');
 const { sendSuccess } = require('../../utils/response');
 
@@ -14,6 +15,10 @@ const updateSettings = async (req, res, next) => {
     // Reschedule cron if the report time changed
     if (req.body.dailyReportTime) {
       rescheduleProjectDailyReportJob(req.body.dailyReportTime);
+    }
+    // Reschedule helpdesk daily report cron if its time changed
+    if (req.body.helpdeskDailyReportTime) {
+      rescheduleHelpdeskDailyReportJob(req.body.helpdeskDailyReportTime);
     }
     sendSuccess(res, settings, 'Settings updated');
   }

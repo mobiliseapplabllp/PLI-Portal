@@ -32,8 +32,12 @@ const Project = sequelize.define(
     // ── projectType now stores project category (Signed/Unsigned/Contract/Demo) ─
     projectType:     { type: DataTypes.STRING(100), allowNull: true },
 
-    startDate:       { type: DataTypes.DATEONLY, allowNull: true },
-    endDate:         { type: DataTypes.DATEONLY, allowNull: true },
+    // Planned dates — set once at creation, treated as read-only after
+    startDate:          { type: DataTypes.DATEONLY, allowNull: true },  // plannedStartDate in UI
+    endDate:            { type: DataTypes.DATEONLY, allowNull: true },  // plannedEndDate in UI
+    // Actual dates — filled after project kicks off
+    actualStartDate:    { type: DataTypes.DATEONLY, allowNull: true },
+    actualEndDate:      { type: DataTypes.DATEONLY, allowNull: true },
     createdById:     { type: DataTypes.UUID, allowNull: true },
   },
   { tableName: 'pm_projects' }

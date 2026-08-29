@@ -158,114 +158,259 @@ const kpiNavItems = {
   director: [],
 };
 
-// ── PM Nav Items ──────────────────────────────────────────────────────────────
-const pmNavItems = {
-  employee: [
-    { to: '/pm/dashboard', label: 'PM Dashboard', icon: HiOutlineHome },
-    { to: '/pm/projects', label: 'My Projects', icon: HiOutlineFolderOpen },
-    { to: '/pm/my-tasks', label: 'My Tasks', icon: HiOutlineCheckCircle },
-  ],
-  manager: [
-    { to: '/pm/dashboard', label: 'PM Dashboard', icon: HiOutlineHome },
-    {
-      label: 'Projects',
-      icon: HiOutlineFolderOpen,
-      children: [
-        { to: '/pm/projects', label: 'All Projects', icon: HiOutlineFolderOpen },
-        { to: '/pm/projects/create', label: 'Create Project', icon: HiOutlinePlus },
-      ],
-    },
-    { to: '/pm/my-tasks', label: 'My Tasks', icon: HiOutlineCheckCircle },
-    { to: '/pm/settings', label: 'Settings', icon: HiOutlineCog },
-  ],
-  senior_manager: [
-    { to: '/pm/dashboard', label: 'PM Dashboard', icon: HiOutlineHome },
-    {
-      label: 'Projects',
-      icon: HiOutlineFolderOpen,
-      children: [
-        { to: '/pm/projects', label: 'All Projects', icon: HiOutlineFolderOpen },
-        { to: '/pm/projects/create', label: 'Create Project', icon: HiOutlinePlus },
-      ],
-    },
-    { to: '/pm/my-tasks', label: 'My Tasks', icon: HiOutlineCheckCircle },
-    { to: '/pm/settings', label: 'Settings', icon: HiOutlineCog },
-  ],
-  hr_admin: [
-    { to: '/pm/dashboard', label: 'PM Dashboard', icon: HiOutlineHome },
-    { to: '/pm/projects', label: 'All Projects', icon: HiOutlineFolderOpen },
-  ],
-  final_approver: [
-    { to: '/pm/dashboard', label: 'PM Dashboard', icon: HiOutlineHome },
-    { to: '/pm/projects', label: 'All Projects', icon: HiOutlineFolderOpen },
-  ],
-  md: [
-    { to: '/pm/dashboard', label: 'PM Dashboard', icon: HiOutlineHome },
-    { to: '/pm/projects', label: 'All Projects', icon: HiOutlineFolderOpen },
-  ],
-  director: [
-    { to: '/pm/dashboard', label: 'PM Dashboard', icon: HiOutlineHome },
-    { to: '/pm/projects', label: 'All Projects', icon: HiOutlineFolderOpen },
-  ],
-  admin: [
-    { to: '/pm/dashboard', label: 'PM Dashboard', icon: HiOutlineHome },
-    {
-      label: 'Projects',
-      icon: HiOutlineFolderOpen,
-      children: [
-        { to: '/pm/projects', label: 'All Projects', icon: HiOutlineFolderOpen },
-        { to: '/pm/projects/create', label: 'Create Project', icon: HiOutlinePlus },
-      ],
-    },
-    { to: '/pm/my-tasks', label: 'My Tasks', icon: HiOutlineCheckCircle },
-    { to: '/pm/settings', label: 'PM Settings', icon: HiOutlineCog },
-    { section: 'Client Surveys' },
-    { to: '/csat/dashboard', label: 'CSAT Dashboard', icon: HiOutlineChartBar },
-    { to: '/csat/client-organisations', label: 'Client Orgs', icon: HiOutlineOfficeBuilding },
-    { to: '/csat/approval-inbox', label: 'Approval Inbox', icon: HiOutlineInbox },
-    {
-      label: 'Surveys',
-      icon: HiOutlineAnnotation,
-      children: [
-        { to: '/csat/surveys', label: 'Survey Builder', icon: HiOutlinePencilAlt },
-        { to: '/csat/send', label: 'Send Survey', icon: HiOutlinePaperAirplane },
-        { to: '/csat/responses', label: 'Survey Responses', icon: HiOutlineChartBar },
-      ],
-    },
-  ],
-};
-
-// CSAT items appended to manager/senior_manager/hr_admin/final_approver PM nav
-const csatManagerItems = [
-  { section: 'Client Surveys' },
-  { to: '/csat/dashboard', label: 'CSAT Dashboard', icon: HiOutlineChartBar },
-  {
-    label: 'Surveys',
-    icon: HiOutlineAnnotation,
-    children: [
-      { to: '/csat/send', label: 'Send Survey', icon: HiOutlinePaperAirplane },
-      { to: '/csat/my-requests', label: 'My Requests', icon: HiOutlineMyRequests },
-      { to: '/csat/responses', label: 'Survey Responses', icon: HiOutlineChartBar },
-    ],
-  },
+// ── Shared building blocks ────────────────────────────────────────────────────
+const opsBaseChildren = [
+  { to: '/helpdesk/tickets',        label: 'Tickets',        icon: HiOutlineTicket },
+  { to: '/helpdesk/knowledge-base', label: 'Knowledge Base', icon: HiOutlineBookOpen },
+  { to: '/helpdesk/announcements',  label: 'Announcements',  icon: HiOutlineSpeakerphone },
+];
+const opsFullChildren = [
+  ...opsBaseChildren,
+  { to: '/helpdesk/reports', label: 'Reports', icon: HiOutlineChartBar },
+  { to: '/helpdesk/groups',  label: 'Groups',  icon: HiOutlineUserGroup },
 ];
 
-const csatReadOnlyItems = [
-  { section: 'Client Surveys' },
-  { to: '/csat/dashboard', label: 'CSAT Dashboard', icon: HiOutlineChartBar },
+const surveyMgrChildren = [
+  { to: '/csat/dashboard',  label: 'CSAT Dashboard',   icon: HiOutlineChartBar },
+  { to: '/csat/send',       label: 'Send Survey',       icon: HiOutlinePaperAirplane },
+  { to: '/csat/my-requests',label: 'My Requests',       icon: HiOutlineMyRequests },
+  { to: '/csat/responses',  label: 'Survey Responses',  icon: HiOutlineChartBar },
+];
+const surveyAdminChildren = [
+  { to: '/csat/dashboard',            label: 'CSAT Dashboard',   icon: HiOutlineChartBar },
+  { to: '/csat/client-organisations', label: 'Client Orgs',      icon: HiOutlineOfficeBuilding },
+  { to: '/csat/approval-inbox',       label: 'Approval Inbox',   icon: HiOutlineInbox },
+  { to: '/csat/surveys',              label: 'Survey Builder',    icon: HiOutlinePencilAlt },
+  { to: '/csat/send',                 label: 'Send Survey',       icon: HiOutlinePaperAirplane },
+  { to: '/csat/responses',            label: 'Survey Responses',  icon: HiOutlineChartBar },
+];
+const surveyReadChildren = [
+  { to: '/csat/dashboard', label: 'CSAT Dashboard',  icon: HiOutlineChartBar },
   { to: '/csat/responses', label: 'Survey Responses', icon: HiOutlineChartBar },
 ];
 
-// Sales Director has no PM module access
-pmNavItems.sales_director = [];
+// ── PM Nav Items ──────────────────────────────────────────────────────────────
+const pmNavItems = {
+  // ── Employee ──────────────────────────────────────────────────────────────
+  employee: [
+    { to: '/pm/dashboard', label: 'Dashboard', icon: HiOutlineHome },
+    {
+      label: 'Project Management',
+      icon: HiOutlineFolderOpen,
+      children: [
+        { to: '/pm/projects', label: 'All Projects', icon: HiOutlineFolderOpen },
+      ],
+    },
+    {
+      label: 'Operations Management',
+      icon: HiOutlineTicket,
+      children: opsBaseChildren,
+    },
+    {
+      label: 'Miscellaneous',
+      icon: HiOutlineViewGridAdd,
+      children: [
+        { to: '/pm/my-tasks', label: 'My Tasks', icon: HiOutlineCheckCircle },
+      ],
+    },
+  ],
 
-// Inject CSAT into pm nav items for non-admin roles
-pmNavItems.manager       = [...pmNavItems.manager,       ...csatManagerItems];
-pmNavItems.senior_manager = [...pmNavItems.senior_manager, ...csatManagerItems];
-pmNavItems.hr_admin      = [...pmNavItems.hr_admin,      ...csatReadOnlyItems];
-pmNavItems.final_approver = [...pmNavItems.final_approver, ...csatReadOnlyItems];
+  // ── Manager ───────────────────────────────────────────────────────────────
+  manager: [
+    { to: '/pm/dashboard', label: 'Dashboard', icon: HiOutlineHome },
+    {
+      label: 'Project Management',
+      icon: HiOutlineFolderOpen,
+      children: [
+        { to: '/pm/projects',        label: 'All Projects',    icon: HiOutlineFolderOpen },
+        { to: '/pm/projects/create', label: 'Create Project',  icon: HiOutlinePlus },
+      ],
+    },
+    {
+      label: 'Operations Management',
+      icon: HiOutlineTicket,
+      children: opsFullChildren,
+    },
+    {
+      label: 'Survey Management',
+      icon: HiOutlineAnnotation,
+      children: surveyMgrChildren,
+    },
+    {
+      label: 'Miscellaneous',
+      icon: HiOutlineViewGridAdd,
+      children: [
+        { to: '/pm/my-tasks', label: 'My Tasks', icon: HiOutlineCheckCircle },
+      ],
+    },
+    {
+      label: 'Settings',
+      icon: HiOutlineCog,
+      children: [
+        { to: '/pm/settings', label: 'PM Settings', icon: HiOutlineCog },
+      ],
+    },
+  ],
 
-// ── Helpdesk Nav Items ────────────────────────────────────────────────────────
+  // ── Senior Manager ────────────────────────────────────────────────────────
+  senior_manager: [
+    { to: '/pm/dashboard', label: 'Dashboard', icon: HiOutlineHome },
+    {
+      label: 'Project Management',
+      icon: HiOutlineFolderOpen,
+      children: [
+        { to: '/pm/projects',        label: 'All Projects',   icon: HiOutlineFolderOpen },
+        { to: '/pm/projects/create', label: 'Create Project', icon: HiOutlinePlus },
+      ],
+    },
+    {
+      label: 'Operations Management',
+      icon: HiOutlineTicket,
+      children: opsFullChildren,
+    },
+    {
+      label: 'Survey Management',
+      icon: HiOutlineAnnotation,
+      children: surveyMgrChildren,
+    },
+    {
+      label: 'Miscellaneous',
+      icon: HiOutlineViewGridAdd,
+      children: [
+        { to: '/pm/my-tasks', label: 'My Tasks', icon: HiOutlineCheckCircle },
+      ],
+    },
+    {
+      label: 'Settings',
+      icon: HiOutlineCog,
+      children: [
+        { to: '/pm/settings',       label: 'PM Settings',         icon: HiOutlineCog },
+        { to: '/helpdesk/settings', label: 'Operations Settings', icon: HiOutlineCog },
+      ],
+    },
+  ],
+
+  // ── HR Admin ──────────────────────────────────────────────────────────────
+  hr_admin: [
+    { to: '/pm/dashboard', label: 'Dashboard', icon: HiOutlineHome },
+    {
+      label: 'Project Management',
+      icon: HiOutlineFolderOpen,
+      children: [
+        { to: '/pm/projects', label: 'All Projects', icon: HiOutlineFolderOpen },
+      ],
+    },
+    {
+      label: 'Operations Management',
+      icon: HiOutlineTicket,
+      children: opsBaseChildren,
+    },
+    {
+      label: 'Survey Management',
+      icon: HiOutlineAnnotation,
+      children: surveyReadChildren,
+    },
+  ],
+
+  // ── Final Approver ────────────────────────────────────────────────────────
+  final_approver: [
+    { to: '/pm/dashboard', label: 'Dashboard', icon: HiOutlineHome },
+    {
+      label: 'Project Management',
+      icon: HiOutlineFolderOpen,
+      children: [
+        { to: '/pm/projects', label: 'All Projects', icon: HiOutlineFolderOpen },
+      ],
+    },
+    {
+      label: 'Operations Management',
+      icon: HiOutlineTicket,
+      children: opsBaseChildren,
+    },
+    {
+      label: 'Survey Management',
+      icon: HiOutlineAnnotation,
+      children: surveyReadChildren,
+    },
+  ],
+
+  // ── MD ────────────────────────────────────────────────────────────────────
+  md: [
+    { to: '/pm/dashboard', label: 'Dashboard', icon: HiOutlineHome },
+    {
+      label: 'Project Management',
+      icon: HiOutlineFolderOpen,
+      children: [
+        { to: '/pm/projects', label: 'All Projects', icon: HiOutlineFolderOpen },
+      ],
+    },
+    {
+      label: 'Operations Management',
+      icon: HiOutlineTicket,
+      children: opsBaseChildren,
+    },
+  ],
+
+  // ── Director ──────────────────────────────────────────────────────────────
+  director: [
+    { to: '/pm/dashboard', label: 'Dashboard', icon: HiOutlineHome },
+    {
+      label: 'Project Management',
+      icon: HiOutlineFolderOpen,
+      children: [
+        { to: '/pm/projects', label: 'All Projects', icon: HiOutlineFolderOpen },
+      ],
+    },
+    {
+      label: 'Operations Management',
+      icon: HiOutlineTicket,
+      children: opsBaseChildren,
+    },
+  ],
+
+  // ── Admin ─────────────────────────────────────────────────────────────────
+  admin: [
+    { to: '/pm/dashboard', label: 'Dashboard', icon: HiOutlineHome },
+    {
+      label: 'Project Management',
+      icon: HiOutlineFolderOpen,
+      children: [
+        { to: '/pm/projects',        label: 'All Projects',   icon: HiOutlineFolderOpen },
+        { to: '/pm/projects/create', label: 'Create Project', icon: HiOutlinePlus },
+      ],
+    },
+    {
+      label: 'Operations Management',
+      icon: HiOutlineTicket,
+      children: opsFullChildren,
+    },
+    {
+      label: 'Survey Management',
+      icon: HiOutlineAnnotation,
+      children: surveyAdminChildren,
+    },
+    {
+      label: 'Miscellaneous',
+      icon: HiOutlineViewGridAdd,
+      children: [
+        { to: '/pm/my-tasks', label: 'My Tasks', icon: HiOutlineCheckCircle },
+      ],
+    },
+    {
+      label: 'Settings',
+      icon: HiOutlineCog,
+      children: [
+        { to: '/pm/settings',        label: 'PM Settings',         icon: HiOutlineCog },
+        { to: '/helpdesk/settings',  label: 'Operations Settings', icon: HiOutlineCog },
+      ],
+    },
+  ],
+
+  // ── Sales Director — no PM module access ──────────────────────────────────
+  sales_director: [],
+};
+
+// ── Helpdesk Nav Items (KPI module only — unchanged) ─────────────────────────
 const hdBaseItems = [
   { section: 'Helpdesk' },
   { to: '/helpdesk/dashboard',     label: 'Dashboard',     icon: HiOutlineHome },
@@ -276,8 +421,8 @@ const hdBaseItems = [
 
 const hdWithGroups = [
   ...hdBaseItems,
-  { to: '/helpdesk/reports', label: 'Reports',  icon: HiOutlineChartBar },
-  { to: '/helpdesk/groups',  label: 'Groups',   icon: HiOutlineUserGroup },
+  { to: '/helpdesk/reports', label: 'Reports', icon: HiOutlineChartBar },
+  { to: '/helpdesk/groups',  label: 'Groups',  icon: HiOutlineUserGroup },
 ];
 
 const hdWithSettings = [
@@ -285,7 +430,7 @@ const hdWithSettings = [
   { to: '/helpdesk/settings', label: 'Settings', icon: HiOutlineCog },
 ];
 
-// Inject Helpdesk section into KPI nav items
+// Inject Helpdesk section into KPI nav items (KPI module sidebar unchanged)
 kpiNavItems.employee      = [...kpiNavItems.employee,       ...hdBaseItems];
 kpiNavItems.manager       = [...kpiNavItems.manager,        ...hdWithGroups];
 kpiNavItems.senior_manager = [...kpiNavItems.senior_manager, ...hdWithGroups];
@@ -295,17 +440,6 @@ kpiNavItems.admin         = [...kpiNavItems.admin,          ...hdWithSettings];
 kpiNavItems.sales_director = [...kpiNavItems.sales_director, ...hdBaseItems];
 kpiNavItems.md            = [...kpiNavItems.md,             ...hdBaseItems];
 kpiNavItems.director      = [...kpiNavItems.director,       ...hdBaseItems];
-
-// Inject Helpdesk section into PM nav items
-pmNavItems.employee       = [...pmNavItems.employee,        ...hdBaseItems];
-pmNavItems.manager        = [...pmNavItems.manager,         ...hdWithGroups];
-pmNavItems.senior_manager = [...pmNavItems.senior_manager,  ...hdWithGroups];
-pmNavItems.hr_admin       = [...pmNavItems.hr_admin,        ...hdBaseItems];
-pmNavItems.final_approver = [...pmNavItems.final_approver,  ...hdBaseItems];
-pmNavItems.admin          = [...pmNavItems.admin,           ...hdWithSettings];
-pmNavItems.sales_director = [...pmNavItems.sales_director,  ...hdBaseItems];
-pmNavItems.md             = [...pmNavItems.md,              ...hdBaseItems];
-pmNavItems.director       = [...pmNavItems.director,        ...hdBaseItems];
 
 export default function Sidebar({ collapsed, onToggle, onNavClick }) {
   const { user } = useSelector((state) => state.auth);
