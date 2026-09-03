@@ -350,7 +350,7 @@ export default function ManagerTeamKpi() {
     setRevertMgrChecked({});
     try {
       const res = await getAssignmentsApi({ financialYear: fy, employee: empId });
-      const all = res.data.data?.assignments || [];
+      const all = res.data.data || [];
       const monthRows = qMonths
         .map((m) => {
           const a = all.find((x) => Number(x.month) === m);
