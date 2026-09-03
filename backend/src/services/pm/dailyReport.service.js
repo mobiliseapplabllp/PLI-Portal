@@ -39,16 +39,40 @@ function formatDate(d) {
 function buildMilestoneRows(milestones, today) {
   if (!milestones.length) return '<tr><td colspan="6" style="text-align:center;color:#9ca3af;padding:12px;">No milestones defined</td></tr>';
   return milestones.map(m => {
+
+    // ── Parent / phase header row ─────────────────────────────────────────
+    // parentMilestoneId is null → this is a top-level phase (e.g. "Development").
+    // Rendered as a full-width header so recipients see the phase grouping.
+    if (!m.parentMilestoneId) {
+      const phaseStatus = (m.status || '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+      const phaseColor  = MILESTONE_STATUS_COLORS[m.status] || '#6b7280';
+      return `
+      <tr style="background:#EFF6FF;">
+        <td colspan="4" style="padding:10px 12px;border-top:2px solid #BFDBFE;border-bottom:1px solid #BFDBFE;">
+          <span style="background:#1E40AF;color:#fff;font-size:9px;font-weight:700;padding:2px 8px;border-radius:4px;margin-right:8px;letter-spacing:0.6px;vertical-align:middle;">PHASE</span>
+          <strong style="font-size:13px;color:#1E40AF;">${m.name}</strong>
+          <span style="margin-left:10px;font-size:11px;color:#64748B;">${formatDate(m.plannedStartDate)} — ${formatDate(m.plannedEndDate)}</span>
+        </td>
+        <td style="padding:10px 12px;border-top:2px solid #BFDBFE;border-bottom:1px solid #BFDBFE;">
+          <span style="background:${phaseColor}20;color:${phaseColor};padding:2px 8px;border-radius:12px;font-size:12px;font-weight:600;">${phaseStatus}</span>
+        </td>
+        <td style="padding:10px 12px;border-top:2px solid #BFDBFE;border-bottom:1px solid #BFDBFE;font-size:13px;font-weight:700;color:#1E40AF;">${m.completionPercentage ?? 0}%</td>
+      </tr>`;
+    }
+
+    // ── Sub-milestone row ─────────────────────────────────────────────────
     const isDelayed = m.plannedEndDate && m.plannedEndDate < today && m.status !== 'completed';
     const rowBg = isDelayed ? '#fef2f2' : '';
     const color = MILESTONE_STATUS_COLORS[m.status] || '#6b7280';
     const label = (m.status || '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) || 'Unknown';
     return `
       <tr style="background:${rowBg};">
-        <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;">${m.name}</td>
+        <td style="padding:8px 12px 8px 28px;border-bottom:1px solid #e5e7eb;">
+          <span style="color:#9ca3af;margin-right:4px;">↳</span>${m.name}${isDelayed ? ' ⚠️' : ''}
+        </td>
         <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;">${m.accountableUser ? m.accountableUser.name : '—'}</td>
         <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;">${formatDate(m.plannedStartDate)}</td>
-        <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;${isDelayed ? 'color:#dc2626;font-weight:600;' : ''}">${formatDate(m.plannedEndDate)}${isDelayed ? ' ⚠️' : ''}</td>
+        <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;${isDelayed ? 'color:#dc2626;font-weight:600;' : ''}">${formatDate(m.plannedEndDate)}</td>
         <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;">
           <span style="background:${color}20;color:${color};padding:2px 8px;border-radius:12px;font-size:12px;font-weight:600;">${label}</span>
         </td>
@@ -62,13 +86,17 @@ function buildEmailHtml(project, milestones, log, today) {
   const statusColor = STATUS_COLORS[overallStatus] || '#6b7280';
   const statusLabel = STATUS_LABELS[overallStatus] || overallStatus;
 
-  const total = milestones.length;
-  const completed = milestones.filter(m => m.status === 'completed').length;
-  const inProgress = milestones.filter(m => m.status === 'in_progress').length;
-  const delayed = milestones.filter(m => m.status === 'delayed' || (m.plannedEndDate && m.plannedEndDate < today && m.status !== 'completed')).length;
+  // Stats use sub-milestones only so the phase parent row is not double-counted.
+  // Falls back to all milestones for legacy flat projects (no parentMilestoneId).
+  const _statMs = milestones.filter(m => m.parentMilestoneId);
+  const _ms     = _statMs.length ? _statMs : milestones;
+  const total        = _ms.length;
+  const completed    = _ms.filter(m => m.status === 'completed').length;
+  const inProgress   = _ms.filter(m => m.status === 'in_progress').length;
+  const delayed      = _ms.filter(m => m.status === 'delayed' || (m.plannedEndDate && m.plannedEndDate < today && m.status !== 'completed')).length;
   const completionPct = total > 0 ? Math.round((completed / total) * 100) : 0;
 
-  const upcoming = milestones.filter(m => {
+  const upcoming = _ms.filter(m => {
     if (!m.plannedEndDate || m.status === 'completed') return false;
     const diff = Math.round((new Date(m.plannedEndDate) - new Date(today)) / 86400000);
     return diff >= 0 && diff <= 7;
@@ -164,17 +192,35 @@ function buildEmailHtml(project, milestones, log, today) {
 async function sendDailyReportForProject(project, { skipCcEmails = false } = {}) {
   const today = new Date().toISOString().slice(0, 10);
 
-  const milestones = await Milestone.findAll({
-    where: { projectId: project.id },
+  // Fetch ALL milestones (phase parents + sub-milestones) for nested phase view.
+  // Display order: each parent immediately followed by its children.
+  // Stats (counts, progress %): sub-milestones only — computed inside buildEmailHtml.
+  //
+  // ── Legacy (sub-milestones only, flat view):
+  //   where: { projectId: project.id, parentMilestoneId: { [Op.ne]: null } }
+  const _allMs = await Milestone.findAll({
+    where:   { projectId: project.id },
     include: [{ model: User, as: 'accountableUser', attributes: ['id', 'name'] }],
-    order: [['order', 'ASC']],
+    order:   [['order', 'ASC']],
   });
+  // Build nested display order: parent immediately followed by its children
+  const _parentMs = _allMs.filter(m => !m.parentMilestoneId);
+  const _childMap  = {};
+  _allMs.filter(m => !!m.parentMilestoneId).forEach(m => {
+    (_childMap[m.parentMilestoneId] = _childMap[m.parentMilestoneId] || []).push(m);
+  });
+  const milestones = _parentMs.length
+    ? _parentMs.flatMap(p => [p, ...(_childMap[p.id] || [])])
+    : _allMs; // fallback: legacy flat structure
 
   // Use today's manual log if exists, otherwise auto-generate
+  // (auto-detection uses sub-milestones so parent aggregate doesn't skew result)
+  const _logBase = _allMs.filter(m => !!m.parentMilestoneId);
+  const _logMs   = _logBase.length ? _logBase : _allMs;
   let log = await DailyStatusLog.findOne({ where: { projectId: project.id, reportDate: today } });
   if (!log) {
-    const hasDelayed = milestones.some(m => m.status === 'delayed' || (m.plannedEndDate && m.plannedEndDate < today && m.status !== 'completed'));
-    const hasInProgress = milestones.some(m => m.status === 'in_progress');
+    const hasDelayed = _logMs.some(m => m.status === 'delayed' || (m.plannedEndDate && m.plannedEndDate < today && m.status !== 'completed'));
+    const hasInProgress = _logMs.some(m => m.status === 'in_progress');
     let overallStatus = 'on_track';
     if (hasDelayed) overallStatus = 'delayed';
     else if (!hasInProgress && milestones.length > 0) overallStatus = 'on_track';
@@ -314,18 +360,38 @@ function milestoneStatusColor(status) {
 function buildProjectBlock(project, milestones, log, today, index, total) {
   const overallStatus = log ? log.overallStatus : 'on_track';
   const statusBarColor = { on_track:'#059669', at_risk:'#D97706', delayed:'#DC2626', completed:'#2563EB', on_hold:'#94A3B8' }[overallStatus] || '#94A3B8';
-  const completedCount = milestones.filter(m => m.status === 'completed').length;
-  const delayedCount   = milestones.filter(m => m.status === 'delayed' || (m.plannedEndDate && m.plannedEndDate < today && m.status !== 'completed')).length;
-  const pct = milestones.length ? Math.round((milestones.filter(m => m.status === 'completed').length / milestones.length) * 100) : 0;
+
+  // Stats: sub-milestones only so phase parent rows are not double-counted
+  const _subMs        = milestones.filter(m => m.parentMilestoneId);
+  const _statsMs      = _subMs.length ? _subMs : milestones; // fallback for legacy flat
+  const completedCount = _statsMs.filter(m => m.status === 'completed').length;
+  const delayedCount   = _statsMs.filter(m => m.status === 'delayed' || (m.plannedEndDate && m.plannedEndDate < today && m.status !== 'completed')).length;
+  const pct = _statsMs.length ? Math.round((_statsMs.filter(m => m.status === 'completed').length / _statsMs.length) * 100) : 0;
   const pctColor = overallStatus === 'delayed' ? '#DC2626' : overallStatus === 'at_risk' ? '#D97706' : '#059669';
 
-  const milestoneRows = milestones.length ? milestones.map((m, i) => {
+  const milestoneRows = milestones.length ? milestones.map((m) => {
+    // ── Phase parent header row ───────────────────────────────────────────
+    if (!m.parentMilestoneId) {
+      const phaseStatus = (m.status || '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+      const phaseColor  = milestoneStatusColor(m.status);
+      return `<tr bgcolor="#EFF6FF" style="background-color:#EFF6FF;">
+        <td colspan="4" style="padding:10px 14px;border-top:2px solid #BFDBFE;border-bottom:1px solid #BFDBFE;">
+          <span style="background-color:#1E40AF;color:#fff;font-size:9px;font-weight:700;padding:2px 7px;border-radius:4px;margin-right:8px;letter-spacing:0.6px;">PHASE</span>
+          <strong style="font-size:13px;color:#1E40AF;">${m.name}</strong>
+          <span style="margin-left:10px;font-size:11px;color:#64748B;">${fmtDate(m.plannedStartDate)} — ${fmtDate(m.plannedEndDate)}</span>
+        </td>
+        <td style="padding:10px 14px;border-top:2px solid #BFDBFE;border-bottom:1px solid #BFDBFE;">${statusPill(m.status)}</td>
+        <td style="padding:10px 14px;border-top:2px solid #BFDBFE;border-bottom:1px solid #BFDBFE;">${progressBar(m.completionPercentage || 0, phaseColor)}</td>
+      </tr>`;
+    }
+    // ── Sub-milestone row ─────────────────────────────────────────────────
     const isOverdue = m.plannedEndDate && m.plannedEndDate < today && m.status !== 'completed';
-    const rowBg = i % 2 === 1 ? '#FAFCFF' : '#FFFFFF';
+    const rowBg = '#FFFFFF';
     const mColor = milestoneStatusColor(m.status);
-    return `<tr style="background:${rowBg};">
-      <td style="padding:9px 12px;border-bottom:1px solid #F1F5F9;font-size:12.5px;font-weight:600;color:${isOverdue ? '#DC2626' : '#0F172A'};">
-        ${m.name}${isOverdue ? `<span style="display:inline-flex;align-items:center;gap:2px;background:#FEF2F2;color:#DC2626;font-size:9px;font-weight:700;padding:1px 5px;border-radius:4px;margin-left:6px;">⚠ Overdue</span>` : ''}
+    return `<tr bgcolor="${rowBg}" style="background-color:${rowBg};">
+      <td style="padding:9px 12px 9px 28px;border-bottom:1px solid #F1F5F9;font-size:12.5px;color:${isOverdue ? '#DC2626' : '#0F172A'};">
+        <span style="color:#CBD5E1;margin-right:4px;">↳</span>
+        <span style="font-weight:600;">${m.name}</span>${isOverdue ? `<span style="display:inline-flex;align-items:center;gap:2px;background:#FEF2F2;color:#DC2626;font-size:9px;font-weight:700;padding:1px 5px;border-radius:4px;margin-left:6px;">⚠ Overdue</span>` : ''}
       </td>
       <td style="padding:9px 12px;border-bottom:1px solid #F1F5F9;font-size:12px;color:#475569;">${m.accountableUser ? m.accountableUser.name : '—'}</td>
       <td style="padding:9px 12px;border-bottom:1px solid #F1F5F9;font-size:12px;color:#64748B;">${fmtDate(m.plannedStartDate)}</td>
@@ -453,28 +519,51 @@ async function buildConsolidatedEmailHtml(projects, recipientLabel) {
   const reportDate = new Date().toLocaleDateString('en-IN', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' });
   const reportTime = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' });
 
-  // Fetch milestones and logs for all projects
+  // Fetch ALL milestones (parents + sub-milestones) for nested phase view.
+  // Portfolio stats and upcoming use sub-milestones only (phase rows excluded from counts).
+  // ── Legacy (sub-milestones only): where: { projectId: project.id, parentMilestoneId: { [Op.ne]: null } }
   const projectData = await Promise.all(projects.map(async project => {
-    const milestones = await Milestone.findAll({
-      where: { projectId: project.id },
+    const _allMs = await Milestone.findAll({
+      where:   { projectId: project.id },
       include: [{ model: User, as: 'accountableUser', attributes: ['id', 'name'] }],
-      order: [['order', 'ASC']],
+      order:   [['order', 'ASC']],
     });
+    // Build nested display order: parent immediately followed by its children
+    const _pMs  = _allMs.filter(m => !m.parentMilestoneId);
+    const _cMap = {};
+    _allMs.filter(m => !!m.parentMilestoneId).forEach(m => {
+      (_cMap[m.parentMilestoneId] = _cMap[m.parentMilestoneId] || []).push(m);
+    });
+    const milestones = _pMs.length
+      ? _pMs.flatMap(p => [p, ...(_cMap[p.id] || [])])
+      : _allMs;
+    // Sub-milestones for stats/auto-log detection
+    const subMs   = _allMs.filter(m => !!m.parentMilestoneId);
+    const _logMs  = subMs.length ? subMs : _allMs;
     let log = await DailyStatusLog.findOne({ where: { projectId: project.id, reportDate: today } });
     if (!log) {
-      const hasDelayed = milestones.some(m => m.status === 'delayed' || (m.plannedEndDate && m.plannedEndDate < today && m.status !== 'completed'));
+      const hasDelayed = _logMs.some(m => m.status === 'delayed' || (m.plannedEndDate && m.plannedEndDate < today && m.status !== 'completed'));
       const overallStatus = hasDelayed ? 'delayed' : 'on_track';
       log = { overallStatus, completedTasks: null, ongoingTasks: null, blockers: null, upcomingWork: null };
     }
-    return { project, milestones, log };
+    return { project, milestones, log, subMs };
   }));
 
-  // Portfolio summary stats
+  // Portfolio summary stats — sub-milestones only so phase parents are not counted
   const totalProjects   = projectData.length;
-  const totalMilestones = projectData.reduce((s, d) => s + d.milestones.length, 0);
-  const totalOverdue    = projectData.reduce((s, d) => s + d.milestones.filter(m => m.plannedEndDate && m.plannedEndDate < today && m.status !== 'completed').length, 0);
-  const avgProgress     = totalMilestones
-    ? Math.round(projectData.reduce((s, d) => s + d.milestones.reduce((ms, m) => ms + (m.completionPercentage || 0), 0), 0) / totalMilestones)
+  const totalMilestones = projectData.reduce((s, d) => {
+    const sm = d.subMs.length ? d.subMs : d.milestones;
+    return s + sm.length;
+  }, 0);
+  const totalOverdue = projectData.reduce((s, d) => {
+    const sm = d.subMs.length ? d.subMs : d.milestones;
+    return s + sm.filter(m => m.plannedEndDate && m.plannedEndDate < today && m.status !== 'completed').length;
+  }, 0);
+  const avgProgress  = totalMilestones
+    ? Math.round(projectData.reduce((s, d) => {
+        const sm = d.subMs.length ? d.subMs : d.milestones;
+        return s + sm.reduce((ms, m) => ms + (m.completionPercentage || 0), 0);
+      }, 0) / totalMilestones)
     : 0;
 
   const onTrack  = projectData.filter(d => d.log.overallStatus === 'on_track').length;
@@ -482,10 +571,11 @@ async function buildConsolidatedEmailHtml(projects, recipientLabel) {
   const delayed  = projectData.filter(d => d.log.overallStatus === 'delayed').length;
   const onHold   = projectData.filter(d => d.project.status === 'on_hold').length;
 
-  // Upcoming deadlines (next 7 days, all projects combined)
+  // Upcoming deadlines (next 7 days) — sub-milestones only (actual work items)
   const upcoming = [];
-  projectData.forEach(({ project, milestones }) => {
-    milestones.forEach(m => {
+  projectData.forEach(({ project, milestones, subMs }) => {
+    const upcomingSrc = subMs.length ? subMs : milestones;
+    upcomingSrc.forEach(m => {
       if (!m.plannedEndDate || m.status === 'completed') return;
       const diff = Math.round((new Date(m.plannedEndDate) - new Date(today)) / 86400000);
       if (diff >= 0 && diff <= 7) upcoming.push({ ...m.dataValues, projectName: project.name, diff });
@@ -522,11 +612,12 @@ async function buildConsolidatedEmailHtml(projects, recipientLabel) {
     </tr>`;
   }).join('') : `<tr><td colspan="3" style="padding:14px;text-align:center;color:#94A3B8;font-size:12px;">No upcoming deadlines in the next 7 days</td></tr>`;
 
-  // Portfolio table rows
-  const portfolioRows = projectData.map(({ project, milestones, log }, i) => {
-    const pct = milestones.length ? Math.round(milestones.filter(m => m.status === 'completed').length / milestones.length * 100) : 0;
-    const del = milestones.filter(m => m.plannedEndDate && m.plannedEndDate < today && m.status !== 'completed').length;
-    const done = milestones.filter(m => m.status === 'completed').length;
+  // Portfolio table rows — stats from sub-milestones only
+  const portfolioRows = projectData.map(({ project, milestones, log, subMs }, i) => {
+    const _sm  = subMs.length ? subMs : milestones;
+    const pct  = _sm.length ? Math.round(_sm.filter(m => m.status === 'completed').length / _sm.length * 100) : 0;
+    const del  = _sm.filter(m => m.plannedEndDate && m.plannedEndDate < today && m.status !== 'completed').length;
+    const done = _sm.filter(m => m.status === 'completed').length;
     const pctColor = log.overallStatus === 'delayed' ? '#DC2626' : log.overallStatus === 'at_risk' ? '#D97706' : '#059669';
     return `<tr bgcolor="${i % 2 === 1 ? '#FAFCFF' : '#FFFFFF'}" style="background-color:${i % 2 === 1 ? '#FAFCFF' : '#FFFFFF'};">
       <td style="padding:11px 14px;border-bottom:1px solid #F1F5F9;">
@@ -569,8 +660,8 @@ async function buildConsolidatedEmailHtml(projects, recipientLabel) {
     </tr>`;
   }).join('');
 
-  const projectBlocks = projectData.map(({ project, milestones, log }, i) =>
-    buildProjectBlock(project, milestones, log, today, i + 1, totalProjects)
+  const projectBlocks = projectData.map(({ project, milestones, log, subMs }, i) =>
+    buildProjectBlock(project, milestones, log, today, i + 1, totalProjects, subMs)
   ).join('<div style="height:2px;background:#E8EDF4;"></div>');
 
   // ── Email-safe stat cards (table-based, no flex) ──
