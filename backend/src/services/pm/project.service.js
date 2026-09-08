@@ -160,7 +160,7 @@ const getProject = async (id) =>
 const updateProject = async (id, data, user) => {
   const project = await Project.findByPk(id);
   if (!project) throw new NotFoundError('Project');
-  if (!canManageProject(user) && String(project.managerId) !== String(user._id)) {
+  if (!canManageProject(user) && String(project.managerId) !== String(user._id ?? user.id)) {
     throw new ForbiddenError('Only project manager or admin can update this project');
   }
   // Explicit allowlist keeps updates to known model fields
@@ -222,7 +222,7 @@ const getMembers = async (projectId, user) => {
 const addMember = async (projectId, data, user) => {
   const project = await Project.findByPk(projectId);
   if (!project) throw new NotFoundError('Project');
-  if (!canManageProject(user) && String(project.managerId) !== String(user._id)) {
+  if (!canManageProject(user) && String(project.managerId) !== String(user._id ?? user.id)) {
     throw new ForbiddenError('Only project manager or admin can add members');
   }
   const [member, created] = await ProjectMember.findOrCreate({
@@ -248,7 +248,7 @@ const addMember = async (projectId, data, user) => {
 const updateMember = async (projectId, memberId, data, user) => {
   const project = await Project.findByPk(projectId);
   if (!project) throw new NotFoundError('Project');
-  if (!canManageProject(user) && String(project.managerId) !== String(user._id))
+  if (!canManageProject(user) && String(project.managerId) !== String(user._id ?? user.id))
     throw new ForbiddenError('Only project manager or admin can update members');
   const member = await ProjectMember.findOne({ where: { id: memberId, projectId } });
   if (!member) throw new NotFoundError('Project Member');
@@ -260,7 +260,7 @@ const updateMember = async (projectId, memberId, data, user) => {
 const removeMember = async (projectId, memberId, user) => {
   const project = await Project.findByPk(projectId);
   if (!project) throw new NotFoundError('Project');
-  if (!canManageProject(user) && String(project.managerId) !== String(user._id))
+  if (!canManageProject(user) && String(project.managerId) !== String(user._id ?? user.id))
     throw new ForbiddenError('Only project manager or admin can remove members');
   const member = await ProjectMember.findOne({ where: { id: memberId, projectId } });
   if (!member) throw new NotFoundError('Project Member');
@@ -284,7 +284,7 @@ const getRecipients = async (projectId, user) => {
 const addRecipient = async (projectId, data, user) => {
   const project = await Project.findByPk(projectId, { attributes: ['id', 'managerId'] });
   if (!project) throw new NotFoundError('Project');
-  if (!canManageProject(user) && String(project.managerId) !== String(user._id))
+  if (!canManageProject(user) && String(project.managerId) !== String(user._id ?? user.id))
     throw new ForbiddenError('Only project manager can manage recipients');
   return ProjectNotificationRecipient.create({ projectId, ...data });
 };
@@ -292,7 +292,7 @@ const addRecipient = async (projectId, data, user) => {
 const removeRecipient = async (projectId, recipientId, user) => {
   const project = await Project.findByPk(projectId, { attributes: ['id', 'managerId'] });
   if (!project) throw new NotFoundError('Project');
-  if (!canManageProject(user) && String(project.managerId) !== String(user._id))
+  if (!canManageProject(user) && String(project.managerId) !== String(user._id ?? user.id))
     throw new ForbiddenError('Only project manager can manage recipients');
   const r = await ProjectNotificationRecipient.findOne({ where: { id: recipientId, projectId } });
   if (!r) throw new NotFoundError('Recipient');
