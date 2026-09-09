@@ -188,11 +188,18 @@ export default function CreateTicket() {
   const [showRequesterDropdown, setShowRequesterDropdown] = useState(false);
   const requesterRef = useRef(null);
 
-  // ── On mount: load groups + configurable options ────────────────────────────
+  // ── On mount: load groups + all active users + configurable options ──────────
   useEffect(() => {
     getGroupsApi()
       .then(res => setGroups(res.data?.data || res.data || []))
       .catch(() => toast.error('Failed to load groups'));
+    // Load ALL active users so the assignee dropdown is always populated
+    getUsersApi({ isActive: true, pageSize: 200 })
+      .then(res => {
+        const list = res.data?.data?.users || res.data?.data || res.data || [];
+        setGroupUsers(Array.isArray(list) ? list : []);
+      })
+      .catch(() => setGroupUsers([]));
     // Only fetch options if not already loaded (avoid redundant network calls)
     if (!hdOptions || Object.keys(hdOptions).length === 0) {
       dispatch(fetchHdOptions());
@@ -223,12 +230,10 @@ export default function CreateTicket() {
     return () => document.removeEventListener('click', handler);
   }, []);
 
-  // ── Reload agent list whenever Assignment Group changes ──────────────────────
+  // ── When Assignment Group changes, clear the selected assignee ──────────────
+  // (We no longer filter the agent list by group — all active users are always shown)
   useEffect(() => {
-    if (!formData.groupId) { setGroupUsers([]); return; }
-    getUsersApi({ groupId: formData.groupId, pageSize: 200 })
-      .then(res => setGroupUsers(res.data?.data?.users || res.data?.data || []))
-      .catch(() => setGroupUsers([]));
+    setFormData(prev => ({ ...prev, assigneeId: '' }));
   }, [formData.groupId]);
 
   // ── Select a requester from picker ──────────────────────────────────────────
@@ -840,20 +845,17 @@ export default function CreateTicket() {
                       name="assigneeId"
                       value={formData.assigneeId}
                       onChange={handleChange}
-                      disabled={!formData.groupId}
-                      className={`${sel()} ${!formData.groupId ? 'opacity-60 cursor-not-allowed' : ''}`}
+                      className={sel()}
                     >
-                      <option value="">
-                        {!formData.groupId ? '-- Select a group first --' : '-- Unassigned --'}
-                      </option>
+                      <option value="">-- Unassigned --</option>
                       {groupUsers.map(u => (
-                        <option key={u.id} value={u.id}>
+                        <option key={u._id || u.id} value={u._id || u.id}>
                           {u.name}{u.role ? ` (${u.role})` : ''}
                         </option>
                       ))}
                     </select>
-                    {formData.groupId && groupUsers.length === 0 && (
-                      <p className="text-xs text-gray-500 mt-0.5">No users in this group</p>
+                    {groupUsers.length === 0 && (
+                      <p className="text-xs text-gray-500 mt-0.5">Loading agents…</p>
                     )}
                   </div>
 

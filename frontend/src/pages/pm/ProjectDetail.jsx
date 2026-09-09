@@ -109,7 +109,7 @@ export default function ProjectDetail() {
   const [addingMember,  setAddingMember]  = useState(false);
   const [memberForm,    setMemberForm]    = useState({ userId: '', role: '', allocationPct: null, allocationFrom: null, allocationTo: null });
   const [editingMemberId, setEditingMemberId] = useState(null);
-  const [editMemberForm,  setEditMemberForm]  = useState({ allocationPct: null, allocationFrom: null, allocationTo: null });
+  const [editMemberForm,  setEditMemberForm]  = useState({ role: '', allocationPct: null, allocationFrom: null, allocationTo: null });
   const [statusUpdating,setStatusUpdating]= useState(false);
   const [showAllocationPreview, setShowAllocationPreview] = useState(false);
   const [allocationPreview,     setAllocationPreview]     = useState([]);
@@ -293,6 +293,7 @@ export default function ProjectDetail() {
   const openEditMember = (m) => {
     setEditingMemberId(m._id || m.id);
     setEditMemberForm({
+      role:           m.role           || '',
       allocationPct:  m.allocationPct  ?? null,
       allocationFrom: m.allocationFrom ? m.allocationFrom.slice(0, 10) : null,
       allocationTo:   m.allocationTo   ? m.allocationTo.slice(0, 10)   : null,
@@ -302,6 +303,8 @@ export default function ProjectDetail() {
   const handleUpdateMember = async (memberId) => {
     try {
       await updateMemberApi(id, memberId, {
+        // Include role so it can be changed after a member is added
+        ...(editMemberForm.role ? { role: editMemberForm.role } : {}),
         // Explicit null/undefined check — 0 is a valid allocationPct and must not be coerced to null
         allocationPct:  (editMemberForm.allocationPct != null && editMemberForm.allocationPct !== '')
           ? Number(editMemberForm.allocationPct)
@@ -309,7 +312,7 @@ export default function ProjectDetail() {
         allocationFrom: editMemberForm.allocationFrom || null,
         allocationTo:   editMemberForm.allocationTo   || null,
       });
-      toast.success('Allocation updated');
+      toast.success('Member updated');
       setEditingMemberId(null);
       dispatch(fetchProjectById(id));
     } catch (err) { toast.error(err.response?.data?.message || 'Failed to update allocation'); }
@@ -935,8 +938,19 @@ export default function ProjectDetail() {
                     {/* Inline allocation edit form */}
                     {isEditing && (
                       <div className="mt-3 bg-blue-50 border border-blue-100 rounded-lg p-3">
-                        <p className="text-xs font-semibold text-blue-700 mb-2">Set Allocation for {m.user?.name}</p>
+                        <p className="text-xs font-semibold text-blue-700 mb-2">Edit {m.user?.name}</p>
                         <div className="grid grid-cols-1 gap-2">
+                          <div>
+                            <label className="text-xs text-gray-600 block mb-1">Role</label>
+                            <select
+                              value={editMemberForm.role || ''}
+                              onChange={e => setEditMemberForm(f => ({ ...f, role: e.target.value }))}
+                              className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"
+                            >
+                              <option value="">Select role…</option>
+                              {MEMBER_ROLES.map(r => <option key={r} value={r}>{r}</option>)}
+                            </select>
+                          </div>
                           <div>
                             <label className="text-xs text-gray-600 block mb-1">Allocation %</label>
                             <input
@@ -1072,8 +1086,19 @@ export default function ProjectDetail() {
                     {/* Inline allocation edit form */}
                     {isEditing && (
                       <div className="mt-3 ml-13 pl-13 bg-blue-50 border border-blue-100 rounded-lg p-3">
-                        <p className="text-xs font-semibold text-blue-700 mb-2">Set Allocation for {m.user?.name}</p>
-                        <div className="grid grid-cols-3 gap-2">
+                        <p className="text-xs font-semibold text-blue-700 mb-2">Edit {m.user?.name}</p>
+                        <div className="grid grid-cols-4 gap-2">
+                          <div>
+                            <label className="text-xs text-gray-600 block mb-1">Role</label>
+                            <select
+                              value={editMemberForm.role || ''}
+                              onChange={e => setEditMemberForm(f => ({ ...f, role: e.target.value }))}
+                              className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"
+                            >
+                              <option value="">Select role…</option>
+                              {MEMBER_ROLES.map(r => <option key={r} value={r}>{r}</option>)}
+                            </select>
+                          </div>
                           <div>
                             <label className="text-xs text-gray-600 block mb-1">Allocation %</label>
                             <input
