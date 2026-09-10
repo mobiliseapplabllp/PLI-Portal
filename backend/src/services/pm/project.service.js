@@ -126,7 +126,12 @@ const createProject = async (data, user) => {
     try {
       await createDefaultMilestones(project.id, project.projectType);
     } catch (err) {
-      console.warn('[createProject] Warning: could not create default milestones:', err.message);
+      // Log the full stack — a silent warning here previously hid a crash that
+      // left every new project with zero milestones.
+      console.error(
+        `[createProject] FAILED to create default milestones for project ${project.id} ` +
+        `(type "${project.projectType}"):`, err
+      );
     }
   }
 

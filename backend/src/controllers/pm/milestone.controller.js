@@ -1,6 +1,7 @@
 const milestoneService  = require('../../services/pm/milestone.service');
 const { sendSuccess }   = require('../../utils/response');
-const { sequelize }     = require('../../config/database');
+// config/database exports the Sequelize instance directly — do NOT destructure
+const sequelize         = require('../../config/database');
 const Project           = require('../../models/pm/Project');
 const Milestone         = require('../../models/pm/Milestone');
 const User              = require('../../models/User');

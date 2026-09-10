@@ -6,7 +6,8 @@ const Project                = require('../../models/pm/Project');
 const ProjectMember          = require('../../models/pm/ProjectMember');
 const User                   = require('../../models/User');
 const { randomUUID }         = require('crypto');
-const { sequelize }          = require('../../config/database');
+// config/database exports the Sequelize instance directly — do NOT destructure
+const sequelize              = require('../../config/database');
 const { NotFoundError, ForbiddenError, ValidationError } = require('../../utils/errors');
 
 async function logDateChange(milestoneId, changedById, field, oldValue, newValue, reason) {
