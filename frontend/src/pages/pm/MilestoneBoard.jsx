@@ -178,9 +178,17 @@ export default function MilestoneBoard() {
   // Only admin can create / delete / import TOP-LEVEL milestones.
   // Managers can add / edit / delete milestones (not just admin)
   const isAdmin        = user?.role === 'admin';
-  const canAddTopLevel = isAdmin;     // only admin can add/delete top-level milestone slots
   const defaultMilestones = milestones.filter(isDefault);
   const flatMilestones = milestones.filter(m => !isDefault(m));
+
+  // Editing / deleting existing top-level rows stays admin-only.
+  const canAddTopLevel = isAdmin;
+
+  // Creating NEW top-level milestones is only allowed while the plan is empty.
+  // Once the project-type template has produced its default phases, the phase
+  // structure is fixed — PMs extend the plan by adding sub-milestones under an
+  // existing phase, not by adding more phases.
+  const canCreateTopLevel = isAdmin && defaultMilestones.length === 0;
   const totalWeight = defaultMilestones.reduce(
     (sum, m) => sum + (m.weightPercentage != null ? Number(m.weightPercentage) : 0), 0,
   );
@@ -690,7 +698,16 @@ export default function MilestoneBoard() {
             <HiOutlineDownload className="w-4 h-4" />
             {exporting ? 'Exporting...' : 'Export'}
           </button>
-          {canAddTopLevel && (
+          {isAdmin && (
+            <button
+              onClick={() => navigate(`/pm/projects/${id}/gantt`)}
+              className="px-3 py-2 border border-gray-200 text-gray-600 rounded-lg text-sm hover:bg-gray-50 transition-colors"
+            >
+              Gantt View
+            </button>
+          )}
+          {/* Hidden once default phases exist — only sub-milestones may be added then */}
+          {canCreateTopLevel && (
             <>
               <button
                 type="button"
@@ -700,12 +717,6 @@ export default function MilestoneBoard() {
               >
                 <HiOutlineUpload className="w-4 h-4" />
                 Import
-              </button>
-              <button
-                onClick={() => navigate(`/pm/projects/${id}/gantt`)}
-                className="px-3 py-2 border border-gray-200 text-gray-600 rounded-lg text-sm hover:bg-gray-50 transition-colors"
-              >
-                Gantt View
               </button>
               <button
                 onClick={openCreate}
@@ -1690,7 +1701,7 @@ export default function MilestoneBoard() {
             <div className="bg-white rounded-xl border border-gray-200 p-12 text-center">
               <HiOutlineFlag className="w-12 h-12 text-gray-300 mx-auto mb-3" />
               <p className="text-gray-500 font-medium">No milestones yet</p>
-              {canAddTopLevel && (
+              {canCreateTopLevel && (
                 <button onClick={openCreate} className="mt-3 text-sm text-emerald-600 hover:underline">
                   Add the first milestone
                 </button>
