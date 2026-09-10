@@ -17,6 +17,7 @@ import {
   HiOutlinePlay,
   HiOutlineSave,
   HiOutlineOfficeBuilding,
+  HiOutlineUserGroup,
 } from 'react-icons/hi';
 import {
   DndContext,
@@ -40,6 +41,7 @@ import {
   getPmStatusesApi, createPmStatusApi, updatePmStatusApi, deletePmStatusApi,
   getMilestoneTemplatesApi, createMilestoneTemplateApi, updateMilestoneTemplateApi,
   deleteMilestoneTemplateApi, validateTemplateRangesApi,
+  getMemberRolesApi, createMemberRoleApi, updateMemberRoleApi, deleteMemberRoleApi,
 } from '../../api/pm/config.api';
 import {
   getClientOrgsApi, createClientOrgApi, updateClientOrgApi, deleteClientOrgApi,
@@ -56,6 +58,7 @@ const TABS = [
   { label: 'Scheduler',            icon: HiOutlineClock },
   { label: 'Client Orgs',          icon: HiOutlineOfficeBuilding },
   { label: 'Email Alerts',         icon: HiOutlineMail },
+  { label: 'Member Roles',         icon: HiOutlineUserGroup },
 ];
 
 // ─── Reusable Toggle Switch ───────────────────────────────────────────────────
@@ -1892,6 +1895,227 @@ function EmailAlertsTab() {
   );
 }
 
+// ─── Tab 7: Member Roles ──────────────────────────────────────────────────────
+function MemberRolesTab() {
+  const [roles,    setRoles]    = useState([]);
+  const [loading,  setLoading]  = useState(true);
+  const [newName,  setNewName]  = useState('');
+  const [adding,   setAdding]   = useState(false);
+  const [editId,   setEditId]   = useState(null);
+  const [editData, setEditData] = useState({ name: '', sortOrder: 0, isActive: true });
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const r = await getMemberRolesApi();
+      setRoles(r.data.data ?? r.data ?? []);
+    } catch {
+      toast.error('Failed to load member roles');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const handleAdd = async () => {
+    if (!newName.trim()) return toast.error('Role name is required');
+    setAdding(true);
+    try {
+      await createMemberRoleApi({ name: newName.trim() });
+      toast.success('Member role added');
+      setNewName('');
+      await load();
+    } catch (e) {
+      toast.error(e?.response?.data?.message || 'Failed to add role');
+    } finally {
+      setAdding(false);
+    }
+  };
+
+  const startEdit = (item) => {
+    setEditId(getId(item));
+    setEditData({ name: item.name, sortOrder: item.sortOrder ?? 0, isActive: item.isActive ?? true });
+  };
+
+  const handleUpdate = async (id) => {
+    try {
+      await updateMemberRoleApi(id, editData);
+      toast.success('Member role updated');
+      setEditId(null);
+      await load();
+    } catch (e) {
+      toast.error(e?.response?.data?.message || 'Failed to update');
+    }
+  };
+
+  const handleDelete = async (id) => {
+    if (!window.confirm('Delete this role?')) return;
+    try {
+      await deleteMemberRoleApi(id);
+      toast.success('Member role deleted');
+      await load();
+    } catch (e) {
+      toast.error(e?.response?.data?.message || 'Cannot delete — may be in use');
+    }
+  };
+
+  const handleToggleActive = async (item) => {
+    try {
+      await updateMemberRoleApi(getId(item), { isActive: !item.isActive });
+      await load();
+    } catch (e) {
+      toast.error(e?.response?.data?.message || 'Failed to toggle');
+    }
+  };
+
+  if (loading) {
+    return <div className="text-center py-12 text-gray-400 text-sm">Loading member roles…</div>;
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Info banner */}
+      <div className="bg-blue-50 border border-blue-100 rounded-xl px-4 py-3 text-sm text-blue-700">
+        These roles appear in the <strong>Team Setup</strong> tab when adding or editing project members.
+        Add roles like <em>Developer</em>, <em>Designer</em>, <em>DevOps</em>, etc.
+      </div>
+
+      {/* Add form */}
+      <div className="bg-white rounded-xl border border-gray-200 p-4">
+        <p className="text-sm font-semibold text-gray-700 mb-3">Add Member Role</p>
+        <div className="flex items-center gap-3">
+          <input
+            type="text"
+            value={newName}
+            onChange={e => setNewName(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && handleAdd()}
+            placeholder="e.g. Developer, Designer, DevOps, QA…"
+            className={inputCls + ' flex-1'}
+          />
+          <button
+            onClick={handleAdd}
+            disabled={adding || !newName.trim()}
+            className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 text-white text-sm font-medium rounded-lg hover:bg-emerald-700 disabled:opacity-50 transition-colors whitespace-nowrap"
+          >
+            <HiOutlinePlus className="w-4 h-4" />
+            {adding ? 'Adding…' : 'Add'}
+          </button>
+        </div>
+      </div>
+
+      {/* Roles table */}
+      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+        {roles.length === 0 ? (
+          <p className="text-center text-gray-400 py-10 text-sm">No roles yet. Add one above.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 border-b border-gray-100">
+                <tr>
+                  <th className={thCls + ' text-left'}>Role Name</th>
+                  <th className={thCls + ' text-center w-28'}>Sort Order</th>
+                  <th className={thCls + ' text-center w-24'}>Active</th>
+                  <th className={thCls + ' text-right w-28'}>Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {roles.map(item => {
+                  const id = getId(item);
+                  const isEditing = editId === id;
+                  return (
+                    <tr key={id} className="hover:bg-gray-50/70 transition-colors">
+                      {isEditing ? (
+                        <>
+                          <td className="px-4 py-2">
+                            <input
+                              type="text"
+                              value={editData.name}
+                              onChange={e => setEditData(p => ({ ...p, name: e.target.value }))}
+                              className={editInputCls}
+                              autoFocus
+                            />
+                          </td>
+                          <td className="px-4 py-2 text-center">
+                            <input
+                              type="number"
+                              value={editData.sortOrder}
+                              onChange={e => setEditData(p => ({ ...p, sortOrder: +e.target.value }))}
+                              className={editInputCls + ' w-16 text-center mx-auto'}
+                            />
+                          </td>
+                          <td className="px-4 py-2 text-center">
+                            <Toggle
+                              checked={!!editData.isActive}
+                              onChange={() => setEditData(p => ({ ...p, isActive: !p.isActive }))}
+                            />
+                          </td>
+                          <td className="px-4 py-2">
+                            <div className="flex justify-end gap-1">
+                              <button
+                                onClick={() => handleUpdate(id)}
+                                className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
+                                title="Save"
+                              >
+                                <HiOutlineCheck className="w-4 h-4" />
+                              </button>
+                              <button
+                                onClick={() => setEditId(null)}
+                                className="p-1.5 text-gray-400 hover:bg-gray-100 rounded-lg transition-colors"
+                                title="Cancel"
+                              >
+                                <HiOutlineX className="w-4 h-4" />
+                              </button>
+                            </div>
+                          </td>
+                        </>
+                      ) : (
+                        <>
+                          <td className="px-4 py-3 font-medium text-gray-800">
+                            {item.name}
+                            {!item.isActive && (
+                              <span className="ml-2 text-xs text-gray-400 font-normal">(inactive)</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3 text-center text-gray-500">{item.sortOrder ?? '—'}</td>
+                          <td className="px-4 py-3 text-center">
+                            <Toggle
+                              checked={!!item.isActive}
+                              onChange={() => handleToggleActive(item)}
+                            />
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="flex justify-end gap-1">
+                              <button
+                                onClick={() => startEdit(item)}
+                                className="p-1.5 text-blue-500 hover:bg-blue-50 rounded-lg transition-colors"
+                                title="Edit"
+                              >
+                                <HiOutlinePencil className="w-4 h-4" />
+                              </button>
+                              <button
+                                onClick={() => handleDelete(id)}
+                                className="p-1.5 text-red-400 hover:bg-red-50 rounded-lg transition-colors"
+                                title="Delete"
+                              >
+                                <HiOutlineTrash className="w-4 h-4" />
+                              </button>
+                            </div>
+                          </td>
+                        </>
+                      )}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
 export default function PMSettings() {
   const navigate   = useNavigate();
@@ -1949,6 +2173,7 @@ export default function PMSettings() {
         {activeTab === 3 && <SchedulerTab />}
         {activeTab === 4 && <ClientOrgsTab />}
         {activeTab === 5 && <EmailAlertsTab />}
+        {activeTab === 6 && <MemberRolesTab />}
       </div>
     </div>
   );

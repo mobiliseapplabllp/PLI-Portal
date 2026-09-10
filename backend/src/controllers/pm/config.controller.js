@@ -278,10 +278,58 @@ const deletePmClientOrg = async (req, res, next) => {
   } catch (e) { next(e); }
 };
 
+// ── PM Member Roles ───────────────────────────────────────────────────────────
+
+const PmMemberRole = require('../../models/pm/PmMemberRole');
+
+const getMemberRoles = async (req, res, next) => {
+  try {
+    const roles = await PmMemberRole.findAll({
+      order: [['sortOrder', 'ASC'], ['name', 'ASC']],
+    });
+    sendSuccess(res, roles);
+  } catch (e) { next(e); }
+};
+
+const createMemberRole = async (req, res, next) => {
+  try {
+    const { name, sortOrder } = req.body;
+    if (!name?.trim()) return res.status(400).json({ message: 'name is required' });
+    const existing = await PmMemberRole.findOne({ where: { name: name.trim() } });
+    if (existing) return res.status(409).json({ message: `Role "${name.trim()}" already exists` });
+    const maxOrder = await PmMemberRole.max('sortOrder') || 0;
+    const role = await PmMemberRole.create({ name: name.trim(), sortOrder: sortOrder ?? maxOrder + 1 });
+    sendSuccess(res, role, 'Member role created', 201);
+  } catch (e) { next(e); }
+};
+
+const updateMemberRole = async (req, res, next) => {
+  try {
+    const role = await PmMemberRole.findByPk(req.params.id);
+    if (!role) return res.status(404).json({ message: 'Member role not found' });
+    const { name, isActive, sortOrder } = req.body;
+    if (name      !== undefined) role.name      = name;
+    if (isActive  !== undefined) role.isActive  = isActive;
+    if (sortOrder !== undefined) role.sortOrder = sortOrder;
+    await role.save();
+    sendSuccess(res, role, 'Member role updated');
+  } catch (e) { next(e); }
+};
+
+const deleteMemberRole = async (req, res, next) => {
+  try {
+    const role = await PmMemberRole.findByPk(req.params.id);
+    if (!role) return res.status(404).json({ message: 'Member role not found' });
+    await role.destroy();
+    sendSuccess(res, null, 'Member role deleted');
+  } catch (e) { next(e); }
+};
+
 module.exports = {
   getProjectTypes, createProjectType, updateProjectType, deleteProjectType,
   getStatuses, getAllStatuses, createStatus, updateStatus, deleteStatus,
   getMilestoneTemplates, createMilestoneTemplate, updateMilestoneTemplate, deleteMilestoneTemplate,
   validateTemplateRanges, reorderMilestoneTemplates,
   getPmClientOrgs, createPmClientOrg, deletePmClientOrg,
+  getMemberRoles, createMemberRole, updateMemberRole, deleteMemberRole,
 };

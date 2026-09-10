@@ -4,33 +4,14 @@ import { useSelector } from 'react-redux';
 import toast from 'react-hot-toast';
 import { createProjectApi, addMemberApi } from '../../api/pm/projects.api';
 import { getUsersApi } from '../../api/users.api';
-import { getProjectTypesApi, getPmStatusesApi } from '../../api/pm/config.api';
+import { getProjectTypesApi, getPmStatusesApi, getMemberRolesApi } from '../../api/pm/config.api';
 import api from '../../api/axios';
 import { HiOutlineArrowLeft, HiOutlinePlus, HiOutlineX, HiOutlineUserGroup, HiOutlineUserAdd } from 'react-icons/hi';
 import ResourceAvailabilityCard from '../../components/pm/ResourceAvailabilityCard';
 
-// ── Role list — shared with ProjectDetail team setup ─────────────────────────
-export const MEMBER_ROLES = [
-  'Project/Product Manager',
-  'Project/Product Owner',
-  'Account Manager or Sales Executive',
-  'Tester',
-  'Designer',
-  'Infra',
-  'Security',
-  'Finance',
-];
-
-const ROLE_BADGE = {
-  'Project/Product Manager':            'bg-blue-50 text-blue-700 border-blue-200',
-  'Project/Product Owner':              'bg-blue-50 text-blue-700 border-blue-200',
-  'Account Manager or Sales Executive': 'bg-amber-50 text-amber-700 border-amber-200',
-  'Tester':                             'bg-violet-50 text-violet-700 border-violet-200',
-  'Designer':                           'bg-pink-50 text-pink-700 border-pink-200',
-  'Infra':                              'bg-cyan-50 text-cyan-700 border-cyan-200',
-  'Security':                           'bg-red-50 text-red-700 border-red-200',
-  'Finance':                            'bg-emerald-50 text-emerald-700 border-emerald-200',
-};
+// ── Role badge colour — default for unlisted roles ────────────────────────────
+const DEFAULT_BADGE = 'bg-gray-50 text-gray-600 border-gray-200';
+const roleBadgeCls = () => DEFAULT_BADGE; // dynamic roles → single neutral badge
 
 const AV_CLR = [
   'bg-blue-100 text-blue-700',    'bg-violet-100 text-violet-700',
@@ -76,6 +57,7 @@ export default function CreateProject() {
   const [projectTypes, setProjectTypes] = useState([]);
   const [statuses,     setStatuses]     = useState([]);
   const [clientOrgs,   setClientOrgs]   = useState([]);
+  const [memberRoles,  setMemberRoles]  = useState([]);
   const [saving,       setSaving]       = useState(false);
   const [loading,      setLoading]      = useState(true);
 
@@ -112,11 +94,13 @@ export default function CreateProject() {
       getUsersApi({ isActive: true, limit: 200 }),
       getProjectTypesApi(),
       getPmStatusesApi(),
-    ]).then(([usersRes, typesRes, statusesRes]) => {
+      getMemberRolesApi(),
+    ]).then(([usersRes, typesRes, statusesRes, rolesRes]) => {
       setUsers(usersRes.data?.data?.users || usersRes.data?.data || []);
       const typeList = typesRes.data?.data || [];
       setProjectTypes(typeList);
       setStatuses(statusesRes.data?.data || []);
+      setMemberRoles((rolesRes.data?.data || []).filter(r => r.isActive));
       if (typeList.length > 0) setForm(f => ({ ...f, projectType: typeList[0].name }));
     }).catch(() => toast.error('Failed to load configuration'))
       .finally(() => setLoading(false));
@@ -373,7 +357,7 @@ export default function CreateProject() {
                     </span>
                     <span className="text-gray-800">{m.userName}</span>
                     <span className="text-gray-300">·</span>
-                    <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded border ${ROLE_BADGE[m.role] || 'bg-gray-50 text-gray-500 border-gray-200'}`}>
+                    <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded border ${roleBadgeCls()}`}>
                       {m.role.split('/')[0].split(' or ')[0].trim()}
                     </span>
                     {m.allocationPct && (
@@ -515,8 +499,8 @@ export default function CreateProject() {
                   className={inp}
                 >
                   <option value="">Select role…</option>
-                  {MEMBER_ROLES.map(r => (
-                    <option key={r} value={r}>{r}</option>
+                  {memberRoles.map(r => (
+                    <option key={r.name} value={r.name}>{r.name}</option>
                   ))}
                 </select>
               </div>

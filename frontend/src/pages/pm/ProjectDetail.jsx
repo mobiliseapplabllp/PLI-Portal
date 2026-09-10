@@ -13,14 +13,14 @@ import {
   HiOutlineClipboard,
 } from 'react-icons/hi';
 import { updateProjectApi, addMemberApi, updateMemberApi, removeMemberApi } from '../../api/pm/projects.api';
-import { MEMBER_ROLES } from './CreateProject';
+// Member roles are now fetched from /pm/config/member-roles (admin-configurable)
 import {
   getProjectDocumentsApi, uploadProjectDocumentApi,
   deleteProjectDocumentApi, downloadProjectDocumentUrl,
 } from '../../api/pm/documents.api';
 import { getTodayLogApi } from '../../api/pm/dailyLogs.api';
 import { getUsersApi } from '../../api/users.api';
-import { getPmStatusesApi } from '../../api/pm/config.api';
+import { getPmStatusesApi, getMemberRolesApi } from '../../api/pm/config.api';
 import api from '../../api/axios';
 import ResourceAvailabilityCard from '../../components/pm/ResourceAvailabilityCard';
 import AllocationApprovalPanel from '../../components/pm/AllocationApprovalPanel';
@@ -106,6 +106,7 @@ export default function ProjectDetail() {
   const [activeTab,     setActiveTab]     = useState('overview');
   const [allUsers,      setAllUsers]      = useState([]);
   const [pmStatuses,    setPmStatuses]    = useState([]);
+  const [memberRoles,   setMemberRoles]   = useState([]);
   const [addingMember,  setAddingMember]  = useState(false);
   const [memberForm,    setMemberForm]    = useState({ userId: '', role: '', allocationPct: null, allocationFrom: null, allocationTo: null });
   const [editingMemberId, setEditingMemberId] = useState(null);
@@ -182,6 +183,9 @@ export default function ProjectDetail() {
       .catch(() => {});
     getPmStatusesApi()
       .then(res => setPmStatuses(res.data?.data || []))
+      .catch(() => {});
+    getMemberRolesApi()
+      .then(res => setMemberRoles((res.data?.data || []).filter(r => r.isActive)))
       .catch(() => {});
   }, []);
 
@@ -725,8 +729,8 @@ export default function ProjectDetail() {
                     className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white"
                   >
                     <option value="">Select role…</option>
-                    {MEMBER_ROLES.map(r => (
-                      <option key={r} value={r}>{r}</option>
+                    {memberRoles.map(r => (
+                      <option key={r.name} value={r.name}>{r.name}</option>
                     ))}
                   </select>
                 </div>
@@ -948,7 +952,7 @@ export default function ProjectDetail() {
                               className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"
                             >
                               <option value="">Select role…</option>
-                              {MEMBER_ROLES.map(r => <option key={r} value={r}>{r}</option>)}
+                              {memberRoles.map(r => <option key={r.name} value={r.name}>{r.name}</option>)}
                             </select>
                           </div>
                           <div>
@@ -1096,7 +1100,7 @@ export default function ProjectDetail() {
                               className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"
                             >
                               <option value="">Select role…</option>
-                              {MEMBER_ROLES.map(r => <option key={r} value={r}>{r}</option>)}
+                              {memberRoles.map(r => <option key={r.name} value={r.name}>{r.name}</option>)}
                             </select>
                           </div>
                           <div>

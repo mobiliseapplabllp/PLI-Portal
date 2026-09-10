@@ -31,4 +31,10 @@ router.get   ('/client-orgs',     authorize(...MANAGERS), ctrl.getPmClientOrgs);
 router.post  ('/client-orgs',     authorize(...MANAGERS), ctrl.createPmClientOrg);
 router.delete('/client-orgs/:id', authorize(...MANAGERS), ctrl.deletePmClientOrg);
 
+// ── PM Member Roles ───────────────────────────────────────────────────────────
+router.get   ('/member-roles',     authorize(...ALL),      ctrl.getMemberRoles);
+router.post  ('/member-roles',     authorize(...MANAGERS), ctrl.createMemberRole);
+router.put   ('/member-roles/:id', authorize(...MANAGERS), ctrl.updateMemberRole);
+router.delete('/member-roles/:id', authorize(...MANAGERS), ctrl.deleteMemberRole);
+
 module.exports = router;

@@ -107,25 +107,15 @@ const createDefaultMilestones = async (projectId, projectType) => {
 
     for (let i = 0; i < templates.length; i++) {
       const t = templates[i];
-      // Create the parent (phase) milestone from the template
-      const parentId = randomUUID();
+      // Create the parent (phase) milestone from the template.
+      // Sub-milestones are NOT auto-created — PM adds them manually under each phase.
       await Milestone.create({
-        id: parentId, projectId,
+        id: randomUUID(), projectId,
         name: t.name, isDefault: true,
         minPct: t.minPct, maxPct: t.maxPct,
         weightPercentage: null, // PM fills this later
         status: 'not_started', order: t.sortOrder || i + 1,
         parentMilestoneId: null,
-      }, { transaction: txn });
-
-      // Create one default sub-milestone under this parent so the phase is not empty
-      await Milestone.create({
-        id: randomUUID(), projectId,
-        name: t.name, isDefault: false,
-        minPct: null, maxPct: null,
-        weightPercentage: null,
-        status: 'not_started', order: 1,
-        parentMilestoneId: parentId,
       }, { transaction: txn });
     }
 
