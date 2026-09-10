@@ -376,14 +376,33 @@ export default function MilestoneBoard() {
       setEditingWeightId(null);
       return;
     }
+
+    // Pre-check the project's 100% budget so the PM gets instant feedback.
+    // The backend enforces the same rule — this is convenience, not the guard.
+    const othersTotal = defaultMilestones
+      .filter(m => (m._id || m.id) !== milestoneId)
+      .reduce((sum, m) => sum + (m.weightPercentage != null ? Number(m.weightPercentage) : 0), 0);
+    const projected = othersTotal + val;
+    if (projected > 100.009) {
+      const remaining = Math.max(0, Math.round((100 - othersTotal) * 100) / 100);
+      toast.error(
+        `Cannot set ${val}% — project would total ${Math.round(projected * 100) / 100}%. ` +
+        `Only ${remaining}% remains.`
+      );
+      return; // keep the editor open so the value can be corrected
+    }
+
     try {
       await updateMilestoneApi(id, milestoneId, { weightPercentage: val });
       setMilestones(prev => prev.map(m =>
         (m._id || m.id) === milestoneId ? { ...m, weightPercentage: val } : m,
       ));
       toast.success('Weight updated');
-    } catch { toast.error('Failed to update weight'); }
-    finally { setEditingWeightId(null); }
+      setEditingWeightId(null);
+    } catch (err) {
+      // Surface the backend's specific message (e.g. the budget error)
+      toast.error(err?.response?.data?.message || 'Failed to update weight');
+    }
   };
 
   // ── Sub-milestone form handlers ─────────────────────────────────────────

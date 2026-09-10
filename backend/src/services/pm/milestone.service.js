@@ -29,6 +29,42 @@ async function logDateChange(milestoneId, changedById, field, oldValue, newValue
 
 const MANAGERS = ['admin', 'manager', 'senior_manager'];
 
+/**
+ * Weight budget guard.
+ *
+ * Milestone weights are shares of a 100% budget:
+ *   - top-level milestones (parentMilestoneId = null) share the PROJECT's 100%
+ *   - sub-milestones share their PARENT milestone's 100%
+ *
+ * Throws ValidationError if applying `newWeight` would push the group over 100%.
+ * `excludeMilestoneId` is the row being edited, so its own current value is not
+ * double-counted (pass null when creating).
+ */
+async function assertWeightWithinBudget(projectId, parentMilestoneId, excludeMilestoneId, newWeight) {
+  if (newWeight == null || Number.isNaN(newWeight)) return;
+
+  const siblings = await Milestone.findAll({
+    where: { projectId, parentMilestoneId: parentMilestoneId ?? null },
+    attributes: ['id', 'weightPercentage'],
+  });
+
+  const othersTotal = siblings
+    .filter(m => String(m.id) !== String(excludeMilestoneId))
+    .reduce((sum, m) => sum + (m.weightPercentage != null ? Number(m.weightPercentage) : 0), 0);
+
+  const projected = othersTotal + newWeight;
+
+  // Tolerance for DECIMAL(5,2) float noise
+  if (projected > 100.009) {
+    const remaining = Math.max(0, Math.round((100 - othersTotal) * 100) / 100);
+    const scope = parentMilestoneId ? 'this milestone' : 'this project';
+    throw new ValidationError(
+      `Cannot set weight to ${newWeight}% — ${scope} would total ${Math.round(projected * 100) / 100}%. ` +
+      `Only ${remaining}% remains. Reduce another milestone's weight first.`
+    );
+  }
+}
+
 function canManage(user, project) {
   if (MANAGERS.includes(user.role)) return true;
   if (String(project.managerId) === String(user._id ?? user.id)) return true;
@@ -134,6 +170,11 @@ const createMilestone = async (projectId, data, user) => {
   if (!project) throw new NotFoundError('Project');
   if (!canManage(user, project)) throw new ForbiddenError('Only project manager or admin can create milestones');
 
+  // Guard: a new top-level milestone must fit inside the project's 100% budget
+  if (data.weightPercentage != null) {
+    await assertWeightWithinBudget(projectId, null, null, Number(data.weightPercentage));
+  }
+
   const maxOrder = await Milestone.max('order', { where: { projectId, parentMilestoneId: null } }) || 0;
   return Milestone.create({
     ...data,
@@ -153,6 +194,11 @@ const createSubMilestone = async (projectId, parentMilestoneId, data, user) => {
 
   const parent = await Milestone.findOne({ where: { id: parentMilestoneId, projectId } });
   if (!parent) throw new NotFoundError('Parent milestone');
+
+  // Guard: sub-milestones share their parent's 100% budget
+  if (data.weightPercentage != null) {
+    await assertWeightWithinBudget(projectId, parentMilestoneId, null, Number(data.weightPercentage));
+  }
 
   const maxOrder = await Milestone.max('order', { where: { projectId, parentMilestoneId } }) || 0;
   return Milestone.create({
@@ -189,7 +235,19 @@ const updateMilestone = async (projectId, milestoneId, data, user) => {
     }
   }
 
-  // Validate weightPercentage against range (for default milestones) — advisory only
+  // ── HARD GUARD: total weight across a project's top-level milestones ≤ 100% ──
+  // Enforced here (not just in the UI) because the bulk-import path and any direct
+  // API call bypass the frontend entirely.
+  if (data.weightPercentage !== undefined && data.weightPercentage !== null) {
+    await assertWeightWithinBudget(
+      projectId,
+      milestone.parentMilestoneId,   // null → project budget; set → parent's budget
+      milestoneId,                   // exclude self from the running total
+      Number(data.weightPercentage),
+    );
+  }
+
+  // Validate weightPercentage against the template range — advisory only
   let weightWarning = null;
   if (data.weightPercentage !== undefined && milestone.isDefault &&
       milestone.minPct !== null && milestone.maxPct !== null) {
