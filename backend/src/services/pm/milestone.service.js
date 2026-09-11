@@ -305,6 +305,47 @@ const updateMilestoneStatus   = (pid, mid, status, user)   => updateMilestone(pi
 const updateMilestoneProgress = (pid, mid, pct, user)      => updateMilestone(pid, mid, { completionPercentage: pct }, user);
 
 // ── UPDATE planned dates ──────────────────────────────────────────────────────
+// ── Planned-date lock control (admin only) ───────────────────────────────────
+// Two-step re-baseline: an admin unlocks a milestone (with a reason), then a
+// manager resets the planned dates. The unlock is consumed by that one write.
+
+async function unlockPlannedDates(projectId, milestoneId, reason, user) {
+  if (user.role !== 'admin') throw new ForbiddenError('Only an admin can unlock planned dates');
+  if (!reason || !String(reason).trim()) throw new ValidationError('A reason is required to unlock planned dates');
+
+  const milestone = await Milestone.findOne({ where: { id: milestoneId, projectId } });
+  if (!milestone) throw new NotFoundError('Milestone not found');
+
+  if (milestone.plannedDatesUnlockedAt) {
+    // Already unlocked — idempotent, nothing to do
+    return milestone.toJSON();
+  }
+
+  const uid = String(user._id ?? user.id);
+  await milestone.update({ plannedDatesUnlockedAt: new Date(), plannedDatesUnlockedBy: uid });
+
+  // Audit: who authorised the change and why. The manager's actual edit is
+  // logged separately by updateMilestonePlannedDates, so the trail shows both.
+  await logDateChange(milestoneId, uid, 'plannedDatesUnlock', null, null, reason);
+
+  return milestone.toJSON();
+}
+
+async function lockPlannedDates(projectId, milestoneId, user) {
+  if (user.role !== 'admin') throw new ForbiddenError('Only an admin can lock planned dates');
+
+  const milestone = await Milestone.findOne({ where: { id: milestoneId, projectId } });
+  if (!milestone) throw new NotFoundError('Milestone not found');
+
+  if (!milestone.plannedDatesUnlockedAt) return milestone.toJSON();   // already locked
+
+  const uid = String(user._id ?? user.id);
+  await milestone.update({ plannedDatesUnlockedAt: null, plannedDatesUnlockedBy: null });
+  await logDateChange(milestoneId, uid, 'plannedDatesLock', null, null, 'Re-locked by admin without a change');
+
+  return milestone.toJSON();
+}
+
 async function updateMilestonePlannedDates(projectId, milestoneId, data, user) {
   await assertProjectVisible(projectId, user);
   const project = await Project.findByPk(projectId);
@@ -316,12 +357,17 @@ async function updateMilestonePlannedDates(projectId, milestoneId, data, user) {
 
   const { plannedStartDate, plannedEndDate, reason } = data;
 
-  // Business rule: planned dates are write-once. Reject any attempt to overwrite an existing value.
-  if (plannedStartDate !== undefined && milestone.plannedStartDate) {
-    throw new ValidationError('Planned start date is already set and cannot be changed');
-  }
-  if (plannedEndDate !== undefined && milestone.plannedEndDate) {
-    throw new ValidationError('Planned end date is already set and cannot be changed');
+  // Planned dates are the baseline and lock once set. Changing a set date
+  // requires an admin to have UNLOCKED this milestone first (see
+  // unlockPlannedDates). The unlock is consumed by this one write — the
+  // dates re-lock automatically below. Old values go to pm_milestone_date_logs.
+  const alreadySet =
+    (plannedStartDate !== undefined && milestone.plannedStartDate) ||
+    (plannedEndDate   !== undefined && milestone.plannedEndDate);
+  const unlocked = !!milestone.plannedDatesUnlockedAt;
+
+  if (alreadySet && !unlocked) {
+    throw new ValidationError('Planned dates are locked. Ask an admin to unlock this milestone before changing them.');
   }
 
   const dateFields = { plannedStartDate, plannedEndDate };
@@ -335,6 +381,12 @@ async function updateMilestonePlannedDates(projectId, milestoneId, data, user) {
     if (milestone[field] !== newVal) {
       await logDateChange(milestoneId, user._id || user.id, field, milestone[field], newVal, reason);
     }
+  }
+
+  // Consume the unlock: the baseline re-locks after this single change.
+  if (alreadySet && unlocked) {
+    filtered.plannedDatesUnlockedAt = null;
+    filtered.plannedDatesUnlockedBy = null;
   }
 
   await milestone.update(filtered);
@@ -404,4 +456,5 @@ module.exports = {
   updateMilestone, deleteMilestone,
   updateMilestoneStatus, updateMilestoneProgress,
   updateMilestonePlannedDates, updateMilestoneActualDates,
+  unlockPlannedDates, lockPlannedDates,
 };

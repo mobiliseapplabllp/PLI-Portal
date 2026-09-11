@@ -27,6 +27,13 @@ const Milestone = sequelize.define(
 
     accountableUserId:    { type: DataTypes.UUID, allowNull: true },
 
+    // ── Planned-date lock ─────────────────────────────────────────────────────
+    // Planned dates are the baseline and lock once set. An admin can unlock a
+    // milestone for ONE change; the next successful planned-date write re-locks.
+    // NULL = locked.
+    plannedDatesUnlockedAt: { type: DataTypes.DATE,       allowNull: true, defaultValue: null },
+    plannedDatesUnlockedBy: { type: DataTypes.STRING(36), allowNull: true, defaultValue: null },
+
     status: {
       type: DataTypes.STRING(100),
       defaultValue: PM_MILESTONE_STATUS.NOT_STARTED, // constant must equal 'not_started' — matches DB DEFAULT

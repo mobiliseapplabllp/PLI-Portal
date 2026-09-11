@@ -594,10 +594,66 @@ export default function MilestoneBoard() {
     }
   };
 
+  // ── Planned-date lock (admin) ────────────────────────────────────────────
+  // Planned dates are the baseline and lock once set. An admin can unlock a
+  // milestone (with a reason) so a manager can reset them ONCE; the next
+  // planned-date save re-locks automatically (enforced server-side).
+  const isPlannedUnlocked = (m) => !!m?.plannedDatesUnlockedAt;
+
+  const applyMilestonePatch = (milestoneId, patch) => {
+    setMilestones(prev => prev.map(m => {
+      if ((m._id || m.id) === milestoneId) return { ...m, ...patch };
+      if (!m.subMilestones?.length) return m;
+      return {
+        ...m,
+        subMilestones: m.subMilestones.map(sm =>
+          (sm._id || sm.id) === milestoneId ? { ...sm, ...patch } : sm,
+        ),
+      };
+    }));
+  };
+
+  const handleUnlockPlanned = async (milestoneId) => {
+    const reason = window.prompt(
+      'Unlock planned dates for this milestone?\n\n' +
+      'A manager will be able to reset them once, after which they lock again.\n' +
+      'Enter the reason (required — it is written to the audit log):'
+    );
+    if (reason === null) return;                       // cancelled
+    if (!reason.trim()) return toast.error('A reason is required to unlock planned dates');
+    try {
+      const res = await api.patch(
+        `/pm/projects/${id}/milestones/${milestoneId}/planned-dates/unlock`,
+        { reason: reason.trim() },
+      );
+      const patch = { ...(res.data?.data || {}) };
+      delete patch.subMilestones; delete patch.alert;
+      applyMilestonePatch(milestoneId, patch);
+      toast.success('Planned dates unlocked — the next change will re-lock them');
+    } catch (err) {
+      toast.error(err.response?.data?.message || err.response?.data?.error?.message || 'Failed to unlock');
+    }
+  };
+
+  const handleLockPlanned = async (milestoneId) => {
+    if (!window.confirm('Re-lock planned dates without changing them?')) return;
+    try {
+      const res = await api.patch(`/pm/projects/${id}/milestones/${milestoneId}/planned-dates/lock`);
+      const patch = { ...(res.data?.data || {}) };
+      delete patch.subMilestones; delete patch.alert;
+      applyMilestonePatch(milestoneId, patch);
+      toast.success('Planned dates locked');
+    } catch (err) {
+      toast.error(err.response?.data?.message || err.response?.data?.error?.message || 'Failed to lock');
+    }
+  };
+
   // ── Planned date handlers ───────────────────────────────────────────────
   // BUSINESS RULE: planned dates can be entered ONCE. As soon as a value
   // exists it is rendered as locked read-only text, so this handler only ever
   // runs for the first-time entry. The guard below is the safety net.
+  // (A re-baseline on an UNLOCKED milestone goes through handleActualDateChange
+  //  → confirmDateChange instead, so the reason modal collects a justification.)
   const findMilestoneById = (milestoneId) => {
     for (const m of milestones) {
       if ((m._id || m.id) === milestoneId) return m;
@@ -900,20 +956,55 @@ export default function MilestoneBoard() {
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3 sm:pl-11">
 
                         {/* PLANNED */}
-                        <div className="bg-gray-50 rounded-lg px-4 py-3">
+                        <div className={`rounded-lg px-4 py-3 ${isPlannedUnlocked(m) ? 'bg-amber-50 border border-amber-200' : 'bg-gray-50'}`}>
                           <div className="flex items-center gap-1.5 mb-2">
                             <HiOutlineCalendar className="w-3.5 h-3.5 text-gray-400" />
                             <span className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold">Planned</span>
+                            {isPlannedUnlocked(m) && (
+                              <span className="text-[10px] font-semibold text-amber-700 bg-white border border-amber-200 rounded px-1.5 py-0.5" title="An admin has unlocked these dates. The next change re-locks them.">
+                                Unlocked
+                              </span>
+                            )}
+                            {/* Admin-only lock control — only meaningful once a date exists */}
+                            {isAdmin && (m.plannedStartDate || m.plannedEndDate) && (
+                              isPlannedUnlocked(m) ? (
+                                <button
+                                  type="button"
+                                  onClick={() => handleLockPlanned(mId)}
+                                  className="ml-auto text-[11px] font-medium text-gray-500 hover:text-gray-800 hover:bg-white border border-transparent hover:border-gray-200 rounded px-2 py-0.5 transition-colors"
+                                  title="Re-lock without changing"
+                                >
+                                  Lock
+                                </button>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => handleUnlockPlanned(mId)}
+                                  className="ml-auto text-[11px] font-medium text-blue-600 hover:text-blue-800 hover:bg-white border border-transparent hover:border-blue-200 rounded px-2 py-0.5 transition-colors"
+                                  title="Unlock so a manager can reset the planned dates once"
+                                >
+                                  Unlock
+                                </button>
+                              )
+                            )}
                           </div>
                           <div className="space-y-2">
                             <div className="flex items-center gap-2">
                               <span className="w-10 flex-shrink-0 text-xs text-gray-400">Start</span>
                               {canManage ? (
                                 <>
-                                  {m.plannedStartDate ? (
+                                  {m.plannedStartDate && isPlannedUnlocked(m) ? (
+                                    <input
+                                      type="date"
+                                      defaultValue={m.plannedStartDate.slice(0, 10)}
+                                      title="Unlocked — pick a new planned start (you will be asked for a reason)"
+                                      onChange={e => e.target.value && e.target.value !== m.plannedStartDate.slice(0, 10) && handleActualDateChange(mId, 'plannedStartDate', e.target.value)}
+                                      className={plannedInputCls + ' border-amber-400'}
+                                    />
+                                  ) : m.plannedStartDate ? (
                                     <span
                                       className="inline-flex items-center gap-1 text-xs text-gray-700 font-medium"
-                                      title="Planned start date is locked — it can only be set once"
+                                      title="Planned start date is locked — ask an admin to unlock it"
                                     >
                                       <LockIcon /> {fmtDate(m.plannedStartDate)}
                                     </span>
@@ -934,10 +1025,19 @@ export default function MilestoneBoard() {
                               <span className="w-10 flex-shrink-0 text-xs text-gray-400">End</span>
                               {canManage ? (
                                 <>
-                                  {m.plannedEndDate ? (
+                                  {m.plannedEndDate && isPlannedUnlocked(m) ? (
+                                    <input
+                                      type="date"
+                                      defaultValue={m.plannedEndDate.slice(0, 10)}
+                                      min={m.plannedStartDate ? m.plannedStartDate.slice(0, 10) : undefined}
+                                      title="Unlocked — pick a new planned end (you will be asked for a reason)"
+                                      onChange={e => e.target.value && e.target.value !== m.plannedEndDate.slice(0, 10) && handleActualDateChange(mId, 'plannedEndDate', e.target.value)}
+                                      className={plannedInputCls + ' border-amber-400'}
+                                    />
+                                  ) : m.plannedEndDate ? (
                                     <span
                                       className="inline-flex items-center gap-1 text-xs text-gray-700 font-medium"
-                                      title="Planned end date is locked — it can only be set once"
+                                      title="Planned end date is locked — ask an admin to unlock it"
                                     >
                                       <LockIcon /> {fmtDate(m.plannedEndDate)}
                                     </span>
@@ -1170,16 +1270,43 @@ export default function MilestoneBoard() {
                                   </td>
 
                                   {/* Planned dates (merged) */}
-                                  <td className="px-3 py-3 align-top">
+                                  <td className={`px-3 py-3 align-top ${isPlannedUnlocked(sm) ? 'bg-amber-50/70' : ''}`}>
+                                    {/* Admin lock control for this sub-milestone */}
+                                    {isAdmin && (sm.plannedStartDate || sm.plannedEndDate) && (
+                                      <div className="mb-1 flex items-center gap-1.5">
+                                        {isPlannedUnlocked(sm) && (
+                                          <span className="text-[10px] font-semibold text-amber-700">Unlocked</span>
+                                        )}
+                                        <button
+                                          type="button"
+                                          onClick={() => isPlannedUnlocked(sm) ? handleLockPlanned(smId) : handleUnlockPlanned(smId)}
+                                          className={`text-[10px] font-medium rounded px-1.5 py-0.5 border border-transparent transition-colors ${
+                                            isPlannedUnlocked(sm)
+                                              ? 'text-gray-500 hover:text-gray-800 hover:border-gray-200 hover:bg-white'
+                                              : 'text-blue-600 hover:text-blue-800 hover:border-blue-200 hover:bg-white'}`}
+                                          title={isPlannedUnlocked(sm) ? 'Re-lock without changing' : 'Unlock so a manager can reset the planned dates once'}
+                                        >
+                                          {isPlannedUnlocked(sm) ? 'Lock' : 'Unlock'}
+                                        </button>
+                                      </div>
+                                    )}
                                     <div className="space-y-1">
                                       <div className="flex items-center gap-1.5">
                                         <span className="w-7 flex-shrink-0 text-[10px] uppercase tracking-wide text-gray-300">St</span>
                                         {canManage ? (
                                           <>
-                                            {sm.plannedStartDate ? (
+                                            {sm.plannedStartDate && isPlannedUnlocked(sm) ? (
+                                              <input
+                                                type="date"
+                                                defaultValue={sm.plannedStartDate.slice(0, 10)}
+                                                title="Unlocked — pick a new planned start (you will be asked for a reason)"
+                                                onChange={e => e.target.value && e.target.value !== sm.plannedStartDate.slice(0, 10) && handleActualDateChange(smId, 'plannedStartDate', e.target.value)}
+                                                className="block text-[11px] border border-amber-400 rounded px-1.5 py-0.5 text-gray-700 bg-white focus:outline-none focus:border-amber-500 w-28"
+                                              />
+                                            ) : sm.plannedStartDate ? (
                                               <span
                                                 className="inline-flex items-center gap-0.5 text-xs text-gray-600"
-                                                title="Planned start date is locked — it can only be set once"
+                                                title="Planned start date is locked — ask an admin to unlock it"
                                               >
                                                 <LockIcon /> {fmtDate(sm.plannedStartDate)}
                                               </span>
@@ -1200,10 +1327,19 @@ export default function MilestoneBoard() {
                                         <span className="w-7 flex-shrink-0 text-[10px] uppercase tracking-wide text-gray-300">En</span>
                                         {canManage ? (
                                           <>
-                                            {sm.plannedEndDate ? (
+                                            {sm.plannedEndDate && isPlannedUnlocked(sm) ? (
+                                              <input
+                                                type="date"
+                                                defaultValue={sm.plannedEndDate.slice(0, 10)}
+                                                min={sm.plannedStartDate ? sm.plannedStartDate.slice(0, 10) : undefined}
+                                                title="Unlocked — pick a new planned end (you will be asked for a reason)"
+                                                onChange={e => e.target.value && e.target.value !== sm.plannedEndDate.slice(0, 10) && handleActualDateChange(smId, 'plannedEndDate', e.target.value)}
+                                                className="block text-[11px] border border-amber-400 rounded px-1.5 py-0.5 text-gray-700 bg-white focus:outline-none focus:border-amber-500 w-28"
+                                              />
+                                            ) : sm.plannedEndDate ? (
                                               <span
                                                 className={`inline-flex items-center gap-0.5 text-xs ${isDelayed ? 'text-red-600 font-semibold' : 'text-gray-600'}`}
-                                                title="Planned end date is locked — it can only be set once"
+                                                title="Planned end date is locked — ask an admin to unlock it"
                                               >
                                                 <LockIcon className={`w-3 h-3 flex-shrink-0 ${isDelayed ? 'text-red-400' : 'text-gray-400'}`} />
                                                 {fmtDate(sm.plannedEndDate)}
@@ -1839,8 +1975,14 @@ export default function MilestoneBoard() {
       {dateChangeModal && (
         <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50">
           <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-md">
-            <h3 className="text-base font-semibold text-gray-800 mb-1">Reason for Date Change</h3>
-            <p className="text-sm text-gray-500 mb-4">Please provide a reason for changing this date.</p>
+            <h3 className="text-base font-semibold text-gray-800 mb-1">
+              {dateChangeModal.field.startsWith('planned') ? 'Reason for Re-baselining' : 'Reason for Date Change'}
+            </h3>
+            <p className="text-sm text-gray-500 mb-4">
+              {dateChangeModal.field.startsWith('planned')
+                ? 'You are changing a planned (baseline) date. The dates will lock again after this save. This reason is written to the audit log.'
+                : 'Please provide a reason for changing this date.'}
+            </p>
             <textarea
               value={dateChangeReason}
               onChange={e => setDateChangeReason(e.target.value)}

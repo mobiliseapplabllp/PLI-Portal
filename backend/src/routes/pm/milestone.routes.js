@@ -23,6 +23,10 @@ router.patch('/:milestoneId/status',        authorize(...MANAGERS), ctrl.updateS
 router.patch('/:milestoneId/progress',      authorize(...MANAGERS), ctrl.updateProgress);
 router.patch('/:milestoneId/planned-dates', authorize(...MANAGERS), ctrl.updatePlannedDates);
 router.patch('/:milestoneId/actual-dates',  authorize(...MANAGERS), ctrl.updateActualDates);
+// Planned dates are write-once. Admin unlocks a milestone so a manager can reset them once;
+// the next planned-date write re-locks automatically. Lock = admin cancels an unlock.
+router.patch('/:milestoneId/planned-dates/unlock', authorize(...ADMIN_ONLY), ctrl.unlockPlannedDates);
+router.patch('/:milestoneId/planned-dates/lock',   authorize(...ADMIN_ONLY), ctrl.lockPlannedDates);
 // Sub-milestones: managers can add/edit/delete sub-milestones inside default milestones
 router.post('/:milestoneId/sub', authorize(...MANAGERS), ctrl.createSubMilestone);
 

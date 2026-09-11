@@ -453,6 +453,26 @@ const updatePlannedDates = async (req, res, next) => {
   } catch (e) { next(e); }
 };
 
+// Admin unlocks a milestone's planned dates so a manager can reset them once.
+const unlockPlannedDates = async (req, res, next) => {
+  try {
+    const result = await milestoneService.unlockPlannedDates(
+      req.params.id, req.params.milestoneId, req.body.reason, req.user
+    );
+    sendSuccess(res, result, 'Planned dates unlocked — the next change will re-lock them');
+  } catch (e) { next(e); }
+};
+
+// Admin re-locks without a change (changed their mind).
+const lockPlannedDates = async (req, res, next) => {
+  try {
+    const result = await milestoneService.lockPlannedDates(
+      req.params.id, req.params.milestoneId, req.user
+    );
+    sendSuccess(res, result, 'Planned dates locked');
+  } catch (e) { next(e); }
+};
+
 const updateActualDates = async (req, res, next) => {
   try {
     const { reason, actualStartDate, actualEndDate } = req.body;
@@ -480,5 +500,6 @@ module.exports = {
   updateMilestone, deleteMilestone,
   updateStatus, updateProgress,
   updatePlannedDates, updateActualDates,
+  unlockPlannedDates, lockPlannedDates,
   exportMilestones, validateMilestoneImport, commitMilestoneImport, getMilestoneImportTemplate,
 };
