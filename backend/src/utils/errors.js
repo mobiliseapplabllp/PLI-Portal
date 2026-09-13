@@ -37,4 +37,18 @@ class ConflictError extends AppError {
   }
 }
 
-module.exports = { AppError, NotFoundError, ValidationError, UnauthorizedError, ForbiddenError, ConflictError };
+/** 409 raised by the capacity engine; carries the engine result for the API body. */
+class AllocationConflictError extends ConflictError {
+  constructor(result, capacity) {
+    super(result.message || 'Allocation exceeds capacity');
+    this.conflict = {
+      overDays:  result.overDays,
+      ranges:    result.ranges,
+      peak:      result.peak,
+      remaining: result.remaining,
+      capacity,
+    };
+  }
+}
+
+module.exports = { AppError, NotFoundError, ValidationError, UnauthorizedError, ForbiddenError, ConflictError, AllocationConflictError };

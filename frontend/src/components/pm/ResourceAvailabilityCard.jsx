@@ -29,6 +29,12 @@ function fmtDateShort(iso) {
   }
 }
 
+// Round hours to at most one decimal for display (e.g. 5.5h, not 5.4999h)
+function fmtHours(h) {
+  const n = Number(h) || 0;
+  return Math.round(n * 10) / 10;
+}
+
 // ── Sub-components ────────────────────────────────────────────────────────────
 function SkeletonBar({ className = '' }) {
   return <div className={`animate-pulse bg-gray-200 rounded ${className}`} />;
@@ -48,7 +54,11 @@ function LoadingSkeleton() {
   );
 }
 
-function AssignmentRow({ asgn }) {
+function AssignmentRow({ asgn, capacity }) {
+  const hours = Number(asgn.hoursPerDay) || 0;
+  const barPct = capacity > 0 ? Math.min(hours / capacity, 1) * 100 : 0;
+  const from = asgn.allocationFrom ?? asgn.fromDate;
+  const to   = asgn.allocationTo   ?? asgn.toDate;
   return (
     <li className="flex items-center gap-2 text-xs text-gray-700">
       {/* Mini proportional bar */}
@@ -58,7 +68,7 @@ function AssignmentRow({ asgn }) {
       >
         <div
           className="h-full bg-blue-400 rounded-full"
-          style={{ width: `${Math.min(asgn.allocationPct, 100)}%` }}
+          style={{ width: `${barPct}%` }}
         />
       </div>
 
@@ -67,25 +77,30 @@ function AssignmentRow({ asgn }) {
         {asgn.projectName}
       </span>
 
-      {/* Assumed label */}
-      {asgn.isAssumed100 && (
-        <span className="text-gray-400 italic text-[10px] shrink-0">(assumed)</span>
+      {/* Estimated tag — hours pre-filled from a legacy % and not yet confirmed */}
+      {asgn.isEstimated && (
+        <span className="text-amber-600 bg-amber-50 border border-amber-200 rounded px-1 text-[10px] shrink-0">
+          estimated
+        </span>
       )}
 
-      {/* Percentage */}
+      {/* Hours per day, with derived % */}
       <span className="shrink-0 font-semibold text-gray-600 tabular-nums">
-        {asgn.allocationPct}%
+        {fmtHours(hours)}h/day
+        {asgn.allocationPct != null && (
+          <span className="font-normal text-gray-400 ml-1">({Math.round(asgn.allocationPct)}%)</span>
+        )}
       </span>
 
       {/* Date range */}
       <span
         className="shrink-0 text-gray-400 flex items-center gap-0.5"
-        title={`${fmtDate(asgn.fromDate)} to ${fmtDate(asgn.toDate)}`}
+        title={`${fmtDate(from)} to ${fmtDate(to)}`}
       >
         <HiOutlineCalendar className="w-3 h-3" aria-hidden="true" />
-        <span>{fmtDateShort(asgn.fromDate)}</span>
+        <span>{fmtDateShort(from)}</span>
         <span aria-hidden="true">→</span>
-        <span>{fmtDateShort(asgn.toDate)}</span>
+        <span>{fmtDateShort(to)}</span>
       </span>
     </li>
   );
@@ -119,21 +134,22 @@ function SuggestionCard({ suggestion, onSelect }) {
  *
  * Shows the current allocation workload for a user being added to a project.
  * Fetches GET /pm/users/:userId/availability and renders committed vs free
- * capacity, current assignments, and conflict-resolution suggestions when
- * the projected total would exceed 100%.
+ * hours (against the working-hours-per-day capacity), current assignments,
+ * and conflict-resolution suggestions when the projected busiest day would
+ * exceed capacity.
  *
  * Props:
  *   userId            — the user being added (string)
  *   fromDate          — ISO date of new assignment start (string | null)
  *   toDate            — ISO date of new assignment end (string | null)
- *   newPct            — allocationPct of the new assignment (number | null)
+ *   newHoursPerDay    — hours/day of the new assignment (number | null)
  *   onSuggestionSelect — called with the suggestion object the user clicks
  */
 export default function ResourceAvailabilityCard({
   userId,
   fromDate,
   toDate,
-  newPct = 0,
+  newHoursPerDay = null,
   onSuggestionSelect,
 }) {
   const [data,    setData]    = useState(null);
@@ -185,21 +201,29 @@ export default function ResourceAvailabilityCard({
 
   // ── Derived values ────────────────────────────────────────────────────────
   const {
-    totalCommitted    = 0,
-    freeCapacity      = 0,
+    capacity: rawCapacity,
+    peakHours: rawPeak,
+    freeHours: rawFree,
     allocations: currentAssignments = [],
     nextFreeDate,
     suggestions       = [],
   } = data;
 
-  const effectiveNewPct = newPct ?? 0;
-  const projectedTotal  = totalCommitted + effectiveNewPct;
-  const isOverAllocated = projectedTotal > 100;
+  const capacity  = Number(rawCapacity) > 0 ? Number(rawCapacity) : 8;
+  const peakHours = Number(rawPeak) || 0;
+  const freeHours = rawFree != null ? Number(rawFree) : Math.max(0, capacity - peakHours);
+
+  const effectiveNewHours = Number(newHoursPerDay) || 0;
+  const projectedPeak     = peakHours + effectiveNewHours;
+  const isOverAllocated   = projectedPeak > capacity;
+
+  const toPct = (h) => Math.min(h, capacity) / capacity * 100;
+  const committedRatio = peakHours / capacity;
 
   // Main bar color: green → amber → red
   const committedBarColor =
-    totalCommitted > 100 ? 'bg-red-500'   :
-    totalCommitted > 80  ? 'bg-amber-500' :
+    committedRatio > 1   ? 'bg-red-500'   :
+    committedRatio > 0.8 ? 'bg-amber-500' :
                            'bg-emerald-500';
 
   const projectedBarColor = isOverAllocated ? 'bg-red-400' : 'bg-indigo-400';
@@ -229,7 +253,7 @@ export default function ResourceAvailabilityCard({
           <HiOutlineExclamation className="w-4 h-4 shrink-0 mt-0.5" aria-hidden="true" />
           <span>
             This person would be at{' '}
-            <strong>{projectedTotal}%</strong> capacity for the selected dates.
+            <strong>{fmtHours(projectedPeak)}h / {fmtHours(capacity)}h</strong> on their busiest day.
           </span>
         </div>
       )}
@@ -243,18 +267,18 @@ export default function ResourceAvailabilityCard({
               className={`inline-block w-2 h-2 rounded-full ${committedBarColor}`}
               aria-hidden="true"
             />
-            <strong className="tabular-nums">{totalCommitted}%</strong>
+            <strong className="tabular-nums">{fmtHours(peakHours)}h</strong>
             {' '}committed
           </span>
           <span className="flex items-center gap-1.5">
             <span className="inline-block w-2 h-2 rounded-full bg-gray-300" aria-hidden="true" />
-            <strong className="tabular-nums">{Math.max(0, freeCapacity)}%</strong>
+            <strong className="tabular-nums">{fmtHours(Math.max(0, freeHours))}h</strong>
             {' '}free
           </span>
-          {effectiveNewPct > 0 && (
+          {effectiveNewHours > 0 && (
             <span className="flex items-center gap-1.5 text-indigo-600">
               <span className="inline-block w-2 h-2 rounded-full bg-indigo-400" aria-hidden="true" />
-              +<strong className="tabular-nums">{effectiveNewPct}%</strong>
+              +<strong className="tabular-nums">{fmtHours(effectiveNewHours)}h</strong>
               {' '}new
             </span>
           )}
@@ -264,37 +288,37 @@ export default function ResourceAvailabilityCard({
         <div
           className="h-2 rounded-full overflow-hidden bg-gray-200"
           role="progressbar"
-          aria-valuenow={totalCommitted}
+          aria-valuenow={peakHours}
           aria-valuemin={0}
-          aria-valuemax={100}
-          title={`${totalCommitted}% committed, ${Math.max(0, freeCapacity)}% free`}
+          aria-valuemax={capacity}
+          title={`${fmtHours(peakHours)}h committed, ${fmtHours(Math.max(0, freeHours))}h free of ${fmtHours(capacity)}h`}
         >
           <div
             className={`h-full transition-all duration-300 ${committedBarColor}`}
-            style={{ width: `${Math.min(totalCommitted, 100)}%` }}
+            style={{ width: `${toPct(peakHours)}%` }}
           />
         </div>
 
         {/* Projected total bar — shown only when a new allocation is entered */}
-        {effectiveNewPct > 0 && (
+        {effectiveNewHours > 0 && (
           <div className="flex items-center gap-2">
             <div
               className="flex-1 h-1.5 rounded-full overflow-hidden bg-gray-100"
               role="progressbar"
-              aria-valuenow={projectedTotal}
+              aria-valuenow={projectedPeak}
               aria-valuemin={0}
-              aria-valuemax={100}
-              title={`Projected total: ${projectedTotal}% after adding this assignment`}
+              aria-valuemax={capacity}
+              title={`Projected busiest day: ${fmtHours(projectedPeak)}h / ${fmtHours(capacity)}h after adding this assignment`}
             >
               <div
                 className={`h-full transition-all duration-300 ${projectedBarColor}`}
-                style={{ width: `${Math.min(projectedTotal, 100)}%` }}
+                style={{ width: `${toPct(projectedPeak)}%` }}
               />
             </div>
             <span className={`text-[11px] font-medium tabular-nums shrink-0 ${
               isOverAllocated ? 'text-red-600' : 'text-indigo-600'
             }`}>
-              {projectedTotal}% projected
+              {fmtHours(projectedPeak)}h / {fmtHours(capacity)}h projected
             </span>
           </div>
         )}
@@ -308,7 +332,7 @@ export default function ResourceAvailabilityCard({
           </p>
           <ul className="space-y-2" role="list">
             {currentAssignments.map((asgn, idx) => (
-              <AssignmentRow key={idx} asgn={asgn} />
+              <AssignmentRow key={idx} asgn={asgn} capacity={capacity} />
             ))}
           </ul>
         </div>

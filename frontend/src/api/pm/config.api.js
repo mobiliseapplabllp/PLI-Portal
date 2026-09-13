@@ -24,3 +24,17 @@ export const getMemberRolesApi           = ()         => api.get('/pm/config/mem
 export const createMemberRoleApi         = (data)     => api.post('/pm/config/member-roles', data);
 export const updateMemberRoleApi         = (id, data) => api.put('/pm/config/member-roles/' + id, data);
 export const deleteMemberRoleApi         = (id)       => api.delete('/pm/config/member-roles/' + id);
+
+// ── Working Calendar ──────────────────────────────────────────────────────────
+export const getCalendarApi              = ()         => api.get('/pm/config/calendar');
+export const updateCalendarApi           = (data)     => api.put('/pm/config/calendar', data);
+export const getCalendarPreviewApi       = (month)    => api.get('/pm/config/calendar/preview', { params: { month } });
+
+// ── Holidays ──────────────────────────────────────────────────────────────────
+export const getHolidaysApi              = (year)     => api.get('/pm/config/holidays', { params: { year } });
+export const createHolidayApi            = (data)     => api.post('/pm/config/holidays', data);
+export const updateHolidayApi            = (id, data) => api.put('/pm/config/holidays/' + id, data);
+export const deleteHolidayApi            = (id)       => api.delete('/pm/config/holidays/' + id);
+export const getHolidayTemplateApi       = ()         => api.get('/pm/config/holidays/import/template', { responseType: 'blob' });
+export const validateHolidayImportApi    = (formData) => api.post('/pm/config/holidays/import/validate', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
+export const commitHolidayImportApi      = (payload)  => api.post('/pm/config/holidays/import/commit', payload);

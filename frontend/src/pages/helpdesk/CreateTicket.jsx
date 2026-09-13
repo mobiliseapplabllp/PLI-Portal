@@ -23,6 +23,7 @@ import {
 import { getGroupsApi } from '../../api/helpdesk/groups.api';
 import { getHdProjectsApi } from '../../api/helpdesk/hdProjects.api';
 import { getUsersApi } from '../../api/users.api';
+import AllocationTypeInput from '../../components/pm/AllocationTypeInput';
 import {
   HiOutlineArrowLeft,
   HiOutlineSave,
@@ -175,6 +176,31 @@ export default function CreateTicket() {
   const [saving,      setSaving]      = useState(false);
   const [submitError, setSubmitError] = useState('');
   const [attachment,  setAttachment]  = useState(null);
+
+  // ── Phase 3: effort allocation — only shown/sent when an assignee is chosen ─
+  const isoDay = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  // Ticket forms default to "Total hours" (DEFAULT_ALLOC_TOTAL); "Hours per day" is still selectable.
+  const DEFAULT_ALLOC_TOTAL = 10;
+  const [alloc, setAlloc] = useState({ allocationMode: 'total', hoursPerDay: '', allocationTotalHours: String(DEFAULT_ALLOC_TOTAL), from: '', to: '' });
+  const [allocDerived, setAllocDerived] = useState({ hoursPerDay: null, totalHours: null, workingDays: null }); // per-day derived by AllocationTypeInput
+  const allocIsTotal    = alloc.allocationMode === 'total';
+  const allocRaw        = Number(allocIsTotal ? alloc.allocationTotalHours : alloc.hoursPerDay);
+  const allocHoursValid = Number.isFinite(allocRaw) && allocRaw >= 0.5 && allocRaw <= (allocIsTotal ? 9999 : 12) && Math.round(allocRaw * 2) === allocRaw * 2;
+  // Per-day figure sent as allocationHoursPerDay: the entered value in per_day mode, else total ÷ working days
+  const allocHoursNum   = allocIsTotal ? allocDerived.hoursPerDay : allocRaw;
+  const allocDatesValid = !!alloc.from && !!alloc.to && alloc.from <= alloc.to;
+  // When an assignee is (re)chosen, fill defaults: today → dueDate || today+7
+  useEffect(() => {
+    if (!formData.assigneeId) return;
+    const today = new Date();
+    const week  = new Date(); week.setDate(week.getDate() + 7);
+    setAlloc(prev => ({
+      ...prev,
+      from:  prev.from  || isoDay(today),
+      to:    prev.to    || (formData.dueDate ? formData.dueDate.slice(0, 10) : '') || isoDay(week),
+    }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [formData.assigneeId]);
 
   // ── Document entries ────────────────────────────────────────────────────────
   const [docEntries,              setDocEntries]              = useState([]); // [{file, category, categoryOther}]
@@ -338,6 +364,14 @@ export default function CreateTicket() {
       ['groupId', 'assigneeId', 'dueDate', 'projectId', 'raisedByTeam'].forEach(k => {
         if (!normalized[k]) delete normalized[k];
       });
+      // Phase 3 — effort allocation only travels with an assignee
+      if (normalized.assigneeId && allocHoursValid && allocDatesValid) {
+        normalized.allocationMode        = allocIsTotal ? 'total' : 'per_day';
+        normalized.allocationHoursPerDay = allocHoursNum ?? null;                 // derived per-day (null until working days resolve)
+        normalized.allocationTotalHours  = allocIsTotal ? allocRaw : null;
+        normalized.allocationFrom        = alloc.from;
+        normalized.allocationTo          = alloc.to;
+      }
 
       if (attachment) {
         const fd = new FormData();
@@ -858,6 +892,54 @@ export default function CreateTicket() {
                       <p className="text-xs text-gray-500 mt-0.5">Loading agents…</p>
                     )}
                   </div>
+
+                  {/* Phase 3 — effort allocation (revealed once an agent is chosen) */}
+                  {formData.assigneeId && (
+                    <div className="rounded border border-indigo-100 bg-indigo-50/40 p-2.5">
+                      <p className="text-[10px] font-semibold text-indigo-700 uppercase tracking-wide mb-2">Effort allocation</p>
+                      <div className="grid grid-cols-2 gap-2 mb-2">
+                        <div>
+                          <label className={LBL}>Start date</label>
+                          <input
+                            type="date"
+                            value={alloc.from}
+                            onChange={e => setAlloc(p => ({ ...p, from: e.target.value }))}
+                            className={inp(false)}
+                          />
+                        </div>
+                        <div>
+                          <label className={LBL}>End date</label>
+                          <input
+                            type="date"
+                            value={alloc.to}
+                            min={alloc.from || undefined}
+                            onChange={e => setAlloc(p => ({ ...p, to: e.target.value }))}
+                            className={inp(false)}
+                          />
+                        </div>
+                      </div>
+                      <AllocationTypeInput
+                        compact
+                        value={alloc}
+                        onChange={next => setAlloc(p => ({
+                          ...p,
+                          allocationMode:       next.allocationMode,
+                          hoursPerDay:          next.hoursPerDay ?? '',
+                          allocationTotalHours: next.allocationTotalHours ?? '',
+                        }))}
+                        from={alloc.from || null}
+                        to={alloc.to || null}
+                        capacity={8}
+                        maxPerDay={12}
+                        defaultMode="total"
+                        inputClassName={inp(!allocHoursValid)}
+                        onDerived={setAllocDerived}
+                      />
+                      {!allocHoursValid && <span className={ERR}>{allocIsTotal ? 'Total hours must be at least 0.5 in steps of 0.5' : 'Hours must be 0.5–12 in steps of 0.5'}</span>}
+                      {!allocDatesValid && alloc.from && alloc.to && <span className={ERR}>Start date must be on or before end date</span>}
+                      <p className="text-[10px] text-gray-500 mt-1">Counts against the agent's capacity alongside project allocations.</p>
+                    </div>
+                  )}
 
                 </div>
               </div>

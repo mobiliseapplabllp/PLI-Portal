@@ -1,7 +1,10 @@
 const router = require('express').Router();
 const ctrl   = require('../../controllers/pm/config.controller');
+const cal    = require('../../controllers/pm/calendar.controller');
 const { authorize } = require('../../middleware/rbac');
+const upload = require('../../middleware/upload');
 
+const ADMIN    = ['admin'];
 const MANAGERS = ['admin', 'manager', 'senior_manager', 'md', 'director'];
 const ALL      = ['admin', 'manager', 'senior_manager', 'employee', 'hr_admin', 'final_approver', 'md', 'director'];
 
@@ -36,5 +39,20 @@ router.get   ('/member-roles',     authorize(...ALL),      ctrl.getMemberRoles);
 router.post  ('/member-roles',     authorize(...MANAGERS), ctrl.createMemberRole);
 router.put   ('/member-roles/:id', authorize(...MANAGERS), ctrl.updateMemberRole);
 router.delete('/member-roles/:id', authorize(...MANAGERS), ctrl.deleteMemberRole);
+
+// ── Working Calendar (Phase 1) ────────────────────────────────────────────────
+router.get   ('/calendar',         authorize(...ALL),   cal.getCalendar);
+router.put   ('/calendar',         authorize(...ADMIN), cal.updateCalendar);
+router.get   ('/calendar/preview', authorize(...ALL),   cal.getCalendarPreview);
+router.get   ('/calendar/working-days', authorize(...ALL), cal.getWorkingDays);
+
+// Holidays — import routes MUST precede /holidays/:id
+router.get   ('/holidays/import/template', authorize(...ALL),   cal.getHolidayImportTemplate);
+router.post  ('/holidays/import/validate', authorize(...ADMIN), upload.single('file'), cal.validateHolidayImport);
+router.post  ('/holidays/import/commit',   authorize(...ADMIN), cal.commitHolidayImport);
+router.get   ('/holidays',     authorize(...ALL),   cal.getHolidays);
+router.post  ('/holidays',     authorize(...ADMIN), cal.createHoliday);
+router.put   ('/holidays/:id', authorize(...ADMIN), cal.updateHoliday);
+router.delete('/holidays/:id', authorize(...ADMIN), cal.deleteHoliday);
 
 module.exports = router;

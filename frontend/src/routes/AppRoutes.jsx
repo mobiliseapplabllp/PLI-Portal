@@ -73,6 +73,7 @@ import DailyLogForm from '../pages/pm/DailyLogForm';
 import DailyLogHistory from '../pages/pm/DailyLogHistory';
 import MyTasks from '../pages/pm/MyTasks';
 import PMSettings from '../pages/pm/PMSettings';
+import ResourceUtilisation from '../pages/pm/ResourceUtilisation';
 
 // Helpdesk pages (lazy-loaded)
 const HdDashboard          = lazy(() => import('../pages/helpdesk/HdDashboard'));
@@ -199,6 +200,7 @@ export default function AppRoutes() {
           <Route path="/pm/projects/:id/daily-logs" element={<RoleRoute roles={ALL_ROLES}><DailyLogHistory /></RoleRoute>} />
           <Route path="/pm/my-tasks" element={<RoleRoute roles={ALL_ROLES}><MyTasks /></RoleRoute>} />
           <Route path="/pm/settings" element={<RoleRoute roles={['admin', 'manager', 'senior_manager']}><PMSettings /></RoleRoute>} />
+          <Route path="/pm/utilisation" element={<RoleRoute roles={['admin', 'manager', 'senior_manager', 'md', 'director']}><ResourceUtilisation /></RoleRoute>} />
 
           {/* CSAT routes */}
           <Route path="/csat/client-organisations" element={<RoleRoute roles={['admin', 'manager', 'senior_manager']}><ClientOrgsPage /></RoleRoute>} />

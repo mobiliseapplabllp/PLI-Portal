@@ -18,15 +18,21 @@ const raidCtrl           = require('../../controllers/pm/raid.controller');
 const financialRoutes    = require('./financial.routes');
 const closureRoutes      = require('./closure.routes');
 const projectCtrl        = require('../../controllers/pm/project.controller');
+const utilCtrl           = require('../../controllers/pm/utilisation.controller');
 
 router.use(authenticate);
 
-const ALL      = ['admin', 'manager', 'senior_manager', 'employee', 'hr_admin', 'final_approver', 'md', 'director'];
-const MANAGERS = ['admin', 'manager', 'senior_manager'];
+const ALL        = ['admin', 'manager', 'senior_manager', 'employee', 'hr_admin', 'final_approver', 'md', 'director'];
+const MANAGERS   = ['admin', 'manager', 'senior_manager'];
+const MGMT_ROLES = ['admin', 'manager', 'senior_manager', 'md', 'director'];
 router.get('/my-tasks', authorize(...ALL), taskCtrl.getMyTasks);
 
-// ── User resource availability ────────────────────────────────────────────────
-router.get('/users/:userId/availability', authorize(...ALL), projectCtrl.getUserAvailability);
+// ── User resource availability / utilisation ─────────────────────────────────
+router.get('/users/:userId/availability', authorize(...ALL),        projectCtrl.getUserAvailability);
+router.get('/users/:userId/utilisation',  authorize(...ALL),        utilCtrl.getUserUtilisation);
+// Team × months grid (heat map). Registered before any router.use('/...') mounts —
+// no top-level '/:param' route exists in this file, so '/utilisation' is unambiguous.
+router.get('/utilisation',                authorize(...MGMT_ROLES), utilCtrl.getTeamUtilisation);
 
 // ── RAID summary (must be before /projects/:id catch-all) ────────────────────
 router.get('/projects/raid-summary', authorize(...MANAGERS), raidCtrl.raidSummary);

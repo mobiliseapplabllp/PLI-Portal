@@ -39,6 +39,7 @@ import {
 } from '../../api/helpdesk/approvals.api';
 import { getUsersApi } from '../../api/users.api';
 import api from '../../api/axios';
+import AllocationTypeInput, { formatAllocation } from '../../components/pm/AllocationTypeInput';
 import {
   HiOutlineArrowLeft,
   HiOutlinePencil,
@@ -69,6 +70,24 @@ import {
 // ---------------------------------------------------------------------------
 
 const STATUS_OPTIONS = ['open', 'in-progress', 'pending', 'on-hold', 'resolved', 'closed'];
+
+// ── Effort-allocation helpers (Phase 3) ─────────────────────────────────────
+const DEFAULT_ALLOC_HOURS = 2;   // per-day default (Pick Up)
+const DEFAULT_ALLOC_TOTAL = 10;  // "Total hours" default in the Assign modal
+const isoDate = (d) => {
+  const dt = d instanceof Date ? d : new Date(d);
+  if (isNaN(dt.getTime())) return '';
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+};
+const todayIso   = () => isoDate(new Date());
+const plusDaysIso = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return isoDate(d); };
+/** Default allocation end: ticket due date (date part) if present, else today + 7. */
+const defaultAllocTo = (ticket) => (ticket?.dueDate ? isoDate(ticket.dueDate) : '') || plusDaysIso(7);
+const fmtDdMmm = (d) => {
+  if (!d) return '—';
+  const dt = new Date(String(d).length === 10 ? `${d}T00:00:00` : d);
+  return isNaN(dt.getTime()) ? '—' : dt.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
+};
 
 const HD_DOC_CATEGORIES = [
   'SOW / Client Contracts',
@@ -205,6 +224,7 @@ export default function TicketDetail() {
   const [showActions, setShowActions]             = useState(false);
   const [showEditModal, setShowEditModal]         = useState(false);
   const [showAssignModal, setShowAssignModal]     = useState(false);
+  const [assignEditMode, setAssignEditMode]       = useState(false); // true = "Edit allocation" path (pre-selects current assignee)
   const [showNoteModal, setShowNoteModal]         = useState(false);
   const [showReminderModal, setShowReminderModal] = useState(false);
   const [showCloseModal, setShowCloseModal]       = useState(false);
@@ -326,7 +346,15 @@ export default function TicketDetail() {
 
   const handlePickUp = async () => {
     try {
-      await dispatch(updateTicket({ id, data: { assigneeId: user?._id || user?.id, status: 'in-progress' } })).unwrap();
+      await dispatch(updateTicket({ id, data: {
+        assigneeId: user?._id || user?.id,
+        status: 'in-progress',
+        // Phase 3 — default effort allocation so the ticket counts against capacity
+        allocationMode:        'per_day',
+        allocationHoursPerDay: DEFAULT_ALLOC_HOURS,
+        allocationFrom:        todayIso(),
+        allocationTo:          defaultAllocTo(ticket),
+      } })).unwrap();
       toast.success('Ticket picked up and set to In Progress');
     } catch (err) { toast.error(typeof err === 'string' ? err : err?.response?.data?.message || err?.message || 'Failed to pick up ticket'); }
   };
@@ -702,7 +730,8 @@ export default function TicketDetail() {
             groups={groups}
             submitting={submitting}
             onPickUp={handlePickUp}
-            onAssign={() => setShowAssignModal(true)}
+            onAssign={() => { setAssignEditMode(false); setShowAssignModal(true); }}
+            onEditAllocation={() => { setAssignEditMode(true); setShowAssignModal(true); }}
             onRemoveAssignee={handleRemoveAssignee}
             onUpdateAssigneeWeight={handleUpdateAssigneeWeight}
           />
@@ -755,10 +784,14 @@ export default function TicketDetail() {
           groups={groups}
           allUsers={allUsers}
           submitting={submitting}
+          editMode={assignEditMode}
           onClose={() => setShowAssignModal(false)}
-          onAssign={async ({ assigneeId, assigneeName: name, groupId }) => {
+          onAssign={async ({ assigneeId, assigneeName: name, groupId, allocationMode, allocationHoursPerDay, allocationTotalHours, allocationFrom, allocationTo }) => {
             try {
-              await dispatch(updateTicket({ id, data: { assigneeId, assigneeName: name, groupId } })).unwrap();
+              await dispatch(updateTicket({ id, data: {
+                assigneeId, assigneeName: name, groupId,
+                allocationMode, allocationHoursPerDay, allocationTotalHours, allocationFrom, allocationTo,
+              } })).unwrap();
               // Reload full ticket so assigneeUser.name (and all JOINs) are fresh in the sidebar
               dispatch(fetchTicketById(id));
               toast.success('Ticket assigned');
@@ -1541,11 +1574,16 @@ function PropertiesPanel({ ticket }) {
 // AssignmentPanel  (right sidebar, panel 2)
 // ---------------------------------------------------------------------------
 
-function AssignmentPanel({ ticket, user, canManage, allUsers, groups, submitting, onPickUp, onAssign, onRemoveAssignee, onUpdateAssigneeWeight }) {
+function AssignmentPanel({ ticket, user, canManage, allUsers, groups, submitting, onPickUp, onAssign, onEditAllocation, onRemoveAssignee, onUpdateAssigneeWeight }) {
   const assigneeName   = ticket.assigneeUser?.name || ticket.assignee?.name  || ticket.assigneeName  || null;
   const multiAssignees = ticket.assignees || [];
   const [editingWeightId, setEditingWeightId] = useState(null);
   const [weightDraft, setWeightDraft]         = useState('');
+
+  // Phase 3 — effort allocation (DECIMAL comes back as a string from MySQL)
+  // formatAllocation reads hoursPerDay; tickets carry allocationHoursPerDay, so alias it
+  const allocLabel = formatAllocation({ ...ticket, hoursPerDay: ticket.allocationHoursPerDay }, 8);
+  const allocTo    = ticket.allocationTo || (ticket.dueDate ? isoDate(ticket.dueDate) : null);
 
   return (
     <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
@@ -1555,9 +1593,30 @@ function AssignmentPanel({ ticket, user, canManage, allUsers, groups, submitting
       <div>
         <p className="text-[11px] text-gray-400 uppercase tracking-wider mb-1.5">Assigned To</p>
         {assigneeName ? (
-          <div className="flex items-center gap-2">
-            <Avatar name={assigneeName} size="sm" />
-            <span className="text-sm font-medium text-gray-800">{assigneeName}</span>
+          <div>
+            <div className="flex items-center gap-2">
+              <Avatar name={assigneeName} size="sm" />
+              <span className="text-sm font-medium text-gray-800">{assigneeName}</span>
+            </div>
+            {allocLabel ? (
+              <div className="flex items-center gap-2 mt-1.5 pl-9">
+                <span className="text-xs text-gray-600" title="Effort allocation — counts against this agent's capacity">
+                  <HiOutlineClock className="w-3.5 h-3.5 inline -mt-0.5 mr-1 text-indigo-500" />
+                  {allocLabel} · {fmtDdMmm(ticket.allocationFrom)} → {fmtDdMmm(allocTo)}
+                </span>
+                {canManage && (
+                  <button
+                    type="button"
+                    onClick={onEditAllocation}
+                    className="text-[11px] text-indigo-500 hover:text-indigo-700 hover:underline"
+                  >
+                    Edit
+                  </button>
+                )}
+              </div>
+            ) : (
+              <p className="text-[11px] text-gray-400 mt-1.5 pl-9">No effort allocation — Reassign to set</p>
+            )}
           </div>
         ) : (
           <p className="text-sm text-gray-400 italic">Unassigned</p>
@@ -2130,11 +2189,37 @@ function EditModal({ ticket, groups, allUsers, submitting, onClose, onSave }) {
 // AssignModal
 // ---------------------------------------------------------------------------
 
-function AssignModal({ ticket, groups, allUsers, submitting, onClose, onAssign }) {
+function AssignModal({ ticket, groups, allUsers, submitting, editMode = false, onClose, onAssign }) {
+  const currentAssigneeId = ticket?.assigneeId || ticket?.assigneeUser?._id || ticket?.assigneeUser?.id || null;
   const [selectedGroupId, setSelectedGroupId] = useState(ticket?.group?._id || ticket?.group?.id || ticket?.groupId || '');
-  const [selectedUser, setSelectedUser]       = useState(null);
+  const [selectedUser, setSelectedUser]       = useState(() => {
+    // "Edit allocation" path: pre-select the current assignee
+    if (!editMode || !currentAssigneeId) return null;
+    return (allUsers || []).find(u => String(u._id || u.id) === String(currentAssigneeId))
+      || (ticket?.assigneeUser ? { ...ticket.assigneeUser, _id: currentAssigneeId } : null);
+  });
   const [groupUsers, setGroupUsers]           = useState([]);
   const [search, setSearch]                   = useState('');
+
+  // ── Phase 3: effort allocation (pre-filled from ticket when present) ──────
+  // Mode: the ticket's own mode; a legacy ticket with only a per-day figure opens in per_day; otherwise "Total hours".
+  const [alloc, setAlloc] = useState(() => {
+    const tHpd   = ticket?.allocationHoursPerDay != null && ticket.allocationHoursPerDay !== '' ? Number(ticket.allocationHoursPerDay) : null;
+    const tTotal = ticket?.allocationTotalHours  != null && ticket.allocationTotalHours  !== '' ? Number(ticket.allocationTotalHours)  : null;
+    const mode   = ticket?.allocationMode === 'per_day' || ticket?.allocationMode === 'total'
+      ? ticket.allocationMode
+      : (tHpd != null && tTotal == null ? 'per_day' : 'total');
+    return {
+      allocationMode:       mode,
+      hoursPerDay:          mode === 'per_day' ? (tHpd ?? DEFAULT_ALLOC_HOURS) : null,
+      allocationTotalHours: mode === 'total'   ? (tTotal ?? DEFAULT_ALLOC_TOTAL) : null,
+    };
+  });
+  const [allocDerived, setAllocDerived] = useState({ hoursPerDay: null, totalHours: null, workingDays: null });
+  const [allocFrom, setAllocFrom] = useState(ticket?.allocationFrom || todayIso());
+  const [allocTo,   setAllocTo]   = useState(ticket?.allocationTo   || defaultAllocTo(ticket));
+  const [availability, setAvailability] = useState(null);   // GET /pm/users/:id/availability
+  const [availLoading, setAvailLoading] = useState(false);
 
   useEffect(() => {
     if (!selectedGroupId) { setGroupUsers(allUsers); return; }
@@ -2143,14 +2228,48 @@ function AssignModal({ ticket, groups, allUsers, submitting, onClose, onAssign }
       .catch(() => setGroupUsers(allUsers));
   }, [selectedGroupId, allUsers]);
 
+  // Capacity feedback for the selected agent over the chosen window
+  useEffect(() => {
+    const uid = selectedUser ? (selectedUser._id || selectedUser.id) : null;
+    if (!uid || !allocFrom || !allocTo || allocFrom > allocTo) { setAvailability(null); return; }
+    let alive = true;
+    setAvailLoading(true);
+    api.get(`/pm/users/${uid}/availability`, { params: { fromDate: allocFrom, toDate: allocTo } })
+      .then(res => { if (alive) setAvailability(res.data?.data ?? res.data ?? null); })
+      .catch(() => { if (alive) setAvailability(null); })
+      .finally(() => { if (alive) setAvailLoading(false); });
+    return () => { alive = false; };
+  }, [selectedUser, allocFrom, allocTo]);
+
   const filtered = groupUsers.filter(u =>
     !search.trim() || (u.name || '').toLowerCase().includes(search.toLowerCase())
   );
 
+  const isTotal      = alloc.allocationMode === 'total';
+  const rawNum       = Number(isTotal ? alloc.allocationTotalHours : alloc.hoursPerDay);
+  const hoursValid   = Number.isFinite(rawNum) && rawNum >= 0.5 && rawNum <= (isTotal ? 9999 : 12) && Math.round(rawNum * 2) === rawNum * 2;
+  // Derived per-day: the entered value in per_day mode, total ÷ working days in total mode (null until resolved)
+  const hoursNum     = isTotal ? allocDerived.hoursPerDay : rawNum;
+  const datesValid   = !!allocFrom && !!allocTo && allocFrom <= allocTo;
+  const capacity     = Number(availability?.capacity ?? 0);
+  const peakHours    = Number(availability?.peakHours ?? 0);
+  const freeHours    = Number(availability?.freeHours ?? 0);
+  const wouldExceed  = availability && hoursValid && hoursNum != null && capacity > 0 && (peakHours + hoursNum > capacity);
+  const round1       = (n) => Math.round(n * 10) / 10;
+
   const handleConfirm = () => {
-    if (!selectedUser) return;
+    if (!selectedUser || !hoursValid || !datesValid) return;
     const uid = selectedUser._id || selectedUser.id;
-    onAssign({ assigneeId: uid, assigneeName: selectedUser.name, groupId: selectedGroupId || null });
+    onAssign({
+      assigneeId:            uid,
+      assigneeName:          selectedUser.name,
+      groupId:               selectedGroupId || null,
+      allocationMode:        isTotal ? 'total' : 'per_day',
+      allocationHoursPerDay: hoursNum ?? null,
+      allocationTotalHours:  isTotal ? rawNum : null,
+      allocationFrom:        allocFrom,
+      allocationTo:          allocTo,
+    });
   };
 
   return (
@@ -2220,6 +2339,79 @@ function AssignModal({ ticket, groups, allUsers, submitting, onClose, onAssign }
               })
             )}
           </div>
+
+          {/* ── Effort allocation (Phase 3) ── */}
+          <div className="border-t border-gray-100 pt-4">
+            <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider mb-2">Effort allocation</p>
+            <div className="grid grid-cols-2 gap-2 mb-2">
+              <div>
+                <label className="block text-[11px] text-gray-500 mb-1">Start date</label>
+                <input
+                  type="date"
+                  value={allocFrom}
+                  onChange={e => setAllocFrom(e.target.value)}
+                  className="w-full px-2 py-1.5 border border-gray-200 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] text-gray-500 mb-1">End date</label>
+                <input
+                  type="date"
+                  value={allocTo}
+                  min={allocFrom || undefined}
+                  onChange={e => setAllocTo(e.target.value)}
+                  className="w-full px-2 py-1.5 border border-gray-200 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+            </div>
+            <AllocationTypeInput
+              compact
+              value={alloc}
+              onChange={next => setAlloc({
+                allocationMode:       next.allocationMode,
+                hoursPerDay:          next.hoursPerDay ?? null,
+                allocationTotalHours: next.allocationTotalHours ?? null,
+              })}
+              from={allocFrom || null}
+              to={allocTo || null}
+              capacity={capacity > 0 ? capacity : 8}
+              maxPerDay={12}
+              defaultMode="total"
+              disabled={submitting}
+              inputClassName={`w-full px-2 py-1.5 border rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 ${hoursValid ? 'border-gray-200' : 'border-red-300'}`}
+              onDerived={setAllocDerived}
+            />
+            {!hoursValid && (
+              <p className="text-[11px] text-red-500 mt-1">{isTotal ? 'Total hours must be at least 0.5 in steps of 0.5' : 'Hours must be between 0.5 and 12 in steps of 0.5'}</p>
+            )}
+            {!datesValid && allocFrom && allocTo && (
+              <p className="text-[11px] text-red-500 mt-1">Start date must be on or before end date</p>
+            )}
+
+            {/* Capacity feedback */}
+            {selectedUser && datesValid && (
+              <div className="mt-2">
+                {availLoading ? (
+                  <p className="text-[11px] text-gray-400">Checking capacity…</p>
+                ) : availability ? (
+                  <>
+                    <p className="text-[11px] text-gray-500">
+                      {round1(freeHours)}h free on their busiest day ({round1(peakHours)}h / {round1(capacity)}h committed)
+                    </p>
+                    {wouldExceed && (
+                      <div className="mt-1.5 flex items-start gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-2 text-[11px] text-amber-800">
+                        <HiOutlineExclamation className="w-3.5 h-3.5 flex-shrink-0 mt-px" />
+                        <span>
+                          Adding {round1(hoursNum)}h/day{isTotal ? ` (${round1(rawNum)}h total)` : ''} would put them at {round1(peakHours + hoursNum)}h / {round1(capacity)}h on{' '}
+                          {availability.overDays ? `${availability.overDays}` : 'some'} days — assignment is still allowed
+                        </span>
+                      </div>
+                    )}
+                  </>
+                ) : null}
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="flex justify-end gap-3 px-5 py-4 border-t border-gray-200">
@@ -2228,7 +2420,7 @@ function AssignModal({ ticket, groups, allUsers, submitting, onClose, onAssign }
           </button>
           <button
             onClick={handleConfirm}
-            disabled={!selectedUser || submitting}
+            disabled={!selectedUser || !hoursValid || !datesValid || submitting}
             className="px-5 py-2 bg-blue-600 text-white rounded-lg text-sm font-semibold hover:bg-blue-700 disabled:opacity-50 transition-colors"
           >
             {submitting ? 'Assigning...' : 'Assign'}

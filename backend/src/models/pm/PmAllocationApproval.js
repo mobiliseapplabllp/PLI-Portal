@@ -7,7 +7,12 @@ const PmAllocationApproval = sequelize.define('PmAllocationApproval', {
   userId:         { type: DataTypes.CHAR(36), allowNull: false },
   requestedById:  { type: DataTypes.CHAR(36), allowNull: false },
   approvedById:   { type: DataTypes.CHAR(36), allowNull: true },
-  allocationPct:  { type: DataTypes.TINYINT.UNSIGNED, allowNull: false },
+  // DB column is still NOT NULL (migration 027); every write sets both fields.
+  allocationPct:  { type: DataTypes.TINYINT.UNSIGNED, allowNull: true },
+  hoursPerDay:    { type: DataTypes.DECIMAL(3, 1), allowNull: true },
+  // What the requester typed: per_day (hoursPerDay) or total (allocationTotalHours ÷ working days)
+  allocationMode:       { type: DataTypes.ENUM('per_day', 'total'), allowNull: false, defaultValue: 'per_day' },
+  allocationTotalHours: { type: DataTypes.DECIMAL(6, 1), allowNull: true },
   fromDate:       { type: DataTypes.DATEONLY, allowNull: false },
   toDate:         { type: DataTypes.DATEONLY, allowNull: false },
   status:         { type: DataTypes.ENUM('pending','approved','rejected'), allowNull: false, defaultValue: 'pending' },

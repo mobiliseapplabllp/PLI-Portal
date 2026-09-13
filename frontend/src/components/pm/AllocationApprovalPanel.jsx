@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import api from '../../api/axios';
+import { formatAllocation } from './AllocationTypeInput';
 
 export default function AllocationApprovalPanel({ projectId, canManage }) {
   const [approvals, setApprovals] = useState([]);
@@ -46,7 +47,9 @@ export default function AllocationApprovalPanel({ projectId, canManage }) {
               {approval.requester?.name
                 ? `${approval.requester.name} is requesting capacity release`
                 : 'Another PM is requesting capacity release'}
-              {approval.allocationPct !== null && approval.allocationPct !== undefined
+              {formatAllocation(approval, 8)
+                ? ` (reduce to ${formatAllocation(approval, 8)})`
+                : approval.allocationPct != null
                 ? ` (reduce to ${approval.allocationPct}%)`
                 : ''}
             </p>

@@ -18,6 +18,10 @@ const PmSettings = sequelize.define(
     emailAlertOnRaidRaised: { type: DataTypes.BOOLEAN, defaultValue: false },
     helpdeskDailyReportEnabled: { type: DataTypes.BOOLEAN, defaultValue: false },
     helpdeskDailyReportTime: { type: DataTypes.STRING(8), defaultValue: '09:00' },
+    // Capacity per person per working day; allocation % is derived from this
+    workingHoursPerDay: { type: DataTypes.DECIMAL(3, 1), allowNull: false, defaultValue: 8.0 },
+    // Ordinals (1–5) of the Saturdays in a month that are working days, e.g. [2,4]
+    workingSaturdays: { type: DataTypes.JSON, allowNull: true, defaultValue: [2, 4] },
   },
   { tableName: 'pm_settings' }
 );

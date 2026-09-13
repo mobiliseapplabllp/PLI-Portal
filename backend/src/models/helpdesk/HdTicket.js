@@ -140,6 +140,36 @@ const HdTicket = sequelize.define('HdTicket', {
     field:     'assignee_id',
     comment:   'Primary assignee (legacy single-assignee). See hd_ticket_assignees for multi-assignee.',
   },
+  // ── Assignee effort allocation (Phase 3) ────────────────────────────────────
+  // Stacks against the assignee's project allocations on the same day via the
+  // capacity engine. NULL hours = not counted.
+  allocationHoursPerDay: {
+    type:      DataTypes.DECIMAL(3, 1),
+    allowNull: true,
+    field:     'allocation_hours_per_day',
+  },
+  allocationFrom: {
+    type:      DataTypes.DATEONLY,
+    allowNull: true,
+    field:     'allocation_from',
+  },
+  allocationTo: {
+    type:      DataTypes.DATEONLY,
+    allowNull: true,
+    field:     'allocation_to',
+  },
+  // 'total' (default for tickets) or 'per_day' — what the assignor typed.
+  allocationMode: {
+    type:         DataTypes.ENUM('per_day', 'total'),
+    allowNull:    false,
+    defaultValue: 'total',
+    field:        'allocation_mode',
+  },
+  allocationTotalHours: {
+    type:      DataTypes.DECIMAL(6, 1),
+    allowNull: true,
+    field:     'allocation_total_hours',
+  },
   groupId: {
     type:      DataTypes.INTEGER,
     allowNull: true,

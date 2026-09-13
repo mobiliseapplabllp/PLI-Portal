@@ -224,6 +224,7 @@ const pmNavItems = {
       children: [
         { to: '/pm/projects',        label: 'All Projects',    icon: HiOutlineFolderOpen },
         { to: '/pm/projects/create', label: 'Create Project',  icon: HiOutlinePlus },
+        { to: '/pm/utilisation',     label: 'Resource Utilisation', icon: HiOutlineChartBar },
       ],
     },
     {
@@ -261,6 +262,7 @@ const pmNavItems = {
       children: [
         { to: '/pm/projects',        label: 'All Projects',   icon: HiOutlineFolderOpen },
         { to: '/pm/projects/create', label: 'Create Project', icon: HiOutlinePlus },
+        { to: '/pm/utilisation',     label: 'Resource Utilisation', icon: HiOutlineChartBar },
       ],
     },
     {
@@ -341,7 +343,8 @@ const pmNavItems = {
       label: 'Project Management',
       icon: HiOutlineFolderOpen,
       children: [
-        { to: '/pm/projects', label: 'All Projects', icon: HiOutlineFolderOpen },
+        { to: '/pm/projects',    label: 'All Projects',         icon: HiOutlineFolderOpen },
+        { to: '/pm/utilisation', label: 'Resource Utilisation', icon: HiOutlineChartBar },
       ],
     },
     {
@@ -358,7 +361,8 @@ const pmNavItems = {
       label: 'Project Management',
       icon: HiOutlineFolderOpen,
       children: [
-        { to: '/pm/projects', label: 'All Projects', icon: HiOutlineFolderOpen },
+        { to: '/pm/projects',    label: 'All Projects',         icon: HiOutlineFolderOpen },
+        { to: '/pm/utilisation', label: 'Resource Utilisation', icon: HiOutlineChartBar },
       ],
     },
     {
@@ -377,6 +381,7 @@ const pmNavItems = {
       children: [
         { to: '/pm/projects',        label: 'All Projects',   icon: HiOutlineFolderOpen },
         { to: '/pm/projects/create', label: 'Create Project', icon: HiOutlinePlus },
+        { to: '/pm/utilisation',     label: 'Resource Utilisation', icon: HiOutlineChartBar },
       ],
     },
     {

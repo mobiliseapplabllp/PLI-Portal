@@ -8,6 +8,7 @@ import { getProjectTypesApi, getPmStatusesApi, getMemberRolesApi } from '../../a
 import api from '../../api/axios';
 import { HiOutlineArrowLeft, HiOutlinePlus, HiOutlineX, HiOutlineUserGroup, HiOutlineUserAdd } from 'react-icons/hi';
 import ResourceAvailabilityCard from '../../components/pm/ResourceAvailabilityCard';
+import AllocationTypeInput, { formatAllocation } from '../../components/pm/AllocationTypeInput';
 
 // ── Role badge colour — default for unlisted roles ────────────────────────────
 const DEFAULT_BADGE = 'bg-gray-50 text-gray-600 border-gray-200';
@@ -61,9 +62,10 @@ export default function CreateProject() {
   const [saving,       setSaving]       = useState(false);
   const [loading,      setLoading]      = useState(true);
 
-  const DRAFT_EMPTY = { userId: '', role: '', allocationPct: '', allocationFrom: '', allocationTo: '' };
+  const DRAFT_EMPTY = { userId: '', role: '', allocationMode: 'per_day', hoursPerDay: '', allocationTotalHours: '', allocationFrom: '', allocationTo: '' };
   const [teamMembers,    setTeamMembers]    = useState([]);
   const [memberDraft,    setMemberDraft]    = useState(DRAFT_EMPTY);
+  const [draftDerived,   setDraftDerived]   = useState({ hoursPerDay: null, totalHours: null, workingDays: null }); // per-day derived by AllocationTypeInput
   const [showMemberForm, setShowMemberForm] = useState(false);
 
   const [form, setForm] = useState({
@@ -163,14 +165,21 @@ export default function CreateProject() {
 
       for (const m of teamMembers) {
         try {
+          const mode = m.allocationMode === 'total' ? 'total' : 'per_day';
           await addMemberApi(newId, {
             userId:        m.userId,
             role:          m.role,
-            allocationPct:  m.allocationPct  ? Number(m.allocationPct)  : null,
+            allocationMode: mode,
+            hoursPerDay:    mode === 'per_day' && m.hoursPerDay !== '' && m.hoursPerDay != null ? Number(m.hoursPerDay) : null,
+            allocationTotalHours: mode === 'total' && m.allocationTotalHours !== '' && m.allocationTotalHours != null ? Number(m.allocationTotalHours) : null,
             allocationFrom: m.allocationFrom || null,
             allocationTo:   m.allocationTo   || null,
           });
-        } catch { /* non-fatal */ }
+        } catch (memberErr) {
+          // Non-fatal — the project exists; surface the problem and keep going with the rest
+          const msg = memberErr.response?.data?.message || memberErr.message || 'Failed to add member';
+          toast.error(`${m.userName || 'Member'}: ${msg}`);
+        }
       }
       toast.success('Project created successfully');
       navigate(`/pm/projects/${newId}`);
@@ -360,8 +369,8 @@ export default function CreateProject() {
                     <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded border ${roleBadgeCls()}`}>
                       {m.role.split('/')[0].split(' or ')[0].trim()}
                     </span>
-                    {m.allocationPct && (
-                      <span className="text-[10px] text-gray-400 font-semibold">{m.allocationPct}%</span>
+                    {formatAllocation(m, 8) && (
+                      <span className="text-[10px] text-gray-400 font-semibold">{formatAllocation(m, 8)}</span>
                     )}
                     <button
                       type="button"
@@ -505,17 +514,23 @@ export default function CreateProject() {
                 </select>
               </div>
 
-              <div className="grid grid-cols-3 gap-3">
-                <div>
-                  <Lbl>Allocation %</Lbl>
-                  <input
-                    type="number" min="1" max="100"
-                    value={memberDraft.allocationPct}
-                    onChange={e => setDraft('allocationPct', e.target.value)}
-                    placeholder="100"
-                    className={inp}
-                  />
-                </div>
+              <AllocationTypeInput
+                value={memberDraft}
+                onChange={next => setMemberDraft(p => ({
+                  ...p,
+                  allocationMode:       next.allocationMode,
+                  hoursPerDay:          next.hoursPerDay ?? '',
+                  allocationTotalHours: next.allocationTotalHours ?? '',
+                }))}
+                from={memberDraft.allocationFrom || null}
+                to={memberDraft.allocationTo || null}
+                capacity={8}
+                maxPerDay={12}
+                defaultMode="per_day"
+                inputClassName={inp}
+                onDerived={setDraftDerived}
+              />
+              <div className="grid grid-cols-2 gap-3">
                 <div>
                   <Lbl>From</Lbl>
                   <input
@@ -543,10 +558,10 @@ export default function CreateProject() {
                     userId={memberDraft.userId}
                     fromDate={memberDraft.allocationFrom || null}
                     toDate={memberDraft.allocationTo || null}
-                    newPct={memberDraft.allocationPct ? Number(memberDraft.allocationPct) : null}
+                    newHoursPerDay={draftDerived.hoursPerDay != null ? Number(draftDerived.hoursPerDay) : null}
                     onSuggestionSelect={(suggestion) => {
-                      if (suggestion.type === 'reduce_pct' && suggestion.suggestedPct) {
-                        setMemberDraft(d => ({ ...d, allocationPct: String(suggestion.suggestedPct) }));
+                      if (suggestion.type === 'reduce_hours' && suggestion.suggestedHoursPerDay != null) {
+                        setMemberDraft(d => ({ ...d, allocationMode: 'per_day', hoursPerDay: String(suggestion.suggestedHoursPerDay), allocationTotalHours: '' }));
                       }
                       if (suggestion.type === 'shift_dates' && suggestion.suggestedFromDate) {
                         setMemberDraft(d => ({ ...d, allocationFrom: suggestion.suggestedFromDate }));

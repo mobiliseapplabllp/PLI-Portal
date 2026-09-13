@@ -1,6 +1,9 @@
 const { Op } = require('sequelize');
 const projectService = require('../../services/pm/project.service');
+const pmSettingsService = require('../../services/pm/pmSettings.service');
 const { sendSuccess } = require('../../utils/response');
+const { AllocationConflictError, ValidationError } = require('../../utils/errors');
+const { checkConflict, summarise, toPct, toDate: toLocalDate, resolveAllocation } = require('../../utils/capacityEngine');
 
 const getProjects = async (req, res, next) => {
   try { sendSuccess(res, await projectService.getProjects(req.query, req.user)); }
@@ -59,6 +62,21 @@ const getProjectSummary = async (req, res, next) => {
   catch (e) { next(e); }
 };
 
+// ── Allocation error mapping ─────────────────────────────────────────────────
+// The capacity engine raises AllocationConflictError (409) from the service so
+// the check cannot be bypassed; the controller only maps it to the API body.
+// hoursPerDay validation (400) uses the flat { success, message } shape the
+// member endpoints have always used.
+const mapAllocationError = (e, res, next) => {
+  if (e instanceof AllocationConflictError) {
+    return res.status(409).json({ success: false, message: e.message, conflict: e.conflict });
+  }
+  if (e instanceof ValidationError) {
+    return res.status(400).json({ success: false, message: e.message });
+  }
+  return next(e);
+};
+
 // Members
 const getMembers = async (req, res, next) => {
   try { sendSuccess(res, await projectService.getMembers(req.params.id, req.user)); }
@@ -66,10 +84,15 @@ const getMembers = async (req, res, next) => {
 };
 const addMember = async (req, res, next) => {
   try { sendSuccess(res, await projectService.addMember(req.params.id, req.body, req.user), 'Member added', 201); }
-  catch (e) { next(e); }
+  catch (e) { mapAllocationError(e, res, next); }
 };
 const updateMember = async (req, res, next) => {
   try { sendSuccess(res, await projectService.updateMember(req.params.id, req.params.memberId, req.body, req.user), 'Member updated'); }
+  catch (e) { mapAllocationError(e, res, next); }
+};
+// PATCH /pm/projects/:id/members/:memberId/confirm-hours
+const confirmMemberHours = async (req, res, next) => {
+  try { sendSuccess(res, await projectService.confirmMemberHours(req.params.id, req.params.memberId, req.user), 'Hours confirmed'); }
   catch (e) { next(e); }
 };
 const removeMember = async (req, res, next) => {
@@ -91,78 +114,144 @@ const removeRecipient = async (req, res, next) => {
   catch (e) { next(e); }
 };
 
-// GET /pm/projects/:id/allocation-preview
-// Returns each member's allocations across all their projects in a given date range
+// ── Allocation (Phase 0: hours/day) ──────────────────────────────────────────
+
+const { effectiveHours, toAllocation, INACTIVE_PROJECT_STATUSES } = projectService;
+
+/** True when the allocation is active on a local calendar date. */
+const activeOn = (alloc, date) => {
+  const from = toLocalDate(alloc.allocationFrom);
+  const to   = toLocalDate(alloc.allocationTo);
+  return (from === null || date >= from) && (to === null || date <= to);
+};
+
+/** True when the allocation overlaps the [from, to] window (open ends always overlap). */
+const overlapsWindow = (alloc, from, to) => {
+  const aFrom = toLocalDate(alloc.allocationFrom);
+  const aTo   = toLocalDate(alloc.allocationTo);
+  return (aTo === null || aTo >= from) && (aFrom === null || aFrom <= to);
+};
+
+/** Later of two local dates (null = unbounded). */
+const laterOf = (a, b) => (a && b ? (a > b ? a : b) : (a || b));
+const earlierOf = (a, b) => (a && b ? (a < b ? a : b) : (a || b));
+
+/** Round to the nearest 0.5. */
+const half = (v) => Math.round(v * 2) / 2;
+
+/** Build the standard availability payload for one user from their active allocations. */
+const buildAvailability = (allocations, calendar, from, to) => {
+  const s = summarise(allocations, calendar, from, to, 30);
+  return {
+    capacity:        s.capacity,
+    peakHours:       s.peakHours,
+    avgHours:        s.avgHours,
+    freeHours:       s.freeHours,
+    isOverAllocated: s.isOverAllocated,
+    nextFreeDate:    s.nextFreeDate,
+    projectCount:    s.projectCount,
+    totalCommitted:  s.peakHours,   // legacy alias
+    freeCapacity:    s.freeHours,   // legacy alias
+  };
+};
+
+// GET /pm/projects/:id/allocation-preview?fromDate&toDate
+// Returns each member's allocations across all their projects plus the days
+// on which they are over capacity within the requested window.
 const getAllocationPreview = async (req, res, next) => {
   try {
     const { fromDate, toDate } = req.query;
     const projectId = req.params.id;
 
-    // Get members of this project with their allocations
     const ProjectMember = require('../../models/pm/ProjectMember');
     const Project = require('../../models/pm/Project');
     const User = require('../../models/User');
 
+    // Calendar loaded ONCE per request (Saturday policy + holidays), shared by every member below
+    const calendar = await pmSettingsService.getCalendar();
+    const capacity = calendar.hoursPerDay;
+
     const members = await ProjectMember.findAll({
       where: { projectId },
-      include: [{ model: User, as: 'user', attributes: ['id','name','email','designation'] }],
+      include: [{ model: User, as: 'user', attributes: ['id', 'name', 'email', 'designation'] }],
     });
+    if (!members.length) return sendSuccess(res, []);
 
-    // For each member, find all their allocations across all projects
-    const preview = await Promise.all(members.map(async (member) => {
-      const allAllocations = await ProjectMember.findAll({
-        where: {
-          userId: member.userId,
-          allocationPct: { [Op.not]: null },
-        },
-        include: [{ model: Project, as: 'project', attributes: ['id','name'] }],
-      });
+    // All active memberships for these users in one query
+    const userIds = [...new Set(members.map(m => m.userId))];
+    const rows = await ProjectMember.findAll({
+      where: { userId: userIds },
+      include: [{
+        model: Project, as: 'project',
+        attributes: ['id', 'name', 'status', 'managerId'],
+        where: { status: { [Op.notIn]: INACTIVE_PROJECT_STATUSES } },
+        required: true,
+      }],
+    });
+    const byUser = {};
+    for (const r of rows) (byUser[String(r.userId)] ||= []).push(toAllocation(r, capacity));
 
-      // Calculate conflicts: weeks where total > 100%
-      const conflicts = [];
-      if (fromDate && toDate && allAllocations.length > 0) {
-        const start = new Date(fromDate);
-        const end = new Date(toDate);
-        const current = new Date(start);
-        while (current <= end) {
-          const weekTotal = allAllocations
-            .filter(a => {
-              if (!a.allocationFrom || !a.allocationTo) return false;
-              return new Date(a.allocationFrom) <= current && new Date(a.allocationTo) >= current;
-            })
-            .reduce((sum, a) => sum + (a.allocationPct || 0), 0);
+    const winFrom = toLocalDate(fromDate);
+    const winTo   = toLocalDate(toDate);
 
-          if (weekTotal > 100) {
-            conflicts.push({
-              date: current.toISOString().split('T')[0],
-              totalPct: weekTotal,
-              projects: allAllocations
-                .filter(a => a.allocationFrom && a.allocationTo &&
-                  new Date(a.allocationFrom) <= current && new Date(a.allocationTo) >= current)
-                .map(a => ({ projectId: a.projectId, projectName: a.project?.name, pct: a.allocationPct }))
-            });
-          }
-          current.setDate(current.getDate() + 1); // move by day
-        }
+    const preview = members.map((member) => {
+      const all = byUser[String(member.userId)] || [];
+      const others = all.filter(a => String(a.projectId) !== String(projectId));
+      const hoursPerDay = effectiveHours(member, capacity);
+
+      // Window = this member's allocation dates clipped to the requested range
+      const from = laterOf(toLocalDate(member.allocationFrom), winFrom);
+      const to   = earlierOf(toLocalDate(member.allocationTo), winTo);
+      const emptyWindow = from && to && from > to;
+
+      let result = { ok: true, ranges: [], peak: 0 };
+      if (hoursPerDay != null && !emptyWindow) {
+        result = checkConflict(
+          others,
+          { hoursPerDay, allocationFrom: from, allocationTo: to, projectId },
+          calendar
+        );
       }
+
+      const conflicts = result.ranges.map(r => {
+        const day = toLocalDate(r.from);
+        return {
+          from: r.from, to: r.to, days: r.days, peak: r.peak,
+          projects: all
+            .filter(a => a.hoursPerDay != null && activeOn(a, day))
+            .map(a => ({ projectId: a.projectId, projectName: a.projectName, hoursPerDay: a.hoursPerDay })),
+        };
+      });
 
       return {
         userId: member.userId,
-        user: member.user,
-        allocationPct: member.allocationPct,
+        user:   member.user,
+        name:   member.user?.name,
+        email:  member.user?.email,
+        role:   member.role,
+        hoursPerDay,
+        allocationPct:  toPct(hoursPerDay, capacity),
+        isEstimated:    member.hoursConfirmed !== true,
+        isUnset:        hoursPerDay == null,
         allocationFrom: member.allocationFrom,
-        allocationTo: member.allocationTo,
-        allAllocations: allAllocations.map(a => ({
-          projectId: a.projectId,
-          projectName: a.project?.name,
-          pct: a.allocationPct,
-          from: a.allocationFrom,
-          to: a.allocationTo,
+        allocationTo:   member.allocationTo,
+        capacity,
+        allAllocations: all.map(a => ({
+          projectId:      a.projectId,
+          projectName:    a.projectName,
+          hoursPerDay:    a.hoursPerDay,
+          pct:            a.allocationPct,
+          allocationMode:       a.allocationMode,
+          allocationTotalHours: a.allocationTotalHours,
+          allocationFrom: a.allocationFrom,
+          allocationTo:   a.allocationTo,
         })),
+        peakHours:       Math.round(result.peak * 10) / 10,
+        isOverAllocated: !result.ok,
         conflicts,
         hasConflict: conflicts.length > 0,
       };
-    }));
+    });
 
     sendSuccess(res, preview);
   } catch (e) { next(e); }
@@ -171,12 +260,10 @@ const getAllocationPreview = async (req, res, next) => {
 // POST /pm/projects/:id/allocation-approval
 const requestAllocationApproval = async (req, res, next) => {
   try {
-    const { userId, allocationPct, fromDate, toDate, reason } = req.body;
-    // Validate allocationPct
-    const pct = Number(allocationPct);
-    if (!Number.isFinite(pct) || pct < 1 || pct > 100) {
-      return res.status(400).json({ success: false, message: 'allocationPct must be a number between 1 and 100' });
-    }
+    const { userId, fromDate, toDate, reason } = req.body;
+    const calendar = await pmSettingsService.getCalendar();
+    const capacity = calendar.hoursPerDay;
+
     // Validate dates
     if (!fromDate || isNaN(new Date(fromDate).getTime())) {
       return res.status(400).json({ success: false, message: 'Invalid fromDate' });
@@ -187,6 +274,27 @@ const requestAllocationApproval = async (req, res, next) => {
     if (new Date(fromDate) > new Date(toDate)) {
       return res.status(400).json({ success: false, message: 'fromDate must be before toDate' });
     }
+
+    // Allocation: per_day (hoursPerDay, or legacy allocationPct → converted) or total (allocationTotalHours)
+    const blank = (v) => v === undefined || v === null || v === '';
+    let hoursPerDay = req.body.hoursPerDay;
+    if (blank(hoursPerDay) && !blank(req.body.allocationPct)) {
+      hoursPerDay = half(Number(req.body.allocationPct) * capacity / 100);
+    }
+    let mode = req.body.allocationMode;
+    if (blank(mode)) mode = (blank(hoursPerDay) && !blank(req.body.allocationTotalHours)) ? 'total' : 'per_day';
+    if (mode !== 'per_day' && mode !== 'total') {
+      return res.status(400).json({ success: false, message: "allocationMode must be 'per_day' or 'total'" });
+    }
+    const resolved = resolveAllocation({
+      allocationMode: mode,
+      hoursPerDay,
+      allocationTotalHours: req.body.allocationTotalHours,
+      allocationFrom: fromDate,
+      allocationTo:   toDate,
+    }, calendar);
+    if (!resolved.ok) return res.status(400).json({ success: false, message: resolved.error });
+    const hours = resolved.hoursPerDay;
     // Validate userId exists
     if (!userId) {
       return res.status(400).json({ success: false, message: 'userId is required' });
@@ -202,29 +310,16 @@ const requestAllocationApproval = async (req, res, next) => {
       projectId: req.params.id,
       userId,
       requestedById: req.user._id || req.user.id,
-      allocationPct,
+      allocationMode:       resolved.mode,
+      hoursPerDay:          hours,
+      allocationTotalHours: resolved.totalHours,
+      allocationPct: Math.round(toPct(hours, capacity)),   // DB column is NOT NULL
       fromDate,
       toDate,
       reason,
       status: 'pending',
     });
     sendSuccess(res, approval, 'Approval request submitted', 201);
-  } catch (e) { next(e); }
-};
-
-// PATCH /pm/projects/:id/allocation-approval/:approvalId
-const respondAllocationApproval = async (req, res, next) => {
-  try {
-    const { status, approverNote } = req.body; // status: 'approved' | 'rejected'
-    const PmAllocationApproval = require('../../models/pm/PmAllocationApproval');
-    const approval = await PmAllocationApproval.findByPk(req.params.approvalId);
-    if (!approval) return res.status(404).json({ success: false, message: 'Approval not found' });
-    await approval.update({
-      status,
-      approverNote,
-      approvedById: req.user._id || req.user.id,
-    });
-    sendSuccess(res, approval, `Approval ${status}`);
   } catch (e) { next(e); }
 };
 
@@ -289,10 +384,21 @@ const respondToAllocationApproval = async (req, res, next) => {
       approvedById: req.user._id || req.user.id,
     });
 
-    // If approved, update the member's allocation in this project to the agreed percentage
-    if (action === 'approve' && approval.allocationPct !== null) {
+    // If approved, set the member's allocation on this project to the agreed hours.
+    // Approvals created before migration 039 carry only allocationPct → convert.
+    const capacity = (await pmSettingsService.getCalendar()).hoursPerDay;
+    const hours = approval.hoursPerDay != null
+      ? Number(approval.hoursPerDay)
+      : (approval.allocationPct != null ? half(Number(approval.allocationPct) * capacity / 100) : null);
+    if (action === 'approve' && hours != null) {
       await ProjectMember.update(
-        { allocationPct: approval.allocationPct },
+        {
+          allocationMode:       approval.allocationMode || 'per_day',
+          hoursPerDay:          hours,
+          allocationTotalHours: approval.allocationTotalHours == null ? null : Number(approval.allocationTotalHours),
+          allocationPct:        Math.round(toPct(hours, capacity)),
+          hoursConfirmed:       true,
+        },
         { where: { projectId: approval.projectId, userId: approval.userId } }
       );
     }
@@ -301,115 +407,79 @@ const respondToAllocationApproval = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
-// GET /pm/users/:userId/availability
+/** Suggestions offered when a user is over capacity for a requested window. */
+const buildSuggestions = (allocations, relevant, summary, capacity, reqUser) => {
+  const suggestions = [];
+
+  // 1. Reduce hours/day on the new assignment
+  const remaining = Math.max(0.5, half(capacity - summary.peakHours));
+  suggestions.push({
+    type: 'reduce_hours',
+    label: 'Reduce hours per day',
+    description: `Reduce the new assignment to ${remaining} hrs/day to stay within ${capacity}h capacity`,
+    suggestedHoursPerDay: remaining,
+  });
+
+  // 2. Shift start date to the day after the latest allocationTo
+  const latestEnd = allocations
+    .map(a => toLocalDate(a.allocationTo))
+    .filter(Boolean)
+    .sort((a, b) => b - a)[0];
+  if (latestEnd) {
+    const s = new Date(latestEnd);
+    s.setDate(s.getDate() + 1);
+    const isoDate = `${s.getFullYear()}-${String(s.getMonth() + 1).padStart(2, '0')}-${String(s.getDate()).padStart(2, '0')}`;
+    suggestions.push({
+      type: 'shift_dates',
+      label: 'Shift start date',
+      description: `Start this assignment from ${isoDate} when capacity becomes available`,
+      suggestedFromDate: isoDate,
+    });
+  }
+
+  // 3. Free up from an existing project (requires that project's manager approval)
+  const me = String(reqUser?._id || reqUser?.id);
+  const freeable = relevant.filter(a => a.projectManagerId && String(a.projectManagerId) !== me);
+  if (freeable.length > 0) {
+    suggestions.push({
+      type: 'request_approval',
+      label: 'Request capacity release',
+      description: `Request the manager of ${freeable[0].projectName} to temporarily reduce this person's allocation on that project`,
+      targetProjectId: freeable[0].projectId,
+      targetProjectName: freeable[0].projectName,
+      targetManagerId: freeable[0].projectManagerId,
+    });
+  }
+  return suggestions;
+};
+
+// GET /pm/users/:userId/availability?fromDate&toDate
 const getUserAvailability = async (req, res, next) => {
   try {
     const { userId } = req.params;
     const { fromDate, toDate } = req.query;
 
-    const ProjectMember = require('../../models/pm/ProjectMember');
-    const Project = require('../../models/pm/Project');
+    const calendar = await pmSettingsService.getCalendar();
+    const capacity = calendar.hoursPerDay;
+    const allocations = await projectService.getOtherActiveAllocations(userId, calendar);
 
-    // Get all active project memberships for this user
-    const memberships = await ProjectMember.findAll({
-      where: { userId },
-      include: [{
-        model: Project,
-        as: 'project',
-        attributes: ['id', 'name', 'status', 'startDate', 'endDate', 'managerId'],
-        where: { status: { [Op.notIn]: ['completed', 'cancelled', 'closed'] } },
-        required: true,
-      }],
-    });
+    const from = toLocalDate(fromDate);
+    const to   = toLocalDate(toDate);
+    const hasWindow = Boolean(from && to);
 
-    // Calculate allocation stats
-    const allocations = memberships.map(m => {
-      const pct = m.allocationPct !== null && m.allocationPct !== undefined ? m.allocationPct : 100;
-      return {
-        projectId: m.projectId,
-        projectName: m.project?.name,
-        projectStatus: m.project?.status,
-        projectManagerId: m.project?.managerId,
-        allocationPct: pct,
-        allocationFrom: m.allocationFrom,
-        allocationTo: m.allocationTo,
-        allocationStatus: m.allocationStatus,
-        isAssumed100: m.allocationPct === null || m.allocationPct === undefined,
-      };
-    });
+    // Allocations overlapping the requested range (open-ended rows always overlap)
+    const relevant = hasWindow ? allocations.filter(a => overlapsWindow(a, from, to)) : allocations;
 
-    // Filter to date range if provided (allocations overlapping the requested range)
-    let relevantAllocations = allocations;
-    if (fromDate && toDate) {
-      const from = new Date(fromDate);
-      const to = new Date(toDate);
-      relevantAllocations = allocations.filter(a => {
-        if (!a.allocationFrom || !a.allocationTo) return true; // no dates = assume overlaps
-        return new Date(a.allocationTo) >= from && new Date(a.allocationFrom) <= to;
-      });
-    }
+    const summary = buildAvailability(allocations, calendar, hasWindow ? from : null, hasWindow ? to : null);
 
-    // Sum total committed %
-    const totalCommitted = relevantAllocations.reduce((sum, a) => sum + a.allocationPct, 0);
-    const freeCapacity = Math.max(0, 100 - totalCommitted);
-    const isOverAllocated = totalCommitted > 100;
-
-    // Find next free date (earliest allocationTo across all active memberships)
-    const nextFreeDate = allocations
-      .filter(a => a.allocationTo)
-      .map(a => new Date(a.allocationTo))
-      .sort((a, b) => a - b)[0]?.toISOString().slice(0, 10) || null;
-
-    // Conflict suggestions (if over-allocated for the requested range)
-    const suggestions = [];
-    if (isOverAllocated && fromDate && toDate) {
-      const excess = totalCommitted - 100;
-
-      // Suggestion 1: Reduce allocation %
-      suggestions.push({
-        type: 'reduce_pct',
-        label: 'Reduce allocation percentage',
-        description: `Reduce the new assignment to ${Math.max(5, 100 - excess)}% to stay within 100% capacity`,
-        suggestedPct: Math.max(5, 100 - excess),
-      });
-
-      // Suggestion 2: Shift dates
-      const latestEnd = allocations
-        .filter(a => a.allocationTo)
-        .map(a => new Date(a.allocationTo))
-        .sort((a, b) => b - a)[0];
-      if (latestEnd) {
-        const suggestedStart = new Date(latestEnd);
-        suggestedStart.setDate(suggestedStart.getDate() + 1);
-        suggestions.push({
-          type: 'shift_dates',
-          label: 'Shift start date',
-          description: `Start this assignment from ${suggestedStart.toISOString().slice(0, 10)} when capacity becomes available`,
-          suggestedFromDate: suggestedStart.toISOString().slice(0, 10),
-        });
-      }
-
-      // Suggestion 3: Free up from existing project (requires manager approval)
-      const freeable = relevantAllocations.filter(a => a.projectManagerId && a.projectManagerId !== (req.user?._id || req.user?.id));
-      if (freeable.length > 0) {
-        suggestions.push({
-          type: 'request_approval',
-          label: 'Request capacity release',
-          description: `Request the manager of ${freeable[0].projectName} to temporarily reduce this person's allocation on that project`,
-          targetProjectId: freeable[0].projectId,
-          targetProjectName: freeable[0].projectName,
-          targetManagerId: freeable[0].projectManagerId,
-        });
-      }
-    }
+    const suggestions = (summary.isOverAllocated && hasWindow)
+      ? buildSuggestions(allocations, relevant, summary, capacity, req.user)
+      : [];
 
     return sendSuccess(res, {
       userId,
-      allocations: relevantAllocations,
-      totalCommitted,
-      freeCapacity,
-      isOverAllocated,
-      nextFreeDate,
+      allocations: relevant,
+      ...summary,
       hasNoData: allocations.length === 0,
       suggestions,
     }, 'User availability fetched');
@@ -427,6 +497,10 @@ const getMembersAvailability = async (req, res, next) => {
     const Project = require('../../models/pm/Project');
     const User = require('../../models/User');
 
+    // Calendar loaded ONCE per request, shared by every member below
+    const calendar = await pmSettingsService.getCalendar();
+    const capacity = calendar.hoursPerDay;
+
     // Step 1: Get all userIds on this project
     const thisProjectMembers = await ProjectMember.findAll({
       where: { projectId: id },
@@ -437,79 +511,51 @@ const getMembersAvailability = async (req, res, next) => {
     if (userIds.length === 0) return sendSuccess(res, [], 'No members');
 
     // Step 2: Get ALL active project memberships for all those users in ONE query
-    // Include User so the response carries name/email/designation without extra round-trips.
     const allMemberships = await ProjectMember.findAll({
       where: { userId: userIds },
       include: [
         {
-          model: Project,
-          as: 'project',
+          model: Project, as: 'project',
           attributes: ['id', 'name', 'status', 'managerId'],
-          where: { status: { [Op.notIn]: ['completed', 'cancelled', 'closed'] } },
+          where: { status: { [Op.notIn]: INACTIVE_PROJECT_STATUSES } },
           required: true,
         },
-        {
-          model: User,
-          as: 'user',
-          attributes: ['id', 'name', 'email', 'designation'],
-          required: false,
-        },
+        { model: User, as: 'user', attributes: ['id', 'name', 'email', 'designation'], required: false },
       ],
     });
 
     // Step 3: Group by userId
     const byUser = {};
-    for (const uid of userIds) byUser[uid] = [];
+    for (const uid of userIds) byUser[String(uid)] = [];
     for (const m of allMemberships) {
       const uid = String(m.userId);
       if (byUser[uid]) byUser[uid].push(m);
     }
 
-    // Step 4: Compute stats per user
+    // Step 4: Compute stats per user (today + 30 days)
     const result = userIds.map(userId => {
       const memberships = byUser[String(userId)] || [];
 
       if (memberships.length === 0) {
-        return { userId, hasNoData: true, totalCommitted: 0, freeCapacity: 100, allocations: [], nextFreeDate: null, isOverAllocated: false };
+        return {
+          userId, hasNoData: true, capacity,
+          peakHours: 0, avgHours: 0, freeHours: capacity,
+          totalCommitted: 0, freeCapacity: capacity,
+          allocations: [], nextFreeDate: null, isOverAllocated: false, projectCount: 0,
+          user: null,
+        };
       }
 
-      const allocations = memberships.map(m => {
-        const pct = (m.allocationPct !== null && m.allocationPct !== undefined) ? Number(m.allocationPct) : 100;
-        return {
-          projectId: m.projectId,
-          projectName: m.project?.name || 'Unknown',
-          allocationPct: pct,
-          allocationFrom: m.allocationFrom,
-          allocationTo: m.allocationTo,
-          isAssumed100: (m.allocationPct === null || m.allocationPct === undefined),
-        };
-      });
-
-      const totalCommitted = allocations.reduce((sum, a) => sum + a.allocationPct, 0);
-      const freeCapacity = Math.max(0, 100 - totalCommitted);
-      const isOverAllocated = totalCommitted > 100;
-
-      // Next free date: earliest allocationTo across ALL memberships (including current project)
-      // for consistency with getUserAvailability
-      const futureDates = allocations
-        .filter(a => a.allocationTo)
-        .map(a => new Date(a.allocationTo))
-        .sort((a, b) => a - b);
-      const nextFreeDate = futureDates[0]?.toISOString().slice(0, 10) || null;
-
-      // Attach user identity from the first membership (all share the same user)
+      const allocations = memberships.map(m => toAllocation(m, calendar));
+      const summary = buildAvailability(allocations, calendar, null, null);
       const userIdentity = memberships[0]?.user?.toJSON ? memberships[0].user.toJSON() : memberships[0]?.user || null;
 
       return {
         userId,
         user: userIdentity,
         hasNoData: false,
-        totalCommitted,
-        freeCapacity,
-        isOverAllocated,
+        ...summary,
         allocations,
-        nextFreeDate,
-        projectCount: allocations.length,
       };
     });
 
@@ -519,11 +565,9 @@ const getMembersAvailability = async (req, res, next) => {
 
 module.exports = {
   getProjects, getProjectById, createProject, updateProject, deleteProject, getProjectSummary,
-  getMembers, addMember, updateMember, removeMember,
+  getMembers, addMember, updateMember, confirmMemberHours, removeMember,
   getRecipients, addRecipient, removeRecipient,
   getAllocationPreview, requestAllocationApproval,
-  // respondAllocationApproval (line ~216) intentionally omitted — it is an
-  // incomplete duplicate of respondToAllocationApproval; only the latter is exported.
   getProjectAllocationApprovals, respondToAllocationApproval,
   getUserAvailability,
   getMembersAvailability,

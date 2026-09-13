@@ -22,6 +22,7 @@ const Task                       = require('./pm/Task');
 const DailyStatusLog             = require('./pm/DailyStatusLog');
 const ProjectNotificationRecipient = require('./pm/ProjectNotificationRecipient');
 const PmSettings                 = require('./pm/PmSettings');
+const PmHoliday                  = require('./pm/PmHoliday');
 const PmDocument                 = require('./pm/PmDocument');
 // Phase 2 new models
 const PmProjectType              = require('./pm/PmProjectType');
@@ -213,7 +214,7 @@ SurveyDispatchApprovalFeedback.belongsTo(SurveyQuestion, { foreignKey: 'surveyQu
 
 // Export PM models so other files can import from associations
 module.exports = {
-  Project, ProjectMember, Milestone, Task, DailyStatusLog, ProjectNotificationRecipient, PmSettings, PmDocument,
+  Project, ProjectMember, Milestone, Task, DailyStatusLog, ProjectNotificationRecipient, PmSettings, PmHoliday, PmDocument,
   PmProjectType, PmStatus, PmMilestoneTemplate, PmMemberRole,
   PmStatusReport, PmRaidItem, PmFinancialDetail, PmClosure,
   PmMilestoneDateLog, PmAllocationApproval,

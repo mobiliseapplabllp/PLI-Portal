@@ -23,6 +23,7 @@ router.get('/:id/members/availability', authorize(...ALL), ctrl.getMembersAvaila
 router.get('/:id/members', authorize(...ALL), ctrl.getMembers);
 router.post('/:id/members', authorize(...MANAGERS), ctrl.addMember);
 router.put('/:id/members/:memberId', authorize(...MANAGERS), ctrl.updateMember);
+router.patch('/:id/members/:memberId/confirm-hours', authorize(...MANAGERS), ctrl.confirmMemberHours);
 router.delete('/:id/members/:memberId', authorize(...MANAGERS), ctrl.removeMember);
 
 // Recipients

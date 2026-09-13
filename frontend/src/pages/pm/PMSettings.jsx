@@ -18,6 +18,11 @@ import {
   HiOutlineSave,
   HiOutlineOfficeBuilding,
   HiOutlineUserGroup,
+  HiOutlineCalendar,
+  HiOutlineChevronLeft,
+  HiOutlineChevronRight,
+  HiOutlineDownload,
+  HiOutlineUpload,
 } from 'react-icons/hi';
 import {
   DndContext,
@@ -42,6 +47,9 @@ import {
   getMilestoneTemplatesApi, createMilestoneTemplateApi, updateMilestoneTemplateApi,
   deleteMilestoneTemplateApi, validateTemplateRangesApi,
   getMemberRolesApi, createMemberRoleApi, updateMemberRoleApi, deleteMemberRoleApi,
+  getCalendarApi, updateCalendarApi, getCalendarPreviewApi,
+  getHolidaysApi, createHolidayApi, updateHolidayApi, deleteHolidayApi,
+  getHolidayTemplateApi, validateHolidayImportApi, commitHolidayImportApi,
 } from '../../api/pm/config.api';
 import {
   getClientOrgsApi, createClientOrgApi, updateClientOrgApi, deleteClientOrgApi,
@@ -56,6 +64,7 @@ const TABS = [
   { label: 'Milestone Templates',  icon: HiOutlineTemplate },
   { label: 'Statuses',             icon: HiOutlineColorSwatch },
   { label: 'Scheduler',            icon: HiOutlineClock },
+  { label: 'Working Calendar',     icon: HiOutlineCalendar },
   { label: 'Client Orgs',          icon: HiOutlineOfficeBuilding },
   { label: 'Email Alerts',         icon: HiOutlineMail },
   { label: 'Member Roles',         icon: HiOutlineUserGroup },
@@ -1147,7 +1156,8 @@ function SchedulerTab() {
       await api.put('/pm/settings', form);
       toast.success('Scheduler settings saved');
     } catch (e) {
-      toast.error(e?.response?.data?.message || 'Failed to save settings');
+      // Settings validation errors come through the global handler as { error: { message } }
+      toast.error(e?.response?.data?.message || e?.response?.data?.error?.message || 'Failed to save settings');
     } finally { setSaving(false); }
   };
 
@@ -1370,7 +1380,677 @@ function SchedulerTab() {
   );
 }
 
-// ─── Tab 5: Client Organisations ─────────────────────────────────────────────
+// ─── Tab 5: Working Calendar ─────────────────────────────────────────────────
+const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const SHORT_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const WEEKDAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const SATURDAY_ORDINALS = ['1st', '2nd', '3rd', '4th', '5th'];
+
+const currentYearMonth = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+};
+const shiftMonth = (ym, delta) => {
+  const [y, m] = ym.split('-').map(Number);
+  const d = new Date(y, m - 1 + delta, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+};
+const monthLabel = (ym) => {
+  const [y, m] = ym.split('-').map(Number);
+  return `${MONTH_NAMES[m - 1]} ${y}`;
+};
+// 'YYYY-MM-DD' → { text: '05 Oct 2026', weekday: 'Mon' } — parsed as local date to avoid TZ drift
+const formatHolidayDate = (iso) => {
+  if (!iso) return { text: '', weekday: '' };
+  const [y, m, d] = String(iso).slice(0, 10).split('-').map(Number);
+  const dt = new Date(y, m - 1, d);
+  return { text: `${String(d).padStart(2, '0')} ${SHORT_MONTHS[m - 1]} ${y}`, weekday: WEEKDAY_NAMES[dt.getDay()] };
+};
+const calendarErrMsg = (e, fallback) =>
+  e?.response?.data?.message || e?.response?.data?.error?.message || fallback;
+
+function WorkingCalendarTab() {
+  const { user } = useSelector(s => s.auth);
+  const isAdmin = user?.role === 'admin';
+
+  // Card A — working week
+  const [calLoading,   setCalLoading]   = useState(true);
+  const [hoursPerDay,  setHoursPerDay]  = useState(8);
+  const [workingSats,  setWorkingSats]  = useState([]);
+  const [savingCal,    setSavingCal]    = useState(false);
+
+  // Card B — preview
+  const [previewMonth, setPreviewMonth] = useState(currentYearMonth);
+  const [preview,      setPreview]      = useState(null);
+  const [previewBusy,  setPreviewBusy]  = useState(false);
+
+  // Card C — holidays
+  const thisYear = new Date().getFullYear();
+  const yearOptions = [thisYear - 1, thisYear, thisYear + 1, thisYear + 2];
+  const [holYear,      setHolYear]      = useState(thisYear);
+  const [holidays,     setHolidays]     = useState([]);
+  const [holLoading,   setHolLoading]   = useState(true);
+  const [addForm,      setAddForm]      = useState({ date: '', name: '', isOptional: false });
+  const [adding,       setAdding]       = useState(false);
+
+  // Import panel
+  const [showImport,   setShowImport]   = useState(false);
+  const [validating,   setValidating]   = useState(false);
+  const [importResult, setImportResult] = useState(null);
+  const [committing,   setCommitting]   = useState(false);
+  const fileInputRef = useRef(null);
+
+  const loadCalendar = useCallback(async () => {
+    setCalLoading(true);
+    try {
+      const r = await getCalendarApi();
+      const d = r.data.data ?? r.data ?? {};
+      setHoursPerDay(d.hoursPerDay ?? 8);
+      setWorkingSats(Array.isArray(d.workingSaturdays) ? d.workingSaturdays : []);
+    } catch (e) {
+      toast.error(calendarErrMsg(e, 'Failed to load working calendar'));
+    } finally {
+      setCalLoading(false);
+    }
+  }, []);
+
+  const loadPreview = useCallback(async (month) => {
+    setPreviewBusy(true);
+    try {
+      const r = await getCalendarPreviewApi(month);
+      setPreview(r.data.data ?? r.data ?? null);
+    } catch (e) {
+      toast.error(calendarErrMsg(e, 'Failed to load capacity preview'));
+    } finally {
+      setPreviewBusy(false);
+    }
+  }, []);
+
+  const loadHolidays = useCallback(async (year) => {
+    setHolLoading(true);
+    try {
+      const r = await getHolidaysApi(year);
+      setHolidays(r.data.data ?? r.data ?? []);
+    } catch (e) {
+      toast.error(calendarErrMsg(e, 'Failed to load holidays'));
+    } finally {
+      setHolLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { loadCalendar(); }, [loadCalendar]);
+  useEffect(() => { loadPreview(previewMonth); }, [previewMonth, loadPreview]);
+  useEffect(() => { loadHolidays(holYear); }, [holYear, loadHolidays]);
+
+  const refreshAfterHolidayChange = () => Promise.all([loadHolidays(holYear), loadPreview(previewMonth)]);
+
+  // ── Card A handlers ──
+  const toggleSat = (n) =>
+    setWorkingSats(prev => prev.includes(n) ? prev.filter(x => x !== n) : [...prev, n]);
+
+  const handleSaveCalendar = async () => {
+    const h = Number(hoursPerDay);
+    if (!Number.isFinite(h) || h < 4 || h > 12) return toast.error('Hours per working day must be between 4 and 12');
+    setSavingCal(true);
+    try {
+      const r = await updateCalendarApi({ hoursPerDay: h, workingSaturdays: [...workingSats].sort((a, b) => a - b) });
+      const d = r.data.data ?? r.data ?? {};
+      if (d.hoursPerDay != null) setHoursPerDay(d.hoursPerDay);
+      if (Array.isArray(d.workingSaturdays)) setWorkingSats(d.workingSaturdays);
+      toast.success('Working calendar saved');
+      await loadPreview(previewMonth);
+    } catch (e) {
+      toast.error(calendarErrMsg(e, 'Failed to save working calendar'));
+    } finally {
+      setSavingCal(false);
+    }
+  };
+
+  // ── Card C handlers ──
+  const handleAddHoliday = async () => {
+    if (!addForm.date)        return toast.error('Date is required');
+    if (!addForm.name.trim()) return toast.error('Name is required');
+    setAdding(true);
+    try {
+      await createHolidayApi({ date: addForm.date, name: addForm.name.trim(), isOptional: !!addForm.isOptional });
+      toast.success('Holiday added');
+      setAddForm({ date: '', name: '', isOptional: false });
+      await refreshAfterHolidayChange();
+    } catch (e) {
+      toast.error(calendarErrMsg(e, 'Failed to add holiday'));
+    } finally {
+      setAdding(false);
+    }
+  };
+
+  const handleToggleOptional = async (item) => {
+    try {
+      await updateHolidayApi(getId(item), { isOptional: !item.isOptional });
+      await refreshAfterHolidayChange();
+    } catch (e) {
+      toast.error(calendarErrMsg(e, 'Failed to update holiday'));
+    }
+  };
+
+  const handleDeleteHoliday = async (item) => {
+    if (!window.confirm(`Delete holiday "${item.name}"?`)) return;
+    try {
+      await deleteHolidayApi(getId(item));
+      toast.success('Holiday deleted');
+      await refreshAfterHolidayChange();
+    } catch (e) {
+      toast.error(calendarErrMsg(e, 'Failed to delete holiday'));
+    }
+  };
+
+  const handleDownloadTemplate = async () => {
+    try {
+      const r = await getHolidayTemplateApi();
+      const url = window.URL.createObjectURL(new Blob([r.data]));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'holiday-import-template.xlsx';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (e) {
+      toast.error(calendarErrMsg(e, 'Failed to download template'));
+    }
+  };
+
+  const clearImport = () => {
+    setImportResult(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const handleCancelImport = () => {
+    clearImport();
+    setShowImport(false);
+  };
+
+  const handleFileChange = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setValidating(true);
+    setImportResult(null);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const r = await validateHolidayImportApi(fd);
+      setImportResult(r.data.data ?? r.data ?? null);
+    } catch (err) {
+      toast.error(calendarErrMsg(err, 'Failed to validate file'));
+      clearImport();
+    } finally {
+      setValidating(false);
+    }
+  };
+
+  const handleCommitImport = async () => {
+    const rows = (importResult?.valid ?? []).map(({ date, name, isOptional }) => ({ date, name, isOptional: !!isOptional }));
+    if (rows.length === 0) return;
+    setCommitting(true);
+    try {
+      const r = await commitHolidayImportApi({ rows });
+      const d = r.data.data ?? r.data ?? {};
+      toast.success(`Imported ${d.inserted ?? rows.length} holidays (${d.skipped ?? 0} skipped)`);
+      handleCancelImport();
+      await refreshAfterHolidayChange();
+    } catch (e) {
+      toast.error(calendarErrMsg(e, 'Failed to import holidays'));
+    } finally {
+      setCommitting(false);
+    }
+  };
+
+  // ── Preview derived values ──
+  const previewDays = preview?.days ?? [];
+  const leadingBlanks = previewDays.length ? (previewDays[0].dow + 6) % 7 : 0;   // dow 0=Sun → column 6
+  const mandatoryHolidays = (preview?.holidays ?? []).filter(h => !h.isOptional).length;
+  const optionalHolidays  = (preview?.holidays ?? []).filter(h => h.isOptional).length;
+
+  const dayCellCls = (d) => {
+    if (d.kind === 'holiday')      return 'bg-red-50 text-red-700 border-red-200';
+    if (d.kind === 'sunday')       return 'bg-gray-200 text-gray-400 border-gray-200';
+    if (d.kind === 'saturday-off') return 'bg-gray-200 text-gray-400 border-gray-200';
+    if (d.isOptionalHoliday)       return 'bg-amber-50 text-amber-700 border-amber-200';
+    return 'bg-gray-50 text-gray-700 border-gray-200';
+  };
+  const dayCellTitle = (d) => {
+    if (d.kind === 'holiday')      return d.holidayName || 'Holiday';
+    if (d.isOptionalHoliday)       return `${d.holidayName || 'Holiday'} (optional)`;
+    if (d.kind === 'sunday')       return 'Sunday';
+    if (d.kind === 'saturday-off') return 'Saturday off';
+    return d.date;
+  };
+
+  const summary = importResult?.summary;
+
+  return (
+    <div className="space-y-6 py-4">
+
+      {/* Card A — Working week */}
+      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+        <div className="px-5 py-4 border-b border-gray-100 bg-gray-50">
+          <h3 className="text-sm font-semibold text-gray-800 flex items-center gap-2">
+            <HiOutlineCalendar className="w-4 h-4 text-emerald-600" />
+            Working week
+          </h3>
+          <p className="text-xs text-gray-500 mt-0.5">
+            Defines one person's capacity: hours in a working day and which Saturdays count as working.
+          </p>
+        </div>
+        {calLoading ? (
+          <div className="py-10 text-center text-gray-400 text-sm">Loading working calendar…</div>
+        ) : (
+          <div className="px-5 py-5 space-y-5">
+            <div>
+              <label className="text-xs font-medium text-gray-600 block mb-1">Hours per working day</label>
+              <input
+                type="number" min="4" max="12" step="0.5"
+                value={hoursPerDay ?? ''}
+                onChange={e => setHoursPerDay(e.target.value === '' ? '' : Number(e.target.value))}
+                disabled={!isAdmin}
+                className={`${inputCls} w-40 disabled:opacity-60 disabled:bg-gray-50`}
+              />
+              <p className="text-xs text-gray-400 mt-1">Between 4 and 12. Used to compute allocation percentages and capacity conflicts.</p>
+            </div>
+
+            <div>
+              <label className="text-xs font-medium text-gray-600 block mb-1">Sunday</label>
+              <label className="flex items-center gap-2 text-sm text-gray-500">
+                <input type="checkbox" checked={false} disabled readOnly className="w-4 h-4 rounded opacity-50 cursor-not-allowed" />
+                Always a non-working day
+              </label>
+            </div>
+
+            <div>
+              <label className="text-xs font-medium text-gray-600 block mb-1">Working Saturdays</label>
+              <div className="flex flex-wrap gap-4">
+                {SATURDAY_ORDINALS.map((label, i) => {
+                  const n = i + 1;
+                  return (
+                    <label key={n} className={`flex items-center gap-2 text-sm ${isAdmin ? 'text-gray-700' : 'text-gray-500'}`}>
+                      <input
+                        type="checkbox"
+                        checked={workingSats.includes(n)}
+                        onChange={() => toggleSat(n)}
+                        disabled={!isAdmin}
+                        className="w-4 h-4 text-emerald-600 rounded disabled:opacity-50"
+                      />
+                      {label}
+                    </label>
+                  );
+                })}
+              </div>
+              <p className="text-xs text-gray-400 mt-1">
+                Tick the Saturdays of the month that are working days. Most months have 4; a few have 5.
+              </p>
+            </div>
+
+            {isAdmin && (
+              <div className="flex justify-end pt-2 border-t border-gray-100">
+                <button
+                  onClick={handleSaveCalendar}
+                  disabled={savingCal}
+                  className="flex items-center gap-2 px-5 py-2 bg-emerald-600 text-white text-sm font-medium rounded-lg hover:bg-emerald-700 disabled:opacity-50 transition-colors"
+                >
+                  <HiOutlineSave className="w-4 h-4" />
+                  {savingCal ? 'Saving…' : 'Save'}
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Card B — Capacity preview */}
+      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+        <div className="px-5 py-4 border-b border-gray-100 bg-gray-50 flex items-center justify-between gap-3 flex-wrap">
+          <div>
+            <h3 className="text-sm font-semibold text-gray-800">Capacity preview</h3>
+            <p className="text-xs text-gray-500 mt-0.5">Working days and hours available per person for the selected month.</p>
+          </div>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => setPreviewMonth(m => shiftMonth(m, -1))}
+              className="p-1.5 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
+              title="Previous month"
+            >
+              <HiOutlineChevronLeft className="w-4 h-4" />
+            </button>
+            <span className="text-sm font-medium text-gray-800 w-36 text-center">{monthLabel(previewMonth)}</span>
+            <button
+              type="button"
+              onClick={() => setPreviewMonth(m => shiftMonth(m, 1))}
+              className="p-1.5 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
+              title="Next month"
+            >
+              <HiOutlineChevronRight className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+
+        <div className="px-5 py-5 space-y-4">
+          {!preview ? (
+            <div className="py-6 text-center text-gray-400 text-sm">{previewBusy ? 'Loading preview…' : 'No preview available.'}</div>
+          ) : (
+            <>
+              <p className={`text-base font-semibold text-gray-900 ${previewBusy ? 'opacity-50' : ''}`}>
+                {preview.workingDays} working days × {preview.hoursPerDay} hrs = {preview.totalHours} hrs per person
+              </p>
+
+              <div className="flex flex-wrap gap-2">
+                <span className="px-2.5 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-600">{preview.sundays} Sundays</span>
+                <span className="px-2.5 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-600">{preview.saturdaysOff} Saturdays off</span>
+                <span className="px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-100">{preview.saturdaysOn} Saturdays working</span>
+                <span className="px-2.5 py-1 rounded-full text-xs font-medium bg-red-50 text-red-700 border border-red-100">{mandatoryHolidays} holidays</span>
+                {optionalHolidays > 0 && (
+                  <span className="px-2.5 py-1 rounded-full text-xs font-medium bg-gray-50 text-gray-400 border border-gray-200">{optionalHolidays} optional</span>
+                )}
+              </div>
+
+              {/* Mini month grid */}
+              <div className="max-w-md">
+                <div className="grid grid-cols-7 gap-1 mb-1">
+                  {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(d => (
+                    <div key={d} className="text-[10px] font-semibold text-gray-400 uppercase text-center">{d}</div>
+                  ))}
+                </div>
+                <div className="grid grid-cols-7 gap-1">
+                  {Array.from({ length: leadingBlanks }).map((_, i) => <div key={'blank-' + i} />)}
+                  {previewDays.map(d => (
+                    <div
+                      key={d.date}
+                      title={dayCellTitle(d)}
+                      className={`relative h-12 rounded-md border px-1 py-0.5 text-xs overflow-hidden ${dayCellCls(d)}`}
+                    >
+                      <div className="font-medium leading-none">{Number(d.date.slice(8, 10))}</div>
+                      {d.kind === 'saturday-off' && (
+                        <span className="absolute top-0.5 right-1 text-[9px] font-semibold">S</span>
+                      )}
+                      {(d.kind === 'holiday' || d.isOptionalHoliday) && d.holidayName && (
+                        <div className="text-[10px] leading-tight truncate mt-0.5">{d.holidayName}</div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                {/* Legend */}
+                <div className="flex flex-wrap gap-x-4 gap-y-1 mt-3 text-[11px] text-gray-500">
+                  <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm border border-gray-200 bg-gray-50" /> Working</span>
+                  <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm border border-gray-200 bg-gray-200" /> Sunday / Saturday off</span>
+                  <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm border border-red-200 bg-red-50" /> Holiday</span>
+                  <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm border border-amber-200 bg-amber-50" /> Optional holiday</span>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* Card C — Holidays */}
+      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+        <div className="px-5 py-4 border-b border-gray-100 bg-gray-50 flex items-center justify-between gap-3 flex-wrap">
+          <div className="flex items-center gap-3">
+            <h3 className="text-sm font-semibold text-gray-800">Holidays</h3>
+            <select
+              value={holYear}
+              onChange={e => setHolYear(Number(e.target.value))}
+              className="px-2 py-1 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+            >
+              {yearOptions.map(y => <option key={y} value={y}>{y}</option>)}
+            </select>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleDownloadTemplate}
+              className="flex items-center gap-1.5 px-3 py-2 text-sm text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded-lg transition-colors"
+            >
+              <HiOutlineDownload className="w-4 h-4" />
+              Download template
+            </button>
+            {isAdmin && (
+              <button
+                type="button"
+                onClick={() => setShowImport(true)}
+                className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 text-white text-sm font-medium rounded-lg hover:bg-emerald-700 transition-colors"
+              >
+                <HiOutlineUpload className="w-4 h-4" />
+                Import from Excel
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Import panel */}
+        {showImport && isAdmin && (
+          <div className="px-5 py-4 border-b border-gray-100 bg-emerald-50/40 space-y-4">
+            <div className="flex items-center gap-3 flex-wrap">
+              <label className="text-sm font-medium text-gray-700">Import holidays from Excel</label>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                onChange={handleFileChange}
+                disabled={validating || committing}
+                className="text-sm text-gray-600 file:mr-3 file:px-3 file:py-1.5 file:rounded-lg file:border-0 file:bg-white file:text-sm file:font-medium file:text-gray-700 file:border file:border-gray-200 hover:file:bg-gray-50"
+              />
+              {validating && <span className="text-xs text-gray-400">Validating…</span>}
+            </div>
+
+            {importResult && (
+              <div className="space-y-4">
+                {summary && (
+                  <p className="text-sm text-gray-700">
+                    {summary.totalRows} rows · <span className="text-emerald-700 font-medium">{summary.valid} ready</span> ·{' '}
+                    <span className="text-red-600 font-medium">{summary.errors} errors</span> ·{' '}
+                    {summary.alreadyExists} already exist · {summary.onSunday} on a Sunday
+                  </p>
+                )}
+
+                {importResult.errors?.length > 0 && (
+                  <div className="rounded-lg border border-red-200 overflow-hidden">
+                    <table className="w-full text-sm">
+                      <thead className="bg-red-50 border-b border-red-100">
+                        <tr>
+                          <th className={thCls + ' text-left w-20 text-red-700'}>Row</th>
+                          <th className={thCls + ' text-left text-red-700'}>Error</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-red-50 bg-white">
+                        {importResult.errors.map((r, i) => (
+                          <tr key={i}>
+                            <td className="px-4 py-2 text-gray-500">{r.row}</td>
+                            <td className="px-4 py-2 text-red-700">{r.message}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                {importResult.warnings?.length > 0 && (
+                  <div className="rounded-lg border border-amber-200 overflow-hidden">
+                    <table className="w-full text-sm">
+                      <thead className="bg-amber-50 border-b border-amber-100">
+                        <tr>
+                          <th className={thCls + ' text-left w-20 text-amber-700'}>Row</th>
+                          <th className={thCls + ' text-left text-amber-700'}>Warning</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-amber-50 bg-white">
+                        {importResult.warnings.map((r, i) => (
+                          <tr key={i}>
+                            <td className="px-4 py-2 text-gray-500">{r.row}</td>
+                            <td className="px-4 py-2 text-amber-700">{r.message}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                {importResult.valid?.length > 0 && (
+                  <div className="rounded-lg border border-emerald-200 overflow-hidden">
+                    <table className="w-full text-sm">
+                      <thead className="bg-emerald-50 border-b border-emerald-100">
+                        <tr>
+                          <th className={thCls + ' text-left w-20 text-emerald-700'}>Row</th>
+                          <th className={thCls + ' text-left w-40 text-emerald-700'}>Date</th>
+                          <th className={thCls + ' text-left text-emerald-700'}>Name</th>
+                          <th className={thCls + ' text-center w-24 text-emerald-700'}>Optional</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-emerald-50 bg-white">
+                        {importResult.valid.map((r, i) => (
+                          <tr key={i}>
+                            <td className="px-4 py-2 text-gray-500">{r.row}</td>
+                            <td className="px-4 py-2 text-gray-800">{formatHolidayDate(r.date).text}</td>
+                            <td className="px-4 py-2 text-gray-800">{r.name}</td>
+                            <td className="px-4 py-2 text-center text-gray-500">{r.isOptional ? 'Yes' : '—'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                <div className="flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={handleCancelImport}
+                    disabled={committing}
+                    className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition-colors disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleCommitImport}
+                    disabled={committing || !(importResult.valid?.length > 0)}
+                    className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 text-white text-sm font-medium rounded-lg hover:bg-emerald-700 disabled:opacity-50 transition-colors"
+                  >
+                    <HiOutlineUpload className="w-4 h-4" />
+                    {committing ? 'Importing…' : `Import ${importResult.valid?.length ?? 0} holidays`}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {!importResult && (
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  onClick={handleCancelImport}
+                  className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Inline add row */}
+        {isAdmin && (
+          <div className="px-5 py-4 border-b border-gray-100">
+            <p className="text-sm font-semibold text-gray-700 mb-3">Add Holiday</p>
+            <div className="flex items-center gap-3 flex-wrap sm:flex-nowrap">
+              <input
+                type="date"
+                value={addForm.date}
+                onChange={e => setAddForm(p => ({ ...p, date: e.target.value }))}
+                className={inputCls + ' w-44 shrink-0'}
+              />
+              <input
+                type="text"
+                value={addForm.name}
+                onChange={e => setAddForm(p => ({ ...p, name: e.target.value }))}
+                onKeyDown={e => e.key === 'Enter' && handleAddHoliday()}
+                placeholder="e.g. Diwali, Republic Day…"
+                className={inputCls + ' flex-1 min-w-0'}
+              />
+              <label className="flex items-center gap-2 text-sm text-gray-600 shrink-0">
+                <Toggle checked={addForm.isOptional} onChange={() => setAddForm(p => ({ ...p, isOptional: !p.isOptional }))} />
+                Optional
+              </label>
+              <button
+                onClick={handleAddHoliday}
+                disabled={adding || !addForm.date || !addForm.name.trim()}
+                className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 text-white text-sm font-medium rounded-lg hover:bg-emerald-700 disabled:opacity-50 transition-colors whitespace-nowrap shrink-0"
+              >
+                <HiOutlinePlus className="w-4 h-4" />
+                {adding ? 'Adding…' : 'Add'}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Holiday table */}
+        {holLoading ? (
+          <p className="text-center text-gray-400 py-10 text-sm">Loading holidays…</p>
+        ) : holidays.length === 0 ? (
+          <p className="text-center text-gray-400 py-10 text-sm">
+            No holidays for {holYear}. Add one above or import from Excel.
+          </p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 border-b border-gray-100">
+                <tr>
+                  <th className={thCls + ' text-left w-48'}>Date</th>
+                  <th className={thCls + ' text-left'}>Name</th>
+                  <th className={thCls + ' text-center w-28'}>Optional</th>
+                  <th className={thCls + ' text-right w-24'}>Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {holidays.map(item => {
+                  const id = getId(item);
+                  const fd = formatHolidayDate(item.date);
+                  return (
+                    <tr key={id} className="hover:bg-gray-50/70 transition-colors">
+                      <td className="px-4 py-3 text-gray-800">
+                        {fd.text} <span className="text-gray-400 text-xs ml-1">{fd.weekday}</span>
+                      </td>
+                      <td className="px-4 py-3 font-medium text-gray-800">{item.name}</td>
+                      <td className="px-4 py-3 text-center">
+                        <Toggle
+                          checked={!!item.isOptional}
+                          onChange={() => handleToggleOptional(item)}
+                          disabled={!isAdmin}
+                        />
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex justify-end gap-1">
+                          {isAdmin && (
+                            <button
+                              onClick={() => handleDeleteHoliday(item)}
+                              className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                              title="Delete"
+                            >
+                              <HiOutlineTrash className="w-4 h-4" />
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Tab 6: Client Organisations ─────────────────────────────────────────────
 function ClientOrgsTab() {
   const { user } = useSelector(s => s.auth);
   const isAdmin = user?.role === 'admin';
@@ -2171,9 +2851,10 @@ export default function PMSettings() {
         {activeTab === 1 && <MilestoneTemplatesTab />}
         {activeTab === 2 && <StatusesTab />}
         {activeTab === 3 && <SchedulerTab />}
-        {activeTab === 4 && <ClientOrgsTab />}
-        {activeTab === 5 && <EmailAlertsTab />}
-        {activeTab === 6 && <MemberRolesTab />}
+        {activeTab === 4 && <WorkingCalendarTab />}
+        {activeTab === 5 && <ClientOrgsTab />}
+        {activeTab === 6 && <EmailAlertsTab />}
+        {activeTab === 7 && <MemberRolesTab />}
       </div>
     </div>
   );

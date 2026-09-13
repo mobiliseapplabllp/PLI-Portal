@@ -64,6 +64,16 @@ const TABS = [
 
 const ADMIN_ROLES = ['admin', 'manager', 'senior_manager'];
 
+// Roles allowed to call GET /pm/utilisation (Agent Workload card)
+const WORKLOAD_ROLES = ['admin', 'manager', 'senior_manager', 'md', 'director'];
+
+const BAND_BAR_COLORS = {
+  over: 'bg-red-500',
+  high: 'bg-amber-500',
+  ok:   'bg-emerald-500',
+  free: 'bg-slate-300',
+};
+
 const STATUS_COLORS = {
   open:        'bg-blue-100 text-blue-700',
   in_progress: 'bg-amber-100 text-amber-700',
@@ -167,6 +177,90 @@ function CssBarChart({ title, data, colorFn }) {
         ))}
         {data.length === 0 && <p className="text-sm text-gray-400 text-center py-4">No data</p>}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Agent Workload card — current-month utilisation across projects + tickets.
+ * Contract: GET /pm/utilisation?from=YYYY-MM&to=YYYY-MM →
+ *   { months:[{ month, workingDays, totalHours, summary:{ avgPct, overCount, highCount } }],
+ *     users:[{ userId, name, role, cells:[{ month, totalHours, totalPct, pmHours, hdHours, isOverAllocated, band }] }] }
+ */
+function AgentWorkloadCard({ data, monthKey }) {
+  const navigate = useNavigate();
+  if (!data) return null;
+  const monthMeta = (data.months || []).find(m => m.month === monthKey) || data.months?.[0];
+  if (!monthMeta) return null;
+  const summary = monthMeta.summary || {};
+
+  const rows = (data.users || [])
+    .map(u => {
+      const cell = (u.cells || []).find(c => c.month === monthKey) || u.cells?.[0] || {};
+      return { userId: u.userId, name: u.name, role: u.role, ...cell };
+    })
+    .sort((a, b) => (b.totalPct ?? 0) - (a.totalPct ?? 0))
+    .slice(0, 10);
+
+  const [y, m] = monthKey.split('-').map(Number);
+  const title = `Agent Workload — ${MONTH_NAMES[(m || 1) - 1]} ${y}`;
+
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 p-4">
+      <div className="flex items-start justify-between gap-3 mb-3">
+        <div>
+          <h3 className="font-semibold text-sm text-gray-900">{title}</h3>
+          <p className="text-[11px] text-gray-500 mt-0.5">
+            {monthMeta.workingDays} working days · {monthMeta.totalHours}h capacity
+          </p>
+        </div>
+        <div className="flex items-center gap-1.5 flex-wrap justify-end">
+          <span className="text-[11px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-700">Avg {summary.avgPct ?? 0}%</span>
+          <span className="text-[11px] px-2 py-0.5 rounded-full bg-red-50 text-red-700">{summary.overCount ?? 0} over</span>
+          <span className="text-[11px] px-2 py-0.5 rounded-full bg-amber-50 text-amber-700">{summary.highCount ?? 0} high</span>
+          <button
+            onClick={() => navigate('/pm/utilisation')}
+            className="text-[11px] text-blue-600 hover:underline ml-1"
+          >
+            View all →
+          </button>
+        </div>
+      </div>
+
+      {rows.length === 0 ? (
+        <p className="py-4 text-center text-gray-300 text-xs">No allocation data</p>
+      ) : (
+        <div className="space-y-2">
+          {rows.map(r => {
+            const pct   = Number(r.totalPct ?? 0);
+            const width = Math.min(pct, 100);
+            const bar   = BAND_BAR_COLORS[r.band] || 'bg-emerald-500';
+            return (
+              <div key={r.userId} className="grid grid-cols-[minmax(0,180px)_1fr_auto] items-center gap-3">
+                <div className="min-w-0 flex items-center gap-1.5">
+                  {r.isOverAllocated && (
+                    <span
+                      className="w-2 h-2 rounded-full bg-red-500 flex-shrink-0"
+                      title={`Over-allocated on ${r.overDays ?? 'some'} day(s)`}
+                    />
+                  )}
+                  <div className="min-w-0">
+                    <p className="text-xs font-medium text-gray-800 truncate">{r.name}</p>
+                    <p className="text-[10px] text-gray-400 capitalize truncate">{String(r.role || '').replace(/_/g, ' ')}</p>
+                  </div>
+                </div>
+                <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                  <div className={`h-full rounded-full ${bar}`} style={{ width: `${width}%` }} />
+                </div>
+                <div className="text-right w-28">
+                  <p className="text-xs font-semibold text-gray-800">{pct}%</p>
+                  <p className="text-[10px] text-gray-400">{r.pmHours ?? 0}h proj · {r.hdHours ?? 0}h tickets</p>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -280,6 +374,12 @@ function DashboardTab() {
   const [weeklyTrend, setWeeklyTrend]   = useState([]);
   const [newLoading, setNewLoading]     = useState(true);
 
+  // Phase 3 — Agent Workload (current month utilisation); privileged roles only
+  const canSeeWorkload = WORKLOAD_ROLES.includes(user?.role);
+  const now = new Date();
+  const currentMonth = `${now.getFullYear()}-${pad(now.getMonth() + 1)}`;
+  const [workload, setWorkload] = useState(null);
+
   useEffect(() => {
     let alive = true;
 
@@ -386,7 +486,24 @@ function DashboardTab() {
       }
     })();
 
+    // Agent Workload — hidden silently on 403 / error
+    if (canSeeWorkload) {
+      (async () => {
+        const [wlRes] = await Promise.allSettled([
+          api.get('/pm/utilisation', { params: { from: currentMonth, to: currentMonth } }),
+        ]);
+        if (!alive) return;
+        if (wlRes.status === 'fulfilled') {
+          const d = extractData(wlRes.value);
+          setWorkload(d && Array.isArray(d.users) ? d : null);
+        } else {
+          setWorkload(null);
+        }
+      })();
+    }
+
     return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Fallback 7-day skeleton when API returns nothing
@@ -582,6 +699,11 @@ function DashboardTab() {
               )}
             </ScrollableStatBox>
           </div>
+
+          {/* ── Agent Workload (Phase 3) — privileged roles only ── */}
+          {canSeeWorkload && workload && (
+            <AgentWorkloadCard data={workload} monthKey={currentMonth} />
+          )}
 
           {/* ── Row 2: Gauge charts + Priority pie ── */}
           <div className="grid grid-cols-4 gap-4">

@@ -44,7 +44,80 @@ const TRACKED_FIELDS = [
   'title', 'description', 'status', 'priority', 'category',
   'requestType', 'mode', 'impact', 'urgency', 'resolution', 'site', 'raisedByTeam',
   'assigneeId', 'groupId', 'projectId', 'dueDate', 'billable',
+  // Phase 3 — assignee effort allocation (stacks against PM allocations)
+  'allocationHoursPerDay', 'allocationFrom', 'allocationTo', 'allocationMode', 'allocationTotalHours',
 ];
+
+const ALLOCATION_FIELDS = ['allocationHoursPerDay', 'allocationFrom', 'allocationTo', 'allocationMode', 'allocationTotalHours'];
+const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
+const hasOwn = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+const isBlank = (v) => v === undefined || v === null || v === '';
+
+/** True when the body touches any allocation field. */
+const hasAllocationInput = (obj) => ALLOCATION_FIELDS.some((f) => hasOwn(obj, f));
+
+/**
+ * Resolve the optional helpdesk effort allocation from a body (merged over
+ * `base`, the stored ticket, when given) against the working calendar.
+ *
+ * Mode: explicit `allocationMode`; else 'per_day' when only hours/day was sent
+ * (legacy bodies); else the stored mode when the ticket already has an
+ * allocation and no amount was sent; else 'total' (helpdesk default).
+ *
+ * Over-capacity is deliberately NOT checked here — helpdesk assignment must
+ * stay fast, so capacity is surfaced as a UI warning rather than a 409.
+ *
+ * @returns {Promise<{ error: string } | { values: object }>}
+ *   values = { allocationHoursPerDay, allocationFrom, allocationTo, allocationMode, allocationTotalHours }
+ */
+async function resolveTicketAllocation(obj, base = null) {
+  const val = (f) => (hasOwn(obj, f) ? (isBlank(obj[f]) ? null : obj[f]) : (base ? base[f] ?? null : null));
+
+  const allocationFrom = val('allocationFrom');
+  const allocationTo   = val('allocationTo');
+  for (const [key, v] of [['allocationFrom', allocationFrom], ['allocationTo', allocationTo]]) {
+    if (v !== null && (typeof v !== 'string' || !DATE_ONLY_RE.test(v) || isNaN(new Date(v).getTime()))) {
+      return { error: `${key} must be a date in YYYY-MM-DD format` };
+    }
+  }
+  if (allocationFrom && allocationTo && allocationFrom > allocationTo) {
+    return { error: 'allocationFrom must be on or before allocationTo' };
+  }
+
+  const bodyHours = hasOwn(obj, 'allocationHoursPerDay') && !isBlank(obj.allocationHoursPerDay);
+  const bodyTotal = hasOwn(obj, 'allocationTotalHours') && !isBlank(obj.allocationTotalHours);
+  const hoursPerDay = val('allocationHoursPerDay');
+  const totalHours  = val('allocationTotalHours');
+
+  // Nothing to allocate (or explicitly cleared) → keep dates only
+  if (hoursPerDay === null && totalHours === null) {
+    return { values: { allocationHoursPerDay: null, allocationFrom, allocationTo, allocationMode: 'total', allocationTotalHours: null } };
+  }
+
+  let mode = hasOwn(obj, 'allocationMode') && !isBlank(obj.allocationMode) ? obj.allocationMode : null;
+  if (!mode) {
+    if (bodyHours && !bodyTotal)                               mode = 'per_day';
+    else if (bodyTotal && !bodyHours)                          mode = 'total';
+    else if (base && base.allocationHoursPerDay != null)       mode = base.allocationMode || 'total';
+    else                                                       mode = 'total';
+  }
+  if (mode !== 'per_day' && mode !== 'total') return { error: "allocationMode must be 'per_day' or 'total'" };
+
+  const calendar = await require('../../services/pm/pmSettings.service').getCalendar();
+  const r = require('../../utils/capacityEngine').resolveAllocation(
+    { allocationMode: mode, hoursPerDay, allocationTotalHours: totalHours, allocationFrom, allocationTo },
+    calendar,
+  );
+  if (!r.ok) return { error: r.error };
+  return {
+    values: {
+      allocationHoursPerDay: r.hoursPerDay,
+      allocationFrom, allocationTo,
+      allocationMode:        r.mode,
+      allocationTotalHours:  r.totalHours,
+    },
+  };
+}
 
 // â”€â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
@@ -291,9 +364,18 @@ const createTicket = async (req, res, next) => {
       requestType, mode, impact, urgency, site, raisedByTeam,
       // "On behalf of" fields â€” admins/managers creating tickets for others
       requesterName, requesterEmail,
+      // Phase 3 — optional effort allocation for the assignee
+      allocationHoursPerDay, allocationFrom, allocationTo, allocationMode, allocationTotalHours,
     } = req.body;
 
     if (!title) return sendError(res, 'title is required', 400);
+
+    let alloc = { allocationHoursPerDay: null, allocationFrom: null, allocationTo: null, allocationMode: 'total', allocationTotalHours: null };
+    if (hasAllocationInput(req.body)) {
+      const resolved = await resolveTicketAllocation({ allocationHoursPerDay, allocationFrom, allocationTo, allocationMode, allocationTotalHours });
+      if (resolved.error) return res.status(400).json({ success: false, message: resolved.error });
+      alloc = resolved.values;
+    }
 
     let destPath;
     const t = await sequelize.transaction();
@@ -311,6 +393,11 @@ const createTicket = async (req, res, next) => {
           projectId:    projectId    || null,
           dueDate:      dueDate      || null,
           assigneeId:   assigneeId   || null,
+          allocationHoursPerDay: alloc.allocationHoursPerDay,
+          allocationFrom:        alloc.allocationFrom,
+          allocationTo:          alloc.allocationTo,
+          allocationMode:        alloc.allocationMode,
+          allocationTotalHours:  alloc.allocationTotalHours,
           requestType:  requestType  || null,
           mode:         mode         || null,
           impact:       impact       || null,
@@ -408,6 +495,20 @@ const updateTicket = async (req, res, next) => {
       if (Object.prototype.hasOwnProperty.call(req.body, f)) updates[f] = req.body[f];
     });
 
+    // ── Phase 3: effort allocation validation / normalisation ────────────────
+    if (hasAllocationInput(updates)) {
+      const resolved = await resolveTicketAllocation(updates, ticket);
+      if (resolved.error) return res.status(400).json({ success: false, message: resolved.error });
+      Object.assign(updates, resolved.values);
+    }
+    // Clearing the assignee also clears the allocation — nobody to allocate to.
+    if (Object.prototype.hasOwnProperty.call(updates, 'assigneeId') &&
+        (updates.assigneeId === null || updates.assigneeId === '')) {
+      updates.assigneeId = null;
+      for (const f of ALLOCATION_FIELDS) updates[f] = null;
+      updates.allocationMode = 'total';
+    }
+
     // ── Approval gate: block status change while any approval is pending ─────
     if (updates.status && updates.status !== prevStatus) {
       const pendingApproval = await HdTicketApproval.findOne({
@@ -497,6 +598,19 @@ const bulkAssign = async (req, res, next) => {
     if (!assigneeId)
       return sendError(res, 'assigneeId is required', 400);
 
+    // Phase 3 — optional allocation applied to every ticket in the batch
+    let alloc = {};
+    if (hasAllocationInput(req.body)) {
+      const body = {};
+      for (const f of ALLOCATION_FIELDS) if (hasOwn(req.body, f)) body[f] = req.body[f];
+      const resolved = await resolveTicketAllocation(body);
+      if (resolved.error) return res.status(400).json({ success: false, message: resolved.error });
+      alloc = resolved.values;
+      // Dates not sent stay as each ticket has them
+      if (!hasOwn(body, 'allocationFrom')) delete alloc.allocationFrom;
+      if (!hasOwn(body, 'allocationTo'))   delete alloc.allocationTo;
+    }
+
     const tickets = await HdTicket.findAll({ where: { id: { [Op.in]: ticketIds } } });
 
     const t = await sequelize.transaction();
@@ -504,8 +618,19 @@ const bulkAssign = async (req, res, next) => {
       for (const ticket of tickets) {
         const old = ticket.assigneeId;
         ticket.assigneeId = assigneeId;
+        const changed = [];
+        for (const f of Object.keys(alloc)) {
+          const prev = ticket[f];
+          if (String(prev ?? '') !== String(alloc[f] ?? '')) {
+            ticket[f] = alloc[f];
+            changed.push([f, prev, alloc[f]]);
+          }
+        }
         await ticket.save({ transaction: t });
         await logHistory(ticket.id, 'assigneeId', old, assigneeId, req.hdUser.id, t);
+        for (const [f, prev, next] of changed) {
+          await logHistory(ticket.id, f, prev, next, req.hdUser.id, t);
+        }
       }
       await t.commit();
     } catch(err) {

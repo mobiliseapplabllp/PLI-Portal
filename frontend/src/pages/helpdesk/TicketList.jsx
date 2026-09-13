@@ -26,6 +26,7 @@ import {
 } from '../../api/helpdesk/tickets.api';
 import { getGroupsApi } from '../../api/helpdesk/groups.api';
 import { getUsersApi } from '../../api/users.api';
+import AllocationTypeInput from '../../components/pm/AllocationTypeInput';
 import { getHdProjectsApi } from '../../api/helpdesk/hdProjects.api';
 import { downloadHdImportTemplateApi } from '../../api/helpdesk/hdTemplate.api';
 import toast from 'react-hot-toast';
@@ -134,6 +135,11 @@ export default function TicketList() {
   const [baGroupId,      setBaGroupId]      = useState('');
   const [baGroupUsers,   setBaGroupUsers]   = useState([]);
   const [baAgentId,      setBaAgentId]      = useState('');
+  // Phase 3 — effort allocation applied to every ticket in the batch
+  const [baAlloc,        setBaAlloc]        = useState({ allocationMode: 'total', hoursPerDay: '', allocationTotalHours: '10' }); // bulk modal defaults to Total hours
+  const [baDerived,      setBaDerived]      = useState({ hoursPerDay: null, totalHours: null, workingDays: null });
+  const [baFrom,         setBaFrom]         = useState('');
+  const [baTo,           setBaTo]           = useState('');
 
   // Bulk upload modal
   const [showBulkUpload, setShowBulkUpload] = useState(false);
@@ -495,13 +501,27 @@ export default function TicketList() {
   // -------------------------------------------------------------------------
   // Bulk assign
   // -------------------------------------------------------------------------
+  const isoDay = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
   const openBulkAssign = () => {
     setBaGroupId('');
     setBaGroupUsers([]);
     setBaAgentId('');
+    // Allocation defaults: 10 total hours, today → today + 7
+    const today = new Date();
+    const week  = new Date(); week.setDate(week.getDate() + 7);
+    setBaAlloc({ allocationMode: 'total', hoursPerDay: '', allocationTotalHours: '10' });
+    setBaFrom(isoDay(today));
+    setBaTo(isoDay(week));
     setOpError(null);
     setShowBulkAssign(true);
   };
+
+  const baIsTotal    = baAlloc.allocationMode === 'total';
+  const baRaw        = Number(baIsTotal ? baAlloc.allocationTotalHours : baAlloc.hoursPerDay);
+  const baHoursValid = Number.isFinite(baRaw) && baRaw >= 0.5 && baRaw <= (baIsTotal ? 9999 : 12) && Math.round(baRaw * 2) === baRaw * 2;
+  const baHoursNum   = baIsTotal ? baDerived.hoursPerDay : baRaw;   // derived per-day sent as allocationHoursPerDay
+  const baDatesValid = !!baFrom && !!baTo && baFrom <= baTo;
 
   const onBaGroupChange = (gId) => {
     setBaGroupId(gId);
@@ -514,7 +534,7 @@ export default function TicketList() {
   };
 
   const handleBulkAssignConfirm = async () => {
-    if (!baAgentId) return;
+    if (!baAgentId || !baHoursValid || !baDatesValid) return;
     setOpError(null);
     setBulkAssigning(true);
     try {
@@ -522,6 +542,12 @@ export default function TicketList() {
         ticketIds:  selected,
         assigneeId: baAgentId,           // UUID string — do NOT coerce to Number
         ...(baGroupId ? { groupId: Number(baGroupId) } : {}),
+        // Phase 3 — same allocation on every ticket in the batch
+        allocationMode:        baIsTotal ? 'total' : 'per_day',
+        allocationHoursPerDay: baHoursNum ?? null,
+        allocationTotalHours:  baIsTotal ? baRaw : null,
+        allocationFrom:        baFrom,
+        allocationTo:          baTo,
       });
       setSelected([]);
       setShowBulkAssign(false);
@@ -1112,6 +1138,50 @@ export default function TicketList() {
                   </option>
                 ))}
               </select>
+
+              {/* Phase 3 — effort allocation */}
+              <label className="text-sm font-medium text-gray-700 mt-1">Effort allocation (per ticket)</label>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <span className="block text-[11px] text-gray-500 mb-1">Start date</span>
+                  <input
+                    type="date"
+                    value={baFrom}
+                    onChange={(e) => setBaFrom(e.target.value)}
+                    className="w-full px-2 py-1.5 border border-gray-300 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+                <div>
+                  <span className="block text-[11px] text-gray-500 mb-1">End date</span>
+                  <input
+                    type="date"
+                    value={baTo}
+                    min={baFrom || undefined}
+                    onChange={(e) => setBaTo(e.target.value)}
+                    className="w-full px-2 py-1.5 border border-gray-300 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+              </div>
+              <AllocationTypeInput
+                compact
+                value={baAlloc}
+                onChange={next => setBaAlloc({
+                  allocationMode:       next.allocationMode,
+                  hoursPerDay:          next.hoursPerDay ?? '',
+                  allocationTotalHours: next.allocationTotalHours ?? '',
+                })}
+                from={baFrom || null}
+                to={baTo || null}
+                capacity={8}
+                maxPerDay={12}
+                defaultMode="total"
+                disabled={bulkAssigning}
+                inputClassName={`w-full px-2 py-1.5 border rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 ${baHoursValid ? 'border-gray-300' : 'border-red-300'}`}
+                onDerived={setBaDerived}
+              />
+              {!baHoursValid && <p className="text-[11px] text-red-500">{baIsTotal ? 'Total hours must be at least 0.5 in steps of 0.5' : 'Hours must be between 0.5 and 12 in steps of 0.5'}</p>}
+              {!baDatesValid && baFrom && baTo && <p className="text-[11px] text-red-500">Start date must be on or before end date</p>}
+              <p className="text-[11px] text-gray-400">Counts against each agent's capacity alongside their project allocations.</p>
             </div>
             {opError && <p className="text-sm text-red-600 mb-3">{opError}</p>}
             <div className="flex justify-end gap-2 pt-2">
@@ -1123,7 +1193,7 @@ export default function TicketList() {
               </button>
               <button
                 onClick={handleBulkAssignConfirm}
-                disabled={!baAgentId || bulkAssigning}
+                disabled={!baAgentId || !baHoursValid || !baDatesValid || bulkAssigning}
                 className="flex items-center gap-2 px-4 py-2 bg-[#2196f3] text-white rounded-lg hover:bg-[#1976d2] disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium"
               >
                 {bulkAssigning ? 'Assigning…' : 'Assign Tickets'}

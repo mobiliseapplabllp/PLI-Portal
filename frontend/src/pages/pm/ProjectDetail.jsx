@@ -24,6 +24,7 @@ import { getPmStatusesApi, getMemberRolesApi } from '../../api/pm/config.api';
 import api from '../../api/axios';
 import ResourceAvailabilityCard from '../../components/pm/ResourceAvailabilityCard';
 import AllocationApprovalPanel from '../../components/pm/AllocationApprovalPanel';
+import AllocationTypeInput, { formatAllocation } from '../../components/pm/AllocationTypeInput';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
@@ -95,6 +96,89 @@ const closureApi = {
   close:  (pid)    => api.post(`/pm/projects/${pid}/closure/close`),
 };
 
+// ── Hours-based allocation helpers ───────────────────────────────────────────
+const fmtH = (h) => Math.round((Number(h) || 0) * 10) / 10;
+
+// ── Monthly utilisation (Phase 2) ─────────────────────────────────────────────
+const currentMonthKey = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+};
+const monthLabel = (ym) => {
+  const [y, m] = String(ym || '').split('-').map(Number);
+  if (!y || !m) return 'This month';
+  return new Date(y, m - 1, 1).toLocaleDateString('en-IN', { month: 'short', year: 'numeric' });
+};
+const UTIL_BAND_CLS = {
+  free: 'bg-gray-100 text-gray-600 border-gray-200',
+  ok:   'bg-emerald-50 text-emerald-700 border-emerald-200',
+  high: 'bg-amber-50 text-amber-700 border-amber-200',
+  over: 'bg-red-50 text-red-700 border-red-200',
+};
+/**
+ * One member's committed hours for the selected calendar month, across ALL
+ * projects + helpdesk. Shared by the Team tab card and list views so they
+ * never drift. Distinct from the 30-day "Overall capacity" availability block.
+ */
+function MonthUtilChip({ cell, loading, month, compact = false }) {
+  if (!cell) {
+    return loading
+      ? <div className={`h-4 bg-gray-100 rounded-full animate-pulse ${compact ? 'w-20' : 'w-28'}`} />
+      : null;
+  }
+  const band = UTIL_BAND_CLS[cell.band] ? cell.band : 'free';
+  const over = !!cell.isOverAllocated;
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border text-xs font-medium whitespace-nowrap ${UTIL_BAND_CLS[band]}`}
+      title={`${monthLabel(month)} — Projects ${fmtH(cell.pmHours)}h · Helpdesk ${fmtH(cell.hdHours)}h`}
+    >
+      {!compact && <span className="text-[10px] uppercase tracking-wide opacity-70">{monthLabel(month)}</span>}
+      <span>{fmtH(cell.totalHours)}h · {Math.round(Number(cell.totalPct) || 0)}%</span>
+      {over && (
+        <span
+          className="w-1.5 h-1.5 rounded-full bg-red-500 flex-shrink-0"
+          title={`Over capacity on ${cell.overDays} day(s) — peak ${fmtH(cell.peakHoursPerDay)}h`}
+        />
+      )}
+    </span>
+  );
+}
+const fmtRangeDate = (iso) => {
+  if (!iso) return '?';
+  try { return new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short' }).format(new Date(iso)); }
+  catch { return String(iso).slice(0, 10); }
+};
+
+/** Red panel rendered under a member form after the server returned HTTP 409 */
+function ConflictPanel({ conflict, capacity, onUseRemaining, compact = false }) {
+  if (!conflict) return null;
+  const cap = Number(conflict.capacity) > 0 ? Number(conflict.capacity) : capacity;
+  const ranges = Array.isArray(conflict.ranges) ? conflict.ranges : [];
+  const remaining = conflict.remaining != null ? Number(conflict.remaining) : null;
+  return (
+    <div className={`bg-red-50 border border-red-200 rounded-lg text-red-700 ${compact ? 'px-2.5 py-2 mt-2 text-xs' : 'px-3 py-2.5 mb-3 text-sm'}`} role="alert">
+      <p className="font-semibold">Over capacity on {conflict.overDays ?? ranges.reduce((s, r) => s + (r.days || 0), 0)} day{(conflict.overDays ?? 0) === 1 ? '' : 's'}</p>
+      {ranges.length > 0 && (
+        <ul className="mt-1 space-y-0.5 text-xs text-red-600">
+          {ranges.map((r, i) => (
+            <li key={i}>{fmtRangeDate(r.from)} – {fmtRangeDate(r.to)} · peak {fmtH(r.peak)}h / {fmtH(cap)}h</li>
+          ))}
+        </ul>
+      )}
+      {remaining != null && remaining > 0 && onUseRemaining && (
+        <button
+          type="button"
+          onClick={() => onUseRemaining(remaining)}
+          className="mt-2 px-2.5 py-1 bg-white border border-red-300 text-red-700 rounded text-xs font-medium hover:bg-red-100 transition-colors"
+        >
+          Use {fmtH(remaining)} hrs/day
+        </button>
+      )}
+    </div>
+  );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 export default function ProjectDetail() {
   const { id }   = useParams();
@@ -108,9 +192,13 @@ export default function ProjectDetail() {
   const [pmStatuses,    setPmStatuses]    = useState([]);
   const [memberRoles,   setMemberRoles]   = useState([]);
   const [addingMember,  setAddingMember]  = useState(false);
-  const [memberForm,    setMemberForm]    = useState({ userId: '', role: '', allocationPct: null, allocationFrom: null, allocationTo: null });
+  const [memberForm,    setMemberForm]    = useState({ userId: '', role: '', allocationMode: 'per_day', hoursPerDay: null, allocationTotalHours: null, allocationFrom: null, allocationTo: null });
+  const [memberConflict, setMemberConflict] = useState(null);      // 409 conflict for the add form
+  const [memberDerived,  setMemberDerived]  = useState({ hoursPerDay: null, totalHours: null, workingDays: null }); // from AllocationTypeInput (total ÷ working days)
   const [editingMemberId, setEditingMemberId] = useState(null);
-  const [editMemberForm,  setEditMemberForm]  = useState({ role: '', allocationPct: null, allocationFrom: null, allocationTo: null });
+  const [editMemberForm,  setEditMemberForm]  = useState({ role: '', allocationMode: 'per_day', hoursPerDay: null, allocationTotalHours: null, allocationFrom: null, allocationTo: null });
+  const [editMemberConflict, setEditMemberConflict] = useState(null); // 409 conflict for the inline edit form
+  const [capacity, setCapacity] = useState(8);                     // working hours/day, from availability responses
   const [statusUpdating,setStatusUpdating]= useState(false);
   const [showAllocationPreview, setShowAllocationPreview] = useState(false);
   const [allocationPreview,     setAllocationPreview]     = useState([]);
@@ -127,6 +215,14 @@ export default function ProjectDetail() {
   // Batch availability for Team Setup tab
   const [membersAvailability, setMembersAvailability] = useState({});
   const [availabilityLoading, setAvailabilityLoading] = useState(false);
+
+  // Monthly utilisation (selected calendar month, all projects + helpdesk)
+  const [utilMonth,     setUtilMonth]     = useState(currentMonthKey);
+  const [teamUtil,      setTeamUtil]      = useState({});     // userId → month cell
+  const [utilMonthMeta, setUtilMonthMeta] = useState(null);   // { workingDays, totalHours, summary }
+  const [utilLoading,   setUtilLoading]   = useState(false);
+  const [utilTick,      setUtilTick]      = useState(0);      // bumped after member add/update/remove/confirm
+  const bumpUtil = () => setUtilTick(t => t + 1);
 
   // Edit project modal
   const [showEdit,  setShowEdit]  = useState(false);
@@ -249,12 +345,35 @@ export default function ProjectDetail() {
         const map = {};
         data.forEach(d => { map[String(d.userId)] = d; });
         setMembersAvailability(map);
+        const cap = Number(data.find(d => Number(d.capacity) > 0)?.capacity);
+        if (cap > 0) setCapacity(cap);
       })
       .catch(() => {}) // non-fatal — cards render fine without availability
       .finally(() => setAvailabilityLoading(false));
   // Depend on the actual set of userIds, not just count — swapping one member
   // for another keeps the count identical but must still trigger a re-fetch.
   }, [id, (project?.members || []).map(m => m.userId).join(',')]);
+
+  // Monthly utilisation for all team members (Team tab only). Re-runs on month
+  // change, member set change, or after any allocation mutation (utilTick).
+  const memberUserIdsKey = (project?.members || []).map(m => m.userId).join(',');
+  useEffect(() => {
+    if (activeTab !== 'team' || !id || !memberUserIdsKey) return;
+    let cancelled = false;
+    setUtilLoading(true);
+    api.get('/pm/utilisation', { params: { from: utilMonth, to: utilMonth, userIds: memberUserIdsKey } })
+      .then(res => {
+        if (cancelled) return;
+        const data = res.data?.data || {};
+        const map = {};
+        (data.users || []).forEach(u => { map[String(u.userId)] = u.cells?.[0] || null; });
+        setTeamUtil(map);
+        setUtilMonthMeta(data.months?.[0] || null);
+      })
+      .catch(() => {}) // non-fatal — chips simply stay hidden
+      .finally(() => { if (!cancelled) setUtilLoading(false); });
+    return () => { cancelled = true; };
+  }, [activeTab, id, utilMonth, memberUserIdsKey, utilTick]);
 
   // Reload RAID when filter changes
   useEffect(() => {
@@ -278,48 +397,113 @@ export default function ProjectDetail() {
   };
 
   // ── Team ────────────────────────────────────────────────────────────────────
+  const setMemberField = (patch) => {
+    setMemberConflict(null); // any input change clears the conflict panel
+    setMemberForm(f => ({ ...f, ...patch }));
+  };
+  const cancelAddMember = () => {
+    setMemberConflict(null);
+    setAddingMember(false);
+  };
   const handleAddMember = async () => {
     if (!memberForm.userId) return toast.error('Select a user');
     try {
-      await addMemberApi(id, memberForm);
+      const mode = memberForm.allocationMode === 'total' ? 'total' : 'per_day';
+      await addMemberApi(id, {
+        userId:         memberForm.userId,
+        role:           memberForm.role || undefined,
+        allocationMode: mode,
+        // Explicit null/'' check — 0.5 is valid and must not be coerced to null
+        hoursPerDay:    mode === 'per_day' && memberForm.hoursPerDay != null && memberForm.hoursPerDay !== ''
+          ? Number(memberForm.hoursPerDay)
+          : null,
+        allocationTotalHours: mode === 'total' && memberForm.allocationTotalHours != null && memberForm.allocationTotalHours !== ''
+          ? Number(memberForm.allocationTotalHours)
+          : null,
+        allocationFrom: memberForm.allocationFrom || null,
+        allocationTo:   memberForm.allocationTo   || null,
+      });
       toast.success('Member added');
       dispatch(fetchProjectById(id));
-      setMemberForm({ userId: '', role: '', allocationPct: null, allocationFrom: null, allocationTo: null });
+      bumpUtil();
+      setMemberForm({ userId: '', role: '', allocationMode: 'per_day', hoursPerDay: null, allocationTotalHours: null, allocationFrom: null, allocationTo: null });
+      setMemberConflict(null);
       setAddingMember(false);
-    } catch (err) { toast.error(err.response?.data?.message || 'Failed to add member'); }
+    } catch (err) {
+      if (err.response?.status === 409) {
+        toast.error(err.response.data?.message || 'Allocation exceeds capacity');
+        setMemberConflict(err.response.data?.conflict || null);
+        return; // keep the form open so the user can adjust
+      }
+      toast.error(err.response?.data?.message || 'Failed to add member');
+    }
+  };
+
+  const handleConfirmHours = async (memberId) => {
+    try {
+      await api.patch(`/pm/projects/${id}/members/${memberId}/confirm-hours`);
+      toast.success('Hours confirmed');
+      dispatch(fetchProjectById(id));
+      bumpUtil();
+    } catch (err) { toast.error(err.response?.data?.message || 'Failed to confirm hours'); }
   };
   const handleRemoveMember = async (memberId) => {
     if (!window.confirm('Remove this member?')) return;
-    try { await removeMemberApi(id, memberId); toast.success('Member removed'); dispatch(fetchProjectById(id)); }
+    try { await removeMemberApi(id, memberId); toast.success('Member removed'); dispatch(fetchProjectById(id)); bumpUtil(); }
     catch { toast.error('Failed to remove member'); }
   };
 
   const openEditMember = (m) => {
+    setEditMemberConflict(null);
     setEditingMemberId(m._id || m.id);
     setEditMemberForm({
       role:           m.role           || '',
-      allocationPct:  m.allocationPct  ?? null,
+      allocationMode: m.allocationMode === 'total' ? 'total' : 'per_day',
+      hoursPerDay:    m.hoursPerDay != null && m.hoursPerDay !== '' ? Number(m.hoursPerDay) : null,
+      allocationTotalHours: m.allocationTotalHours != null && m.allocationTotalHours !== '' ? Number(m.allocationTotalHours) : null,
       allocationFrom: m.allocationFrom ? m.allocationFrom.slice(0, 10) : null,
       allocationTo:   m.allocationTo   ? m.allocationTo.slice(0, 10)   : null,
     });
   };
+  const closeEditMember = () => {
+    setEditMemberConflict(null);
+    setEditingMemberId(null);
+  };
+  const setEditMemberField = (patch) => {
+    setEditMemberConflict(null); // any input change clears the conflict line
+    setEditMemberForm(f => ({ ...f, ...patch }));
+  };
 
   const handleUpdateMember = async (memberId) => {
     try {
+      const mode = editMemberForm.allocationMode === 'total' ? 'total' : 'per_day';
       await updateMemberApi(id, memberId, {
         // Include role so it can be changed after a member is added
         ...(editMemberForm.role ? { role: editMemberForm.role } : {}),
-        // Explicit null/undefined check — 0 is a valid allocationPct and must not be coerced to null
-        allocationPct:  (editMemberForm.allocationPct != null && editMemberForm.allocationPct !== '')
-          ? Number(editMemberForm.allocationPct)
+        allocationMode: mode,
+        // Explicit null/'' check — 0.5 is a valid hoursPerDay and must not be coerced to null
+        hoursPerDay:    mode === 'per_day' && editMemberForm.hoursPerDay != null && editMemberForm.hoursPerDay !== ''
+          ? Number(editMemberForm.hoursPerDay)
+          : null,
+        allocationTotalHours: mode === 'total' && editMemberForm.allocationTotalHours != null && editMemberForm.allocationTotalHours !== ''
+          ? Number(editMemberForm.allocationTotalHours)
           : null,
         allocationFrom: editMemberForm.allocationFrom || null,
         allocationTo:   editMemberForm.allocationTo   || null,
       });
       toast.success('Member updated');
+      setEditMemberConflict(null);
       setEditingMemberId(null);
       dispatch(fetchProjectById(id));
-    } catch (err) { toast.error(err.response?.data?.message || 'Failed to update allocation'); }
+      bumpUtil();
+    } catch (err) {
+      if (err.response?.status === 409) {
+        toast.error(err.response.data?.message || 'Allocation exceeds capacity');
+        setEditMemberConflict(err.response.data?.conflict || null);
+        return; // keep the inline form open
+      }
+      toast.error(err.response?.data?.message || 'Failed to update allocation');
+    }
   };
 
   // ── Edit project ────────────────────────────────────────────────────────────
@@ -712,7 +896,7 @@ export default function ProjectDetail() {
                   <label className="text-xs font-medium text-gray-600 block mb-1">Member <span className="text-red-500">*</span></label>
                   <select
                     value={memberForm.userId}
-                    onChange={e => setMemberForm(f => ({ ...f, userId: e.target.value }))}
+                    onChange={e => setMemberField({ userId: e.target.value })}
                     className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white"
                   >
                     <option value="">Select member…</option>
@@ -725,7 +909,7 @@ export default function ProjectDetail() {
                   <label className="text-xs font-medium text-gray-600 block mb-1">Role in Project</label>
                   <select
                     value={memberForm.role}
-                    onChange={e => setMemberForm(f => ({ ...f, role: e.target.value }))}
+                    onChange={e => setMemberField({ role: e.target.value })}
                     className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white"
                   >
                     <option value="">Select role…</option>
@@ -735,16 +919,21 @@ export default function ProjectDetail() {
                   </select>
                 </div>
               </div>
-              {/* Row 2 — Allocation % | From Date | To Date — same 3-col grid */}
+              {/* Row 2 — Hours / day | From Date | To Date — same 3-col grid */}
               <div className="grid grid-cols-3 gap-3 mb-3">
                 <div>
-                  <label className="text-xs font-medium text-gray-600 block mb-1">Allocation %</label>
-                  <input
-                    type="number" min="1" max="100"
-                    value={memberForm.allocationPct || ''}
-                    onChange={e => setMemberForm(f => ({ ...f, allocationPct: e.target.value ? Number(e.target.value) : null }))}
-                    placeholder="e.g. 50"
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                  <AllocationTypeInput
+                    value={memberForm}
+                    onChange={next => setMemberField({
+                      allocationMode:       next.allocationMode,
+                      hoursPerDay:          next.hoursPerDay ?? null,
+                      allocationTotalHours: next.allocationTotalHours ?? null,
+                    })}
+                    from={memberForm.allocationFrom || null}
+                    to={memberForm.allocationTo || null}
+                    capacity={capacity}
+                    defaultMode="per_day"
+                    onDerived={setMemberDerived}
                   />
                 </div>
                 <div>
@@ -752,7 +941,7 @@ export default function ProjectDetail() {
                   <input
                     type="date"
                     value={memberForm.allocationFrom || ''}
-                    onChange={e => setMemberForm(f => ({ ...f, allocationFrom: e.target.value || null }))}
+                    onChange={e => setMemberField({ allocationFrom: e.target.value || null })}
                     className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                   />
                 </div>
@@ -761,11 +950,17 @@ export default function ProjectDetail() {
                   <input
                     type="date"
                     value={memberForm.allocationTo || ''}
-                    onChange={e => setMemberForm(f => ({ ...f, allocationTo: e.target.value || null }))}
+                    onChange={e => setMemberField({ allocationTo: e.target.value || null })}
                     className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                   />
                 </div>
               </div>
+              {/* 409 conflict panel — server said the requested hours don't fit */}
+              <ConflictPanel
+                conflict={memberConflict}
+                capacity={capacity}
+                onUseRemaining={(h) => { setMemberForm(f => ({ ...f, allocationMode: 'per_day', hoursPerDay: h, allocationTotalHours: null })); setMemberConflict(null); }}
+              />
               {/* Availability card — shows when a person is selected */}
               {memberForm.userId && (
                 <div className="mt-3 border-t border-gray-100 pt-3">
@@ -773,13 +968,13 @@ export default function ProjectDetail() {
                     userId={memberForm.userId}
                     fromDate={memberForm.allocationFrom || null}
                     toDate={memberForm.allocationTo || null}
-                    newPct={memberForm.allocationPct ? Number(memberForm.allocationPct) : null}
+                    newHoursPerDay={memberDerived.hoursPerDay != null ? Number(memberDerived.hoursPerDay) : null}
                     onSuggestionSelect={(suggestion) => {
-                      if (suggestion.type === 'reduce_pct' && suggestion.suggestedPct !== undefined) {
-                        setMemberForm(f => ({ ...f, allocationPct: suggestion.suggestedPct }));
+                      if (suggestion.type === 'reduce_hours' && suggestion.suggestedHoursPerDay != null) {
+                        setMemberField({ allocationMode: 'per_day', hoursPerDay: Number(suggestion.suggestedHoursPerDay), allocationTotalHours: null });
                       }
                       if (suggestion.type === 'shift_dates' && suggestion.suggestedFromDate) {
-                        setMemberForm(f => ({ ...f, allocationFrom: suggestion.suggestedFromDate }));
+                        setMemberField({ allocationFrom: suggestion.suggestedFromDate });
                       }
                       if (suggestion.type === 'request_approval' && suggestion.targetProjectName) {
                         toast(`Contact the manager of "${suggestion.targetProjectName}" to release capacity first.`);
@@ -790,7 +985,7 @@ export default function ProjectDetail() {
               )}
               <div className="flex gap-2">
                 <button onClick={handleAddMember} className="px-4 py-1.5 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 transition-colors">Add Member</button>
-                <button onClick={() => setAddingMember(false)} className="px-3 py-1.5 text-gray-500 hover:bg-gray-100 rounded-lg text-sm transition-colors">Cancel</button>
+                <button onClick={cancelAddMember} className="px-3 py-1.5 text-gray-500 hover:bg-gray-100 rounded-lg text-sm transition-colors">Cancel</button>
               </div>
             </div>
           )}
@@ -801,12 +996,51 @@ export default function ProjectDetail() {
                 <span className="text-gray-500">{members.length} member{members.length !== 1 ? 's' : ''}</span>
                 <span className="text-gray-300">|</span>
                 <span className="text-gray-500">
-                  Avg allocation: <span className="font-medium text-gray-700">
-                    {members.filter(m => m.allocationPct !== null && m.allocationPct !== undefined).length > 0
-                      ? Math.round(members.filter(m => m.allocationPct !== null && m.allocationPct !== undefined).reduce((s, m) => s + m.allocationPct, 0) / members.filter(m => m.allocationPct !== null && m.allocationPct !== undefined).length)
-                      : '—'}%
-                  </span>
+                  {(() => {
+                    const withHours = members.filter(m => m.hoursPerDay != null);
+                    if (withHours.length === 0) return <>Avg <span className="font-medium text-gray-700">—</span></>;
+                    const avg = withHours.reduce((s, m) => s + Number(m.hoursPerDay), 0) / withHours.length;
+                    return (
+                      <>Avg <span className="font-medium text-gray-700">{fmtH(avg)} h/day</span>
+                        <span className="text-gray-400"> · {Math.round(avg / capacity * 100)}%</span></>
+                    );
+                  })()}
                 </span>
+              </div>
+
+              {/* Monthly utilisation strip — selected calendar month, all projects + helpdesk */}
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-3 py-2 -mt-2 mb-4 bg-white border border-gray-100 rounded-lg text-xs text-gray-500">
+                <label className="flex items-center gap-2">
+                  <span className="font-medium text-gray-600">Month</span>
+                  <input
+                    type="month"
+                    value={utilMonth}
+                    onChange={e => { if (e.target.value) setUtilMonth(e.target.value); }}
+                    className="border border-gray-200 rounded px-2 py-1 text-xs text-gray-700 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  />
+                </label>
+                {utilLoading && !utilMonthMeta ? (
+                  <div className="h-3 w-40 bg-gray-100 rounded animate-pulse" />
+                ) : utilMonthMeta ? (
+                  <>
+                    <span>
+                      <span className="font-medium text-gray-700">{utilMonthMeta.workingDays}</span> working days
+                      <span className="text-gray-300"> · </span>
+                      <span className="font-medium text-gray-700">{fmtH(utilMonthMeta.totalHours)}h</span> capacity per person
+                    </span>
+                    <span className="flex items-center gap-1.5 ml-auto">
+                      <span className="px-2 py-0.5 rounded-full bg-gray-100 text-gray-700 font-medium">
+                        Avg {Math.round(Number(utilMonthMeta.summary?.avgPct) || 0)}%
+                      </span>
+                      <span className={`px-2 py-0.5 rounded-full font-medium ${(utilMonthMeta.summary?.overCount || 0) > 0 ? 'bg-red-100 text-red-700' : 'bg-gray-100 text-gray-500'}`}>
+                        {utilMonthMeta.summary?.overCount || 0} over
+                      </span>
+                      <span className={`px-2 py-0.5 rounded-full font-medium ${(utilMonthMeta.summary?.highCount || 0) > 0 ? 'bg-amber-100 text-amber-700' : 'bg-gray-100 text-gray-500'}`}>
+                        {utilMonthMeta.summary?.highCount || 0} high
+                      </span>
+                    </span>
+                  </>
+                ) : null}
               </div>
             </div>
           )}
@@ -835,7 +1069,7 @@ export default function ProjectDetail() {
                       {canManage && (
                         <div className="flex gap-1.5 flex-shrink-0">
                           <button
-                            onClick={() => isEditing ? setEditingMemberId(null) : openEditMember(m)}
+                            onClick={() => isEditing ? closeEditMember() : openEditMember(m)}
                             className="text-xs text-blue-500 hover:text-blue-700 transition-colors"
                             title="Edit allocation"
                           >
@@ -848,15 +1082,25 @@ export default function ProjectDetail() {
 
                     {/* Allocation bar */}
                     <div className="mb-3">
-                      {m.allocationPct !== null && m.allocationPct !== undefined ? (
+                      {(m.hoursPerDay != null || m.allocationTotalHours != null) ? (
                         <>
                           <div className="flex items-center justify-between text-xs text-gray-500 mb-1">
                             <span>Allocation</span>
-                            <span className="font-medium text-gray-700">{m.allocationPct}%</span>
+                            <span className="flex items-center gap-1.5">
+                              <span className="font-medium text-gray-700">{formatAllocation(m, capacity)}</span>
+                              {(m.hoursConfirmed === false || m.isEstimated) && (
+                                <>
+                                  <span className="px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 text-[10px] font-medium">estimated</span>
+                                  {canManage && (
+                                    <button onClick={() => handleConfirmHours(mid)} className="text-[10px] text-blue-600 hover:text-blue-800 underline" title="Confirm these hours">Confirm</button>
+                                  )}
+                                </>
+                              )}
+                            </span>
                           </div>
                           <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                            <div className={`h-full rounded-full transition-all ${m.allocationPct > 80 ? 'bg-amber-500' : 'bg-emerald-500'}`}
-                              style={{ width: `${Math.min(m.allocationPct, 100)}%` }} />
+                            <div className={`h-full rounded-full transition-all ${(Number(m.hoursPerDay) || 0) / capacity > 0.8 ? 'bg-amber-500' : 'bg-emerald-500'}`}
+                              style={{ width: `${Math.min((Number(m.hoursPerDay) || 0) / capacity, 1) * 100}%` }} />
                           </div>
                         </>
                       ) : (
@@ -904,16 +1148,20 @@ export default function ProjectDetail() {
                         </div>
                       );
 
+                      const cap   = Number(avail.capacity) > 0 ? Number(avail.capacity) : capacity;
+                      const peak  = Number(avail.peakHours) || 0;
+                      const free  = avail.freeHours != null ? Number(avail.freeHours) : Math.max(0, cap - peak);
+                      const ratio = peak / cap;
                       const barColor = avail.isOverAllocated ? 'bg-red-500' :
-                                       avail.totalCommitted > 80 ? 'bg-amber-500' : 'bg-emerald-500';
-                      const pct = Math.min(avail.totalCommitted, 100);
+                                       ratio > 0.8 ? 'bg-amber-500' : 'bg-emerald-500';
+                      const pct = Math.min(ratio, 1) * 100;
 
                       return (
                         <div className="mt-3 pt-3 border-t border-gray-100 space-y-1.5">
                           <div className="flex items-center justify-between">
                             <span className="text-xs text-gray-400 font-medium uppercase tracking-wide">Overall capacity</span>
-                            <span className={`text-xs font-semibold ${avail.isOverAllocated ? 'text-red-600' : avail.totalCommitted > 80 ? 'text-amber-600' : 'text-emerald-600'}`}>
-                              {avail.totalCommitted}% committed
+                            <span className={`text-xs font-semibold ${avail.isOverAllocated ? 'text-red-600' : ratio > 0.8 ? 'text-amber-600' : 'text-emerald-600'}`}>
+                              {fmtH(peak)}h / {fmtH(cap)}h busiest day
                             </span>
                           </div>
                           {/* Capacity bar */}
@@ -923,7 +1171,7 @@ export default function ProjectDetail() {
                           </div>
                           {/* Stats row */}
                           <div className="flex items-center justify-between text-xs text-gray-400">
-                            <span>{avail.freeCapacity}% free &middot; {avail.projectCount} project{avail.projectCount !== 1 ? 's' : ''}</span>
+                            <span>{fmtH(Math.max(0, free))}h free &middot; {avail.projectCount} project{avail.projectCount !== 1 ? 's' : ''}</span>
                             {avail.nextFreeDate && (
                               <span>Free from {avail.nextFreeDate}</span>
                             )}
@@ -932,12 +1180,20 @@ export default function ProjectDetail() {
                           {avail.isOverAllocated && (
                             <div className="flex items-center gap-1 text-xs text-red-600 bg-red-50 rounded px-2 py-1">
                               <span>&#9888;</span>
-                              <span>Over-allocated by {avail.totalCommitted - 100}%</span>
+                              <span>Over by {fmtH(peak - cap)}h on the busiest day</span>
                             </div>
                           )}
                         </div>
                       );
                     })()}
+
+                    {/* ── Selected-month utilisation (all projects + helpdesk) ── */}
+                    {(teamUtil[String(m.userId)] || utilLoading) && (
+                      <div className="mt-3 pt-3 border-t border-gray-100 flex items-center justify-between gap-2">
+                        <span className="text-xs text-gray-400 font-medium uppercase tracking-wide">{monthLabel(utilMonth)}</span>
+                        <MonthUtilChip cell={teamUtil[String(m.userId)]} loading={utilLoading} month={utilMonth} compact />
+                      </div>
+                    )}
 
                     {/* Inline allocation edit form */}
                     {isEditing && (
@@ -948,7 +1204,7 @@ export default function ProjectDetail() {
                             <label className="text-xs text-gray-600 block mb-1">Role</label>
                             <select
                               value={editMemberForm.role || ''}
-                              onChange={e => setEditMemberForm(f => ({ ...f, role: e.target.value }))}
+                              onChange={e => setEditMemberField({ role: e.target.value })}
                               className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"
                             >
                               <option value="">Select role…</option>
@@ -956,13 +1212,18 @@ export default function ProjectDetail() {
                             </select>
                           </div>
                           <div>
-                            <label className="text-xs text-gray-600 block mb-1">Allocation %</label>
-                            <input
-                              type="number" min="1" max="100"
-                              value={editMemberForm.allocationPct || ''}
-                              onChange={e => setEditMemberForm(f => ({ ...f, allocationPct: e.target.value ? Number(e.target.value) : null }))}
-                              placeholder="e.g. 50"
-                              className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"
+                            <AllocationTypeInput
+                              compact
+                              value={editMemberForm}
+                              onChange={next => setEditMemberField({
+                                allocationMode:       next.allocationMode,
+                                hoursPerDay:          next.hoursPerDay ?? null,
+                                allocationTotalHours: next.allocationTotalHours ?? null,
+                              })}
+                              from={editMemberForm.allocationFrom || null}
+                              to={editMemberForm.allocationTo || null}
+                              capacity={capacity}
+                              defaultMode="per_day"
                             />
                           </div>
                           <div>
@@ -970,7 +1231,7 @@ export default function ProjectDetail() {
                             <input
                               type="date"
                               value={editMemberForm.allocationFrom || ''}
-                              onChange={e => setEditMemberForm(f => ({ ...f, allocationFrom: e.target.value || null }))}
+                              onChange={e => setEditMemberField({ allocationFrom: e.target.value || null })}
                               className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"
                             />
                           </div>
@@ -979,11 +1240,18 @@ export default function ProjectDetail() {
                             <input
                               type="date"
                               value={editMemberForm.allocationTo || ''}
-                              onChange={e => setEditMemberForm(f => ({ ...f, allocationTo: e.target.value || null }))}
+                              onChange={e => setEditMemberField({ allocationTo: e.target.value || null })}
                               className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"
                             />
                           </div>
                         </div>
+                        {/* 409 conflict — compact inline version */}
+                        <ConflictPanel
+                          compact
+                          conflict={editMemberConflict}
+                          capacity={capacity}
+                          onUseRemaining={(h) => { setEditMemberForm(f => ({ ...f, allocationMode: 'per_day', hoursPerDay: h, allocationTotalHours: null })); setEditMemberConflict(null); }}
+                        />
                         <div className="flex gap-2 mt-2">
                           <button
                             onClick={() => handleUpdateMember(mid)}
@@ -992,7 +1260,7 @@ export default function ProjectDetail() {
                             Save
                           </button>
                           <button
-                            onClick={() => setEditingMemberId(null)}
+                            onClick={closeEditMember}
                             className="px-3 py-1.5 text-gray-500 hover:bg-gray-100 rounded text-xs"
                           >
                             Cancel
@@ -1022,12 +1290,20 @@ export default function ProjectDetail() {
                         {m.role && <p className="text-xs text-emerald-700 mt-0.5">{m.role}</p>}
                       </div>
                       <div className="text-right flex-shrink-0 min-w-[120px]">
-                        {m.allocationPct != null ? (
+                        {(m.hoursPerDay != null || m.allocationTotalHours != null) ? (
                           <>
-                            <span className="text-sm font-semibold text-emerald-700">{m.allocationPct}%</span>
+                            <span className="text-sm font-semibold text-emerald-700">{formatAllocation(m, capacity)}</span>
+                            {(m.hoursConfirmed === false || m.isEstimated) && (
+                              <div className="flex items-center justify-end gap-1 mt-0.5">
+                                <span className="px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 text-[10px] font-medium">estimated</span>
+                                {canManage && (
+                                  <button onClick={() => handleConfirmHours(mid)} className="text-[10px] text-blue-600 hover:text-blue-800 underline" title="Confirm these hours">Confirm</button>
+                                )}
+                              </div>
+                            )}
                             <div className="mt-1 h-1.5 bg-gray-100 rounded-full overflow-hidden w-24 ml-auto">
-                              <div className={`h-full rounded-full ${m.allocationPct > 80 ? 'bg-amber-500' : 'bg-emerald-500'}`}
-                                style={{ width: `${Math.min(m.allocationPct, 100)}%` }} />
+                              <div className={`h-full rounded-full ${(Number(m.hoursPerDay) || 0) / capacity > 0.8 ? 'bg-amber-500' : 'bg-emerald-500'}`}
+                                style={{ width: `${Math.min((Number(m.hoursPerDay) || 0) / capacity, 1) * 100}%` }} />
                             </div>
                           </>
                         ) : (
@@ -1058,25 +1334,37 @@ export default function ProjectDetail() {
                               : <span className="text-xs text-gray-400">—</span>}
                           </div>
                         );
+                        const cap   = Number(avail.capacity) > 0 ? Number(avail.capacity) : capacity;
+                        const peak  = Number(avail.peakHours) || 0;
+                        const free  = avail.freeHours != null ? Number(avail.freeHours) : Math.max(0, cap - peak);
+                        const ratio = peak / cap;
                         return (
-                          <div className="flex-shrink-0 w-28">
+                          <div className="flex-shrink-0 w-32" title={`${fmtH(peak)}h / ${fmtH(cap)}h busiest day · ${fmtH(Math.max(0, free))}h free · ${avail.projectCount} project${avail.projectCount !== 1 ? 's' : ''}`}>
                             <p className="text-xs text-gray-400 mb-1">Overall</p>
                             <div className="flex items-center gap-1.5">
                               <div className="w-14 h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                                <div className={`h-full rounded-full ${avail.isOverAllocated ? 'bg-red-400' : avail.totalCommitted > 80 ? 'bg-amber-400' : 'bg-emerald-400'}`}
-                                  style={{ width: `${Math.min(avail.totalCommitted, 100)}%` }} />
+                                <div className={`h-full rounded-full ${avail.isOverAllocated ? 'bg-red-400' : ratio > 0.8 ? 'bg-amber-400' : 'bg-emerald-400'}`}
+                                  style={{ width: `${Math.min(ratio, 1) * 100}%` }} />
                               </div>
-                              <span className={`text-xs font-medium ${avail.isOverAllocated ? 'text-red-600' : 'text-gray-600'}`}>
-                                {avail.totalCommitted}%
+                              <span className={`text-xs font-medium whitespace-nowrap ${avail.isOverAllocated ? 'text-red-600' : 'text-gray-600'}`}>
+                                {fmtH(peak)}h / {fmtH(cap)}h
                               </span>
                             </div>
+                            {avail.isOverAllocated && (
+                              <p className="text-[10px] text-red-600 mt-0.5">Over by {fmtH(peak - cap)}h</p>
+                            )}
                           </div>
                         );
                       })()}
+                      {/* Selected-month utilisation (all projects + helpdesk) */}
+                      <div className="flex-shrink-0 w-32">
+                        <p className="text-xs text-gray-400 mb-1">{monthLabel(utilMonth)}</p>
+                        <MonthUtilChip cell={teamUtil[String(m.userId)]} loading={utilLoading} month={utilMonth} compact />
+                      </div>
                       {canManage && (
                         <div className="flex gap-2 flex-shrink-0">
                           <button
-                            onClick={() => isEditing ? setEditingMemberId(null) : openEditMember(m)}
+                            onClick={() => isEditing ? closeEditMember() : openEditMember(m)}
                             className="text-xs text-blue-500 hover:text-blue-700 transition-colors"
                             title="Edit allocation"
                           >
@@ -1091,12 +1379,12 @@ export default function ProjectDetail() {
                     {isEditing && (
                       <div className="mt-3 ml-13 pl-13 bg-blue-50 border border-blue-100 rounded-lg p-3">
                         <p className="text-xs font-semibold text-blue-700 mb-2">Edit {m.user?.name}</p>
-                        <div className="grid grid-cols-4 gap-2">
+                        <div className="grid grid-cols-[1fr_1.6fr_1fr_1fr] gap-2">
                           <div>
                             <label className="text-xs text-gray-600 block mb-1">Role</label>
                             <select
                               value={editMemberForm.role || ''}
-                              onChange={e => setEditMemberForm(f => ({ ...f, role: e.target.value }))}
+                              onChange={e => setEditMemberField({ role: e.target.value })}
                               className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"
                             >
                               <option value="">Select role…</option>
@@ -1104,13 +1392,18 @@ export default function ProjectDetail() {
                             </select>
                           </div>
                           <div>
-                            <label className="text-xs text-gray-600 block mb-1">Allocation %</label>
-                            <input
-                              type="number" min="1" max="100"
-                              value={editMemberForm.allocationPct || ''}
-                              onChange={e => setEditMemberForm(f => ({ ...f, allocationPct: e.target.value ? Number(e.target.value) : null }))}
-                              placeholder="e.g. 50"
-                              className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"
+                            <AllocationTypeInput
+                              compact
+                              value={editMemberForm}
+                              onChange={next => setEditMemberField({
+                                allocationMode:       next.allocationMode,
+                                hoursPerDay:          next.hoursPerDay ?? null,
+                                allocationTotalHours: next.allocationTotalHours ?? null,
+                              })}
+                              from={editMemberForm.allocationFrom || null}
+                              to={editMemberForm.allocationTo || null}
+                              capacity={capacity}
+                              defaultMode="per_day"
                             />
                           </div>
                           <div>
@@ -1118,7 +1411,7 @@ export default function ProjectDetail() {
                             <input
                               type="date"
                               value={editMemberForm.allocationFrom || ''}
-                              onChange={e => setEditMemberForm(f => ({ ...f, allocationFrom: e.target.value || null }))}
+                              onChange={e => setEditMemberField({ allocationFrom: e.target.value || null })}
                               className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"
                             />
                           </div>
@@ -1127,11 +1420,18 @@ export default function ProjectDetail() {
                             <input
                               type="date"
                               value={editMemberForm.allocationTo || ''}
-                              onChange={e => setEditMemberForm(f => ({ ...f, allocationTo: e.target.value || null }))}
+                              onChange={e => setEditMemberField({ allocationTo: e.target.value || null })}
                               className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"
                             />
                           </div>
                         </div>
+                        {/* 409 conflict — compact inline version */}
+                        <ConflictPanel
+                          compact
+                          conflict={editMemberConflict}
+                          capacity={capacity}
+                          onUseRemaining={(h) => { setEditMemberForm(f => ({ ...f, allocationMode: 'per_day', hoursPerDay: h, allocationTotalHours: null })); setEditMemberConflict(null); }}
+                        />
                         <div className="flex gap-2 mt-2">
                           <button
                             onClick={() => handleUpdateMember(mid)}
@@ -1140,7 +1440,7 @@ export default function ProjectDetail() {
                             Save
                           </button>
                           <button
-                            onClick={() => setEditingMemberId(null)}
+                            onClick={closeEditMember}
                             className="px-3 py-1.5 text-gray-500 hover:bg-gray-100 rounded text-xs"
                           >
                             Cancel
@@ -1796,22 +2096,26 @@ export default function ProjectDetail() {
                 <div className="text-center py-12">
                   <p className="text-2xl mb-2">📊</p>
                   <p className="text-sm font-medium text-gray-600">No allocation data yet</p>
-                  <p className="text-xs text-gray-400 mt-1">Set Allocation %, From Date, and To Date for team members first.</p>
+                  <p className="text-xs text-gray-400 mt-1">Set Hours / day, From Date, and To Date for team members first.</p>
                 </div>
               ) : (
                 allocationPreview.map(member => {
-                  const thisAlloc  = member.allAllocations?.find(a => a.projectId === id);
-                  const otherAllocs = (member.allAllocations || []).filter(a => a.projectId !== id);
-                  const totalPct   = (member.allAllocations || []).reduce((s, a) => s + (a.pct || 0), 0);
-                  const isUnset    = member.allocationPct == null;
-                  const isOverloaded = totalPct > 100;
-                  const isHigh     = totalPct > 80 && totalPct <= 100;
+                  const otherAllocs = (member.allAllocations || []).filter(a => String(a.projectId) !== String(id));
+                  const cap        = Number(member.capacity) > 0 ? Number(member.capacity) : capacity;
+                  const peak       = Number(member.peakHours) || 0;
+                  const ratio      = peak / cap;
+                  const isUnset    = member.hoursPerDay == null;
+                  const isOverloaded = member.isOverAllocated === true || ratio > 1;
+                  const isHigh     = !isOverloaded && ratio > 0.8;
                   const barColor   = isOverloaded ? 'bg-red-500' : isHigh ? 'bg-amber-400' : 'bg-emerald-500';
                   const borderCls  = isOverloaded ? 'border-red-200 bg-red-50' : isUnset ? 'border-amber-200 bg-amber-50' : 'border-gray-200';
                   // Find earliest free-up date (latest allocationTo across all active allocations)
                   const freeDate = (member.allAllocations || [])
-                    .filter(a => a.to)
-                    .sort((a, b) => new Date(b.to) - new Date(a.to))[0]?.to;
+                    .map(a => a.allocationTo ?? a.to)
+                    .filter(Boolean)
+                    .sort((a, b) => new Date(b) - new Date(a))[0];
+                  const memberName  = member.name  ?? member.user?.name;
+                  const memberEmail = member.email ?? member.user?.email;
 
                   return (
                     <div key={member.userId} className={`rounded-lg border p-4 ${borderCls}`}>
@@ -1819,22 +2123,22 @@ export default function ProjectDetail() {
                       <div className="flex items-start justify-between gap-3 mb-3">
                         <div className="flex items-center gap-2.5">
                           <div className="w-8 h-8 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center text-xs font-bold flex-shrink-0">
-                            {member.user?.name?.charAt(0).toUpperCase() || '?'}
+                            {memberName?.charAt(0).toUpperCase() || '?'}
                           </div>
                           <div>
-                            <p className="text-sm font-semibold text-gray-900">{member.user?.name}</p>
-                            <p className="text-xs text-gray-500">{member.user?.email}</p>
+                            <p className="text-sm font-semibold text-gray-900">{memberName}</p>
+                            <p className="text-xs text-gray-500">{memberEmail}</p>
                           </div>
                         </div>
                         <div className="text-right flex-shrink-0">
                           {isUnset ? (
                             <span className="inline-block px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-700">⚠ Allocation not set</span>
                           ) : isOverloaded ? (
-                            <span className="inline-block px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-700">🔴 Overloaded {totalPct}%</span>
+                            <span className="inline-block px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-700">🔴 Overloaded {fmtH(peak)}h / {fmtH(cap)}h</span>
                           ) : isHigh ? (
-                            <span className="inline-block px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-700">⚠ High {totalPct}%</span>
+                            <span className="inline-block px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-700">⚠ High {fmtH(peak)}h / {fmtH(cap)}h</span>
                           ) : (
-                            <span className="inline-block px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-700">✅ {totalPct}% total</span>
+                            <span className="inline-block px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-700">✅ {fmtH(peak)}h / {fmtH(cap)}h</span>
                           )}
                         </div>
                       </div>
@@ -1843,17 +2147,17 @@ export default function ProjectDetail() {
                       {!isUnset && (
                         <div className="mb-3">
                           <div className="flex justify-between text-xs text-gray-500 mb-1">
-                            <span>Total load across all projects</span>
-                            <span className="font-medium">{totalPct}% / 100%</span>
+                            <span>Busiest day across all projects</span>
+                            <span className="font-medium">{fmtH(peak)}h / {fmtH(cap)}h</span>
                           </div>
                           <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
                             <div
                               className={`h-2 rounded-full transition-all ${barColor}`}
-                              style={{ width: `${Math.min(totalPct, 100)}%` }}
+                              style={{ width: `${Math.min(ratio, 1) * 100}%` }}
                             />
                           </div>
-                          {totalPct > 100 && (
-                            <p className="text-xs text-red-500 mt-1">⚠ {totalPct - 100}% over capacity</p>
+                          {peak > cap && (
+                            <p className="text-xs text-red-500 mt-1">⚠ {fmtH(peak - cap)}h over capacity</p>
                           )}
                         </div>
                       )}
@@ -1863,7 +2167,12 @@ export default function ProjectDetail() {
                         <div className="flex items-center gap-2 mb-2">
                           <span className="w-2 h-2 rounded-full bg-emerald-500 flex-shrink-0" />
                           <span className="text-xs font-semibold text-emerald-700">{project?.name || 'This project'}</span>
-                          <span className="text-xs font-bold text-gray-800 ml-auto">{member.allocationPct}%</span>
+                          {member.isEstimated && (
+                            <span className="px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 text-[10px] font-medium">estimated</span>
+                          )}
+                          <span className="text-xs font-bold text-gray-800 ml-auto">
+                            {formatAllocation(member, cap)}
+                          </span>
                           {member.allocationFrom && member.allocationTo && (
                             <span className="text-xs text-gray-400">{member.allocationFrom.slice(0,10)} → {member.allocationTo.slice(0,10)}</span>
                           )}
@@ -1874,16 +2183,20 @@ export default function ProjectDetail() {
                       {otherAllocs.length > 0 && (
                         <div className="space-y-1.5 mt-2">
                           <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Also involved in:</p>
-                          {otherAllocs.map((a, i) => (
-                            <div key={i} className="flex items-center gap-2">
-                              <span className="w-2 h-2 rounded-full bg-gray-300 flex-shrink-0" />
-                              <span className="text-xs text-gray-700 flex-1 truncate">{a.projectName || 'Unknown project'}</span>
-                              <span className="text-xs font-semibold text-gray-700">{a.pct}%</span>
-                              {a.from && a.to && (
-                                <span className="text-xs text-gray-400">{a.from.slice(0,10)} → {a.to.slice(0,10)}</span>
-                              )}
-                            </div>
-                          ))}
+                          {otherAllocs.map((a, i) => {
+                            const from = a.allocationFrom ?? a.from;
+                            const to   = a.allocationTo   ?? a.to;
+                            return (
+                              <div key={i} className="flex items-center gap-2">
+                                <span className="w-2 h-2 rounded-full bg-gray-300 flex-shrink-0" />
+                                <span className="text-xs text-gray-700 flex-1 truncate">{a.projectName || 'Unknown project'}</span>
+                                <span className="text-xs font-semibold text-gray-700">{fmtH(a.hoursPerDay)}h/day</span>
+                                {from && to && (
+                                  <span className="text-xs text-gray-400">{String(from).slice(0,10)} → {String(to).slice(0,10)}</span>
+                                )}
+                              </div>
+                            );
+                          })}
                         </div>
                       )}
 
@@ -1898,17 +2211,20 @@ export default function ProjectDetail() {
                         </div>
                       )}
 
-                      {/* Conflict details */}
-                      {member.hasConflict && (member.conflicts || []).length > 0 && (
+                      {/* Conflict details — date ranges where the busiest day exceeds capacity */}
+                      {(member.conflicts || []).length > 0 && (
                         <div className="mt-2.5 pt-2 border-t border-red-100">
-                          <p className="text-xs font-semibold text-red-600 mb-1">⚠ Conflict weeks:</p>
+                          <p className="text-xs font-semibold text-red-600 mb-1">⚠ Over capacity:</p>
                           {(member.conflicts || []).slice(0, 3).map((c, i) => (
                             <p key={i} className="text-xs text-red-500">
-                              Week of {c.date}: {c.totalPct}% ({c.projects.map(p => `${p.projectName} ${p.pct}%`).join(' + ')})
+                              {fmtRangeDate(c.from)} – {fmtRangeDate(c.to)} ({c.days}d) · {fmtH(c.peak)}h / {fmtH(cap)}h
+                              {(c.projects || []).length > 0 && (
+                                <span className="text-red-400"> ({c.projects.map(p => `${p.projectName} ${fmtH(p.hoursPerDay)}h`).join(' + ')})</span>
+                              )}
                             </p>
                           ))}
                           {member.conflicts.length > 3 && (
-                            <p className="text-xs text-red-400 mt-1">…and {member.conflicts.length - 3} more conflict weeks</p>
+                            <p className="text-xs text-red-400 mt-1">…and {member.conflicts.length - 3} more ranges</p>
                           )}
                         </div>
                       )}
@@ -1916,7 +2232,7 @@ export default function ProjectDetail() {
                       {/* No allocation set - prompt */}
                       {isUnset && (
                         <p className="text-xs text-amber-700 mt-1">
-                          Click <strong>✏ Edit</strong> on this member in the Team tab to set allocation % and dates.
+                          Click <strong>✏ Edit</strong> on this member in the Team tab to set hours / day and dates.
                         </p>
                       )}
                     </div>
@@ -1927,11 +2243,15 @@ export default function ProjectDetail() {
 
             <div className="px-5 py-3 border-t border-gray-200 flex items-center justify-between">
               <p className="text-xs text-gray-400">
-                {allocationPreview.filter(m => m.hasConflict).length > 0
-                  ? `🔴 ${allocationPreview.filter(m => m.hasConflict).length} member(s) have over-allocation conflicts`
-                  : allocationPreview.filter(m => m.allocationPct == null).length > 0
-                  ? `⚠ ${allocationPreview.filter(m => m.allocationPct == null).length} member(s) have no allocation set`
-                  : '✅ All allocations look good'}
+                {(() => {
+                  const conflicted = allocationPreview.filter(m => m.isOverAllocated || (m.conflicts || []).length > 0).length;
+                  const unset      = allocationPreview.filter(m => m.hoursPerDay == null).length;
+                  return conflicted > 0
+                    ? `🔴 ${conflicted} member(s) have over-allocation conflicts`
+                    : unset > 0
+                    ? `⚠ ${unset} member(s) have no allocation set`
+                    : '✅ All allocations look good';
+                })()}
               </p>
               <button onClick={() => setShowAllocationPreview(false)} className="px-4 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50">Close</button>
             </div>
