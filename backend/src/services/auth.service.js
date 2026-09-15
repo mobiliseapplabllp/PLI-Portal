@@ -128,6 +128,12 @@ const requestLoginOtp = async (identifier, ipAddress) => {
     ipAddress,
   });
 
+  // TESTING ONLY: print the code to the server console when OTP_DEBUG=true in
+  // .env. Never enable this on production — it would expose login codes.
+  if (process.env.OTP_DEBUG === 'true' && process.env.NODE_ENV !== 'production') {
+    console.log(`[OTP_DEBUG] ${user.email} → ${code} (valid ${OTP_CONFIG.TTL_MINUTES} min)`);
+  }
+
   try {
     await sendLoginOtpEmail(user.email, user.name, code, OTP_CONFIG.TTL_MINUTES);
     logger.success(`OTP sent: ${user.name} (${user.employeeCode}) from ${ipAddress}`);
