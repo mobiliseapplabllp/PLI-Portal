@@ -25,6 +25,7 @@ import {
   bulkUploadTicketsApi,
 } from '../../api/helpdesk/tickets.api';
 import { getGroupsApi } from '../../api/helpdesk/groups.api';
+import { getGroupCapacityApi, getGroupMembersApi } from '../../api/helpdesk/capacity.api';
 import { getUsersApi } from '../../api/users.api';
 import AllocationTypeInput from '../../components/pm/AllocationTypeInput';
 import { getHdProjectsApi } from '../../api/helpdesk/hdProjects.api';
@@ -140,6 +141,9 @@ export default function TicketList() {
   const [baDerived,      setBaDerived]      = useState({ hoursPerDay: null, totalHours: null, workingDays: null });
   const [baFrom,         setBaFrom]         = useState('');
   const [baTo,           setBaTo]           = useState('');
+  // Capacity suggestion (top 3) for the chosen group — window today → +14
+  const [baSuggested,    setBaSuggested]    = useState([]);   // member records from GET /helpdesk/groups/:id/capacity
+  const [baSuggLoading,  setBaSuggLoading]  = useState(false);
 
   // Bulk upload modal
   const [showBulkUpload, setShowBulkUpload] = useState(false);
@@ -507,6 +511,7 @@ export default function TicketList() {
     setBaGroupId('');
     setBaGroupUsers([]);
     setBaAgentId('');
+    setBaSuggested([]);
     // Allocation defaults: 10 total hours, today → today + 7
     const today = new Date();
     const week  = new Date(); week.setDate(week.getDate() + 7);
@@ -526,11 +531,24 @@ export default function TicketList() {
   const onBaGroupChange = (gId) => {
     setBaGroupId(gId);
     setBaAgentId('');
+    setBaSuggested([]);
     if (!gId) { setBaGroupUsers([]); return; }
-    getUsersApi({ groupId: gId })
-      .then(unwrapList)
+    getGroupMembersApi(gId)
       .then(setBaGroupUsers)
       .catch(() => setBaGroupUsers([]));
+    // Top-3 suggestion for the next two weeks
+    const today = new Date();
+    const twoWeeks = new Date(); twoWeeks.setDate(twoWeeks.getDate() + 14);
+    setBaSuggLoading(true);
+    getGroupCapacityApi(gId, { from: isoDay(today), to: isoDay(twoWeeks) })
+      .then(res => {
+        const data = res.data?.data ?? res.data ?? {};
+        const members = Array.isArray(data.members) ? data.members : [];
+        const ids = Array.isArray(data.suggested) ? data.suggested.slice(0, 3) : [];
+        setBaSuggested(ids.map(uid => members.find(m => String(m.userId) === String(uid))).filter(Boolean));
+      })
+      .catch(() => setBaSuggested([]))
+      .finally(() => setBaSuggLoading(false));
   };
 
   const handleBulkAssignConfirm = async () => {
@@ -538,9 +556,10 @@ export default function TicketList() {
     setOpError(null);
     setBulkAssigning(true);
     try {
-      await bulkAssignApi({
+      const res = await bulkAssignApi({
         ticketIds:  selected,
         assigneeId: baAgentId,           // UUID string — do NOT coerce to Number
+        // Given to selected tickets that have no group yet; never replaces an existing group
         ...(baGroupId ? { groupId: Number(baGroupId) } : {}),
         // Phase 3 — same allocation on every ticket in the batch
         allocationMode:        baIsTotal ? 'total' : 'per_day',
@@ -549,11 +568,24 @@ export default function TicketList() {
         allocationFrom:        baFrom,
         allocationTo:          baTo,
       });
+      // Tell the user exactly which tickets were NOT assigned and why.
+      const result  = res?.data?.data ?? {};
+      const updated = Number(result.updated) || 0;
+      const details = Array.isArray(result.skippedDetails) ? result.skippedDetails : [];
+      if (details.length) {
+        const byReason = details.reduce((acc, d) => { (acc[d.reason] ||= []).push(d.ticketId); return acc; }, {});
+        const reqNo = (tid) => tickets.find(t => String(t._id ?? t.id) === String(tid))?.reqNumber || `#${tid}`;
+        const lines = Object.entries(byReason).map(([reason, ids]) => `${reason}: ${ids.map(reqNo).join(', ')}`);
+        setOpError(`${updated} assigned, ${details.length} not assigned. ${lines.join(' · ')}`);
+        if (updated) toast.success(`${updated} ticket${updated === 1 ? '' : 's'} assigned`);
+      } else {
+        toast.success(`${updated} ticket${updated === 1 ? '' : 's'} assigned`);
+      }
       setSelected([]);
       setShowBulkAssign(false);
       load();
     } catch (e) {
-      setOpError(e.response?.data?.error?.message || e.message || 'Bulk assign failed');
+      setOpError(e.response?.data?.error?.message || e.response?.data?.message || e.message || 'Bulk assign failed');
     } finally {
       setBulkAssigning(false);
     }
@@ -700,7 +732,7 @@ export default function TicketList() {
                 >
                   <option value="">All Groups</option>
                   {groups.map((g) => (
-                    <option key={g.id} value={g.id}>{g.name}</option>
+                    <option key={g._id ?? g.id} value={g._id ?? g.id}>{g.name}</option>
                   ))}
                 </select>
               )}
@@ -730,7 +762,7 @@ export default function TicketList() {
               >
                 <option value="">All Projects</option>
                 {projects.map((p) => (
-                  <option key={p.id} value={p.id}>{p.name}</option>
+                  <option key={p._id ?? p.id} value={p._id ?? p.id}>{p.name}</option>
                 ))}
               </select>
 
@@ -1121,9 +1153,46 @@ export default function TicketList() {
               >
                 <option value="">-- Select Group --</option>
                 {groups.map((g) => (
-                  <option key={g.id} value={g.id}>{g.name}</option>
+                  <option key={g._id ?? g.id} value={g._id ?? g.id}>{g.name}</option>
                 ))}
               </select>
+              {/* Suggested for the next 2 weeks — quick-picks from group capacity */}
+              {baGroupId && (baSuggLoading || baSuggested.length > 0) && (
+                <div>
+                  <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Suggested for the next 2 weeks</p>
+                  {baSuggLoading && baSuggested.length === 0 ? (
+                    <p className="text-[11px] text-gray-400">Checking team capacity…</p>
+                  ) : (
+                    <div className="grid grid-cols-3 gap-2">
+                      {baSuggested.map(m => {
+                        const isSelected = String(baAgentId) === String(m.userId);
+                        return (
+                          <button
+                            key={m.userId}
+                            type="button"
+                            onClick={() => setBaAgentId(String(m.userId))}
+                            disabled={bulkAssigning}
+                            title={m.isOverAllocated ? 'Over-allocated in this window' : undefined}
+                            className={`text-left rounded-lg border px-2.5 py-2 transition-colors ${
+                              isSelected ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:bg-gray-50'
+                            }`}
+                          >
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              {m.isOverAllocated && <span className="w-2 h-2 rounded-full bg-red-500 flex-shrink-0" />}
+                              <p className="text-xs font-medium text-gray-800 truncate">{m.name}</p>
+                            </div>
+                            <p className="text-[10px] text-gray-400 truncate">{m.designation || m.role || ''}</p>
+                            <p className="text-[11px] text-gray-600 mt-1">
+                              <span className="font-semibold text-emerald-700">{Math.round((Number(m.freeHours) || 0) * 10) / 10}h</span>/day free
+                            </p>
+                            <p className="text-[10px] text-gray-500">{Number(m.openTickets) || 0} open</p>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
               <label className="text-sm font-medium text-gray-700">Assign to Agent</label>
               <select
                 value={baAgentId}
@@ -1132,8 +1201,11 @@ export default function TicketList() {
                 className="px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
               >
                 <option value="">-- Select Agent --</option>
+                {baAgentId && !baGroupUsers.some(u => String(u.id ?? u._id) === String(baAgentId)) && (
+                  <option value={baAgentId}>{baSuggested.find(m => String(m.userId) === String(baAgentId))?.name || 'Selected agent'}</option>
+                )}
                 {baGroupUsers.map((u) => (
-                  <option key={u.id} value={u.id}>
+                  <option key={u._id ?? u.id} value={u._id ?? u.id}>
                     {u.name || u.full_name}{u.role ? ` (${u.role})` : ''}
                   </option>
                 ))}

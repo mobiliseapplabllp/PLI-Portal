@@ -1,6 +1,8 @@
 'use strict';
 
 const { ForbiddenError, UnauthorizedError } = require('../utils/errors');
+const User    = require('../models/User');
+const HdGroup = require('../models/helpdesk/HdGroup');
 
 /**
  * @typedef {Object} HdPermissions
@@ -29,6 +31,8 @@ const { ForbiddenError, UnauthorizedError } = require('../utils/errors');
  * @property {boolean}      isAdmin     - True for admin / md / director.
  * @property {HdScope}      scope       - Ticket visibility scope.
  * @property {HdPermissions} permissions - Granular capability flags.
+ * @property {number|null}  groupId     - Helpdesk group: hd_group_id override, else the group backed by the user's department.
+ * @property {string|null}  departmentId - users.departmentId (KPI department), when known.
  */
 
 /** Roles that are considered full helpdesk administrators. */
@@ -164,6 +168,29 @@ function resolveRoleMapping(role) {
 }
 
 /**
+ * Resolve the helpdesk group a user belongs to through their KPI department:
+ * the lowest-id `hd_groups` row whose `department_id` equals the user's
+ * `users.departmentId`. Used only when the user has no `hd_group_id` override.
+ *
+ * @param {string} userId
+ * @param {string|null|undefined} departmentId - from req.user when authenticate
+ *   already loaded it; looked up with one query when absent.
+ * @returns {Promise<{ groupId: number|null, departmentId: string|null }>}
+ */
+async function resolveGroupByDepartment(userId, departmentId) {
+  let deptId = departmentId ?? null;
+  if (deptId === null && userId) {
+    const row = await User.findByPk(userId, { attributes: ['departmentId'] });
+    deptId = row?.departmentId ?? null;
+  }
+  if (!deptId) return { groupId: null, departmentId: null };
+  const group = await HdGroup.findOne({
+    where: { departmentId: deptId }, attributes: ['id'], order: [['id', 'ASC']],
+  });
+  return { groupId: group ? group.id : null, departmentId: deptId };
+}
+
+/**
  * Helpdesk auth shim middleware.
  *
  * Reads `req.user` (populated by PLI Portal's existing `authenticate` middleware)
@@ -172,6 +199,12 @@ function resolveRoleMapping(role) {
  *
  * This middleware does NOT issue tokens or modify the session; it is a pure
  * projection from the PLI role model onto the helpdesk permission model.
+ *
+ * Group resolution order:
+ *   1. `users.hd_group_id` override (hdGroupId / hd_group_id on req.user) — synchronous, no query;
+ *   2. the `hd_groups` row whose `department_id` = the user's `departmentId` (lowest id) — one query;
+ *   3. null.
+ * `req.hdUser` is attached synchronously in every case; only `next()` waits for step 2.
  *
  * @type {import('express').RequestHandler}
  */
@@ -189,10 +222,18 @@ function helpdeskAuth(req, res, next) {
   /** @type {HdUser} */
   // Attach the user's helpdesk group so group-scope filtering works correctly.
   // req.user may have hdGroupId (camelCase from ORM) or hd_group_id (snake_case from raw query).
-  const groupId = req.user.hdGroupId ?? req.user.hd_group_id ?? null;
-  req.hdUser = { id, name, email, role, isAdmin, scope, permissions, groupId };
+  const groupId      = req.user.hdGroupId ?? req.user.hd_group_id ?? null;
+  const departmentId = req.user.departmentId ?? req.user.department_id ?? null;
+  req.hdUser = { id, name, email, role, isAdmin, scope, permissions, groupId, departmentId };
 
-  next();
+  if (groupId !== null) return next();
+
+  // No override → derive the group from the user's KPI department (one cheap query).
+  // A lookup failure must not break the request: the user simply has no group, as today.
+  resolveGroupByDepartment(id, departmentId)
+    .then((r) => { req.hdUser.groupId = r.groupId; req.hdUser.departmentId = r.departmentId; },
+          () => {})
+    .then(() => next());
 }
 
 /**
@@ -227,4 +268,4 @@ function requireHdPermission(permission) {
   };
 }
 
-module.exports = { helpdeskAuth, requireHdPermission };
+module.exports = { helpdeskAuth, requireHdPermission, resolveGroupByDepartment };

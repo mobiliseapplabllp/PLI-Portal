@@ -7,7 +7,7 @@
  */
 
 const sequelize      = require('../../config/database');
-const { HdProject, HdTicket, HdTicketHistory } = require('../../models/helpdesk');
+const { HdProject, HdTicket, HdTicketHistory, Project } = require('../../models/helpdesk');
 const { sendSuccess, sendError } = require('../../utils/response');
 const { NotFoundError }          = require('../../utils/errors');
 const { sendEmail }              = require('../../utils/emailService');
@@ -51,12 +51,15 @@ const getWidgetConfig = async (req, res, next) => {
 
     const project = await HdProject.findOne({
       where:      { publicToken: token },
-      attributes: ['id', 'name'],
+      attributes: ['id', 'name', 'pmProjectId'],
+      include:    [{ model: Project, as: 'pmProject', attributes: ['id', 'name'], required: false }],
     });
 
     if (!project) return sendError(res, 'Invalid widget token', 404);
 
-    return sendSuccess(res, { id: project.id, name: project.name }, 'Widget config');
+    // Linked profile → the PM master's name
+    const name = project.pmProject?.name || project.name;
+    return sendSuccess(res, { id: project.id, name }, 'Widget config');
   } catch (err) {
     next(err);
   }
@@ -89,6 +92,14 @@ const submitWidgetTicket = async (req, res, next) => {
       return sendError(res, 'This project is not accepting submissions', 403);
     }
 
+    // Servicing group comes from the project profile. Public customers are never
+    // refused: a legacy profile without a group still accepts the ticket, but it
+    // is logged so the profile can be fixed (hd project create/update require a group).
+    const groupId = project.groupId || null;
+    if (!groupId) {
+      console.warn(`[widget] hd_projects id=${project.id} has no servicing group — ticket accepted without group`);
+    }
+
     const t = await sequelize.transaction();
     try {
       const reqNumber = await generateReqNumber(t);
@@ -101,6 +112,7 @@ const submitWidgetTicket = async (req, res, next) => {
           priority:     TICKET_PRIORITY.MEDIUM,
           status:       TICKET_STATUS.OPEN,
           projectId:    project.id,
+          groupId,
           widgetSource: true,
           widgetName:   name.trim(),
           widgetEmail:  email.trim().toLowerCase(),
@@ -119,6 +131,20 @@ const submitWidgetTicket = async (req, res, next) => {
         },
         { transaction: t },
       );
+
+      // Make the missing group visible in the ticket's own history, not only in server logs.
+      if (!groupId) {
+        await HdTicketHistory.create(
+          {
+            ticketId:  ticket.id,
+            field:     'groupId',
+            oldValue:  null,
+            newValue:  'Needs a servicing group (project has none)',
+            changedBy: null,
+          },
+          { transaction: t },
+        );
+      }
 
       await t.commit();
 

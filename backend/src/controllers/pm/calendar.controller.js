@@ -13,14 +13,14 @@
  *   POST /pm/config/holidays/import/validate       admin, multipart 'file' — no DB writes
  *   POST /pm/config/holidays/import/commit         admin, { rows }
  *
- * Validation (400) and duplicate-date (409) errors use the flat
- * { success:false, message } shape the PM member endpoints use.
+ * Validation (400) and duplicate-date (409) errors use the unified
+ * { success:false, message, error:{ message } } shape (utils/response sendError).
  */
 const { Op }            = require('sequelize');
 const sequelize         = require('../../config/database');   // instance — never destructure
 const PmHoliday         = require('../../models/pm/PmHoliday');
 const pmSettingsService = require('../../services/pm/pmSettings.service');
-const { sendSuccess }   = require('../../utils/response');
+const { sendSuccess, sendError } = require('../../utils/response');
 const { ValidationError, NotFoundError } = require('../../utils/errors');
 const { dayKind, getMonthlyCapacity, iso, workingDaysBetween } = require('../../utils/capacityEngine');
 
@@ -89,16 +89,16 @@ const holidayJson = (row) => ({
   id: row.id, date: String(row.date).slice(0, 10), name: row.name, year: row.year, isOptional: !!row.isOptional,
 });
 
-/** Map ValidationError / NotFoundError to the flat PM shape; everything else → next. */
+/** Map ValidationError / NotFoundError to the unified error shape; everything else → next. */
 const handle = (e, res, next) => {
   if (e instanceof ValidationError || e instanceof NotFoundError) {
-    return res.status(e.statusCode).json({ success: false, message: e.message });
+    return sendError(res, e.message, e.statusCode);
   }
   return next(e);
 };
 
 const conflict = (res, date) =>
-  res.status(409).json({ success: false, message: `A holiday already exists on ${date}` });
+  sendError(res, `A holiday already exists on ${date}`, 409);
 
 const userId = (req) => req.user?._id || req.user?.id || null;
 
@@ -291,17 +291,17 @@ const getHolidayImportTemplate = async (req, res, next) => {
  */
 const validateHolidayImport = async (req, res, next) => {
   try {
-    if (!req.file) return res.status(400).json({ success: false, message: 'No file uploaded' });
+    if (!req.file) return sendError(res, 'No file uploaded', 400);
     if (req.file.size > 2 * 1024 * 1024) {
-      return res.status(400).json({ success: false, message: 'File too large. Maximum size is 2MB.' });
+      return sendError(res, 'File too large. Maximum size is 2MB.', 400);
     }
     const ExcelJS = require('exceljs');
     const wb = new ExcelJS.Workbook();
     await wb.xlsx.load(req.file.buffer);
     const ws = wb.worksheets[0];
-    if (!ws) return res.status(400).json({ success: false, message: 'No worksheet found in file' });
+    if (!ws) return sendError(res, 'No worksheet found in file', 400);
     if (ws.rowCount - 1 > 1000) {
-      return res.status(400).json({ success: false, message: 'File exceeds 1000 data rows. Please split into smaller files.' });
+      return sendError(res, 'File exceeds 1000 data rows. Please split into smaller files.', 400);
     }
 
     // Pass 1 — parse every row
@@ -367,10 +367,10 @@ const commitHolidayImport = async (req, res, next) => {
   try {
     const { rows } = req.body || {};
     if (!Array.isArray(rows) || rows.length === 0) {
-      return res.status(400).json({ success: false, message: 'No rows provided' });
+      return sendError(res, 'No rows provided', 400);
     }
     if (rows.length > 1000) {
-      return res.status(400).json({ success: false, message: 'Too many rows (max 1000)' });
+      return sendError(res, 'Too many rows (max 1000)', 400);
     }
 
     // Server-side re-validation — never trust the client's shape
@@ -410,7 +410,7 @@ const commitHolidayImport = async (req, res, next) => {
       await t.commit();
     } catch (e) {
       await t.rollback();
-      return res.status(500).json({ success: false, message: 'Import failed — all rows rolled back', error: e.message });
+      return sendError(res, 'Import failed — all rows rolled back', 500, e.message);
     }
 
     sendSuccess(

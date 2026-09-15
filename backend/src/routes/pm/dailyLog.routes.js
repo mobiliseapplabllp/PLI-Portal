@@ -1,12 +1,11 @@
 const router = require('express').Router({ mergeParams: true });
 const ctrl = require('../../controllers/pm/dailyLog.controller');
-const { authorize } = require('../../middleware/rbac');
+const { requirePermission } = require('../../core/rbac');
 
-const ALL = ['admin', 'manager', 'senior_manager', 'employee', 'hr_admin', 'final_approver', 'md', 'director'];
 
-router.get('/', authorize(...ALL), ctrl.getLogs);
-router.get('/today', authorize(...ALL), ctrl.getTodayLog);
-router.post('/', authorize(...ALL), ctrl.upsertTodayLog);
-router.get('/:logId', authorize(...ALL), ctrl.getLogById);
+router.get('/', requirePermission('pm.dailyLog.view'), ctrl.getLogs);
+router.get('/today', requirePermission('pm.dailyLog.view'), ctrl.getTodayLog);
+router.post('/', requirePermission('pm.dailyLog.write'), ctrl.upsertTodayLog);
+router.get('/:logId', requirePermission('pm.dailyLog.view'), ctrl.getLogById);
 
 module.exports = router;

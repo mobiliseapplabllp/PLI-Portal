@@ -187,11 +187,12 @@ const getProjectStats = async (req, res, next) => {
   try {
     const [rows] = await sequelize.query(`
       SELECT
-        p.name AS projectName,
+        COALESCE(MAX(pm.name), p.name) AS projectName,
         COUNT(t.id) AS total,
         SUM(CASE WHEN t.status NOT IN ('closed','resolved') THEN 1 ELSE 0 END) AS pending
       FROM hd_tickets t
       JOIN hd_projects p ON p.id = t.project_id
+      LEFT JOIN pm_projects pm ON pm.id = p.pm_project_id
       WHERE t.project_id IS NOT NULL
       GROUP BY p.id, p.name
       ORDER BY total DESC

@@ -9,6 +9,8 @@ const HdProject = sequelize.define('HdProject', {
   groupId:     { type: DataTypes.INTEGER, allowNull: true, field: 'group_id' },
   publicToken: { type: DataTypes.STRING(64), allowNull: false, unique: true, field: 'public_token' },
   managerId:   { type: DataTypes.STRING(36), allowNull: true, field: 'manager_id' },
+  // ONE PROJECT MASTER — soft link to pm_projects.id (no FK; app-enforced). NULL = legacy unlinked profile.
+  pmProjectId: { type: DataTypes.STRING(36), allowNull: true, field: 'pm_project_id' },
 }, {
   tableName: 'hd_projects',
   underscored: true,

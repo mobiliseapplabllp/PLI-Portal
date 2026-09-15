@@ -21,8 +21,10 @@ const {
   HdConversation,
   HdGroup,
   HdProject,
+  Project,
   User,
 }                      = require('../../models/helpdesk');
+const Department       = require('../../models/Department');
 const { sendSuccess, sendError } = require('../../utils/response');
 const { NotFoundError, ForbiddenError, ValidationError } = require('../../utils/errors');
 const { sendEmail }    = require('../../utils/emailService');
@@ -42,7 +44,9 @@ const MAX_PAGE_SIZE     = 100;
 
 const TRACKED_FIELDS = [
   'title', 'description', 'status', 'priority', 'category',
-  'requestType', 'mode', 'impact', 'urgency', 'resolution', 'site', 'raisedByTeam',
+  // raisedByTeam is NOT here: it is derived from the requester's department on
+  // create and is never writable through updateTicket (ignored if sent).
+  'requestType', 'mode', 'impact', 'urgency', 'resolution', 'site',
   'assigneeId', 'groupId', 'projectId', 'dueDate', 'billable',
   // Phase 3 — assignee effort allocation (stacks against PM allocations)
   'allocationHoursPerDay', 'allocationFrom', 'allocationTo', 'allocationMode', 'allocationTotalHours',
@@ -182,6 +186,81 @@ async function generateReqNumber(t) {
   return `REQ-F${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
 }
 
+// ─── Teams & managers (departments / users are KPI-owned: read only) ─────────
+
+const ASSIGNEE_NOT_IN_GROUP = 'Assignee is not a member of the selected group';
+const GROUP_REQUIRED        = 'Select a servicing group for this ticket';
+const NO_GROUP_SKIP_REASON  = 'Ticket has no servicing group';
+
+/** 400 in the unified shape: top-level `message` + `error.message`. */
+const badRequest = (res, message) => sendError(res, message, 400);
+
+/**
+ * Ticket → project include. Carries the PM master name so a linked profile
+ * shows the master's name (one nested join, no N+1). Apply
+ * `withMasterProjectName` to the plain ticket afterwards.
+ */
+const PROJECT_INCLUDE = (extra = {}) => ({
+  model: HdProject, as: 'project', attributes: ['id', 'name', 'pmProjectId'], ...extra,
+  include: [{ model: Project, as: 'pmProject', attributes: ['id', 'name'], required: false }],
+});
+
+/**
+ * Mutates a plain ticket: `project.name` becomes the master name when the
+ * profile is linked; `project.linked` flags it. Shape otherwise unchanged.
+ */
+function withMasterProjectName(plain) {
+  const p = plain && plain.project;
+  if (p) {
+    if (p.pmProject && p.pmProject.name) p.name = p.pmProject.name;
+    p.linked = Boolean(p.pmProject);
+  }
+  return plain;
+}
+
+/**
+ * Is `userId` a member of helpdesk group `groupId`?
+ * Membership = `users.hd_group_id === groupId` (explicit override)
+ *           OR (`hd_groups.department_id` set AND `users.departmentId` equals it).
+ * Unknown user or group → false.
+ *
+ * @param {string} userId
+ * @param {number|string} groupId
+ * @returns {Promise<boolean>}
+ */
+async function isGroupMember(userId, groupId) {
+  // One shared rule (override → department group) — see services/helpdesk/groupMembership.service.js
+  return require('../../services/helpdesk/groupMembership.service').isGroupMember(userId, groupId);
+}
+
+/**
+ * Department name of the ticket requester: the user whose email matches
+ * `requesterEmail` (case-insensitive) when given, else `fallbackUserId`.
+ * When a requesterEmail is given but matches no user (an external requester),
+ * the result is null — never the creating agent's department.
+ * Null when that user has no department.
+ *
+ * @param {string|null|undefined} requesterEmail
+ * @param {string} fallbackUserId
+ * @returns {Promise<string|null>}
+ */
+async function resolveRequesterDepartmentName(requesterEmail, fallbackUserId) {
+  let user = null;
+  const hasEmail = Boolean(requesterEmail && String(requesterEmail).trim());
+  if (hasEmail) {
+    user = await User.findOne({
+      where: sequelize.where(sequelize.fn('LOWER', sequelize.col('email')), String(requesterEmail).trim().toLowerCase()),
+      attributes: ['id', 'departmentId'],
+    });
+  }
+  if (!user && !hasEmail && fallbackUserId) {
+    user = await User.findByPk(fallbackUserId, { attributes: ['id', 'departmentId'] });
+  }
+  if (!user?.departmentId) return null;
+  const dept = await Department.findByPk(user.departmentId, { attributes: ['id', 'name'] });
+  return dept?.name || null;
+}
+
 /** Standard paginated query scope builder. */
 function paginationParams(query) {
   let page     = Math.max(1, parseInt(query.page, 10) || DEFAULT_PAGE);
@@ -247,7 +326,7 @@ const listTickets = async (req, res, next) => {
       where,
       include: [
         { model: HdGroup,   as: 'group',         attributes: ['id', 'name'] },
-        { model: HdProject, as: 'project',        attributes: ['id', 'name'], required: false },
+        PROJECT_INCLUDE({ required: false }),
         { model: User,      as: 'assigneeUser',   attributes: ['id', 'name'], required: false, constraints: false },
         { model: User,      as: 'requesterUser',  attributes: ['id', 'name'], required: false, constraints: false },
       ],
@@ -257,7 +336,8 @@ const listTickets = async (req, res, next) => {
       distinct: true,
     });
 
-    return sendSuccess(res, { tickets, total, page, pageSize }, 'Tickets fetched');
+    const rows = tickets.map((t) => withMasterProjectName(t.get({ plain: true })));
+    return sendSuccess(res, { tickets: rows, total, page, pageSize }, 'Tickets fetched');
   } catch (err) {
     next(err);
   }
@@ -288,7 +368,7 @@ const getTicket = async (req, res, next) => {
         { model: HdTask,           as: 'tasks',      required: false },
         { model: HdAttachment,     as: 'attachments', required: false },
         { model: HdGroup,   as: 'group',         attributes: ['id', 'name'] },
-        { model: HdProject, as: 'project',       attributes: ['id', 'name'] },
+        PROJECT_INCLUDE(),
         { model: User,      as: 'assigneeUser',  attributes: ['id', 'name', 'email'], required: false, constraints: false },
         { model: User,      as: 'requesterUser', attributes: ['id', 'name', 'email'], required: false, constraints: false },
         { model: HdTicket,  as: 'linkedTicket',  attributes: ['id', 'reqNumber', 'title', 'status', 'priority'], required: false },
@@ -298,7 +378,7 @@ const getTicket = async (req, res, next) => {
     if (!ticket) return next(new NotFoundError('Ticket'));
 
     // â”€â”€ Enrich history: resolve changedBy UUID and field values to names â”€â”€â”€â”€â”€
-    const ticketPlain = ticket.get({ plain: true });
+    const ticketPlain = withMasterProjectName(ticket.get({ plain: true }));
 
     if (ticketPlain.history && ticketPlain.history.length > 0) {
       // Sort newest-first (include-level order is ignored by Sequelize for hasMany)
@@ -361,7 +441,8 @@ const createTicket = async (req, res, next) => {
     const {
       title, category, description, priority, status,
       groupId, projectId, dueDate, assigneeId,
-      requestType, mode, impact, urgency, site, raisedByTeam,
+      requestType, mode, impact, urgency, site,
+      // raisedByTeam from the body is ignored — always derived below.
       // "On behalf of" fields â€” admins/managers creating tickets for others
       requesterName, requesterEmail,
       // Phase 3 — optional effort allocation for the assignee
@@ -370,10 +451,25 @@ const createTicket = async (req, res, next) => {
 
     if (!title) return sendError(res, 'title is required', 400);
 
+    // ── Teams & managers ─────────────────────────────────────────────────────
+    // (a) Servicing group is REQUIRED: body.groupId, else the project profile's group.
+    let resolvedGroupId = isBlank(groupId) ? null : groupId;
+    if (!resolvedGroupId && projectId) {
+      const project = await HdProject.findByPk(projectId, { attributes: ['id', 'groupId'] });
+      if (project?.groupId) resolvedGroupId = project.groupId;
+    }
+    if (!resolvedGroupId) return badRequest(res, GROUP_REQUIRED);
+    // (b) raisedByTeam is ALWAYS the requester's KPI department (null when none); body value ignored.
+    const resolvedRaisedByTeam = await resolveRequesterDepartmentName(requesterEmail, req.hdUser.id);
+    // (c) The assignee must belong to the group.
+    if (assigneeId && !(await isGroupMember(assigneeId, resolvedGroupId))) {
+      return badRequest(res, ASSIGNEE_NOT_IN_GROUP);
+    }
+
     let alloc = { allocationHoursPerDay: null, allocationFrom: null, allocationTo: null, allocationMode: 'total', allocationTotalHours: null };
     if (hasAllocationInput(req.body)) {
       const resolved = await resolveTicketAllocation({ allocationHoursPerDay, allocationFrom, allocationTo, allocationMode, allocationTotalHours });
-      if (resolved.error) return res.status(400).json({ success: false, message: resolved.error });
+      if (resolved.error) return sendError(res, resolved.error, 400);
       alloc = resolved.values;
     }
 
@@ -389,7 +485,7 @@ const createTicket = async (req, res, next) => {
           description:  description  || null,
           priority:     priority     || TICKET_PRIORITY.MEDIUM,
           status:       status       || TICKET_STATUS.OPEN,
-          groupId:      groupId      || null,
+          groupId:      resolvedGroupId,
           projectId:    projectId    || null,
           dueDate:      dueDate      || null,
           assigneeId:   assigneeId   || null,
@@ -403,7 +499,7 @@ const createTicket = async (req, res, next) => {
           impact:       impact       || null,
           urgency:      urgency      || null,
           site:         site         || null,
-          raisedByTeam: raisedByTeam || null,
+          raisedByTeam: resolvedRaisedByTeam,
           // If creating on behalf of someone, store their name/email in the widget fields
           widgetName:   requesterName  || null,
           widgetEmail:  requesterEmail || null,
@@ -423,7 +519,7 @@ const createTicket = async (req, res, next) => {
           // FIX: rollback the open transaction before returning — otherwise the
           // connection is leaked and held open until the idle-timeout fires.
           await t.rollback();
-          return res.status(400).json({ success: false, message: `File type ${ext} is not allowed. Allowed: ${ALLOWED_EXTS.join(', ')}` });
+          return sendError(res, `File type ${ext} is not allowed. Allowed: ${ALLOWED_EXTS.join(', ')}`, 400);
         }
         const storedName = `${crypto.randomUUID()}${ext}`;
         destPath   = path.join(UPLOAD_DIR, storedName);
@@ -482,7 +578,7 @@ const updateTicket = async (req, res, next) => {
     // Everyone else (e.g. a requester) may only update their own ticket.
     if (!req.hdUser?.isAdmin && !req.hdUser?.permissions?.canAssign) {
       if (String(ticket.requesterId) !== String(req.hdUser?.id)) {
-        return res.status(403).json({ success: false, message: 'You do not have permission to update this ticket' });
+        return sendError(res, 'You do not have permission to update this ticket', 403);
       }
     }
 
@@ -498,7 +594,7 @@ const updateTicket = async (req, res, next) => {
     // ── Phase 3: effort allocation validation / normalisation ────────────────
     if (hasAllocationInput(updates)) {
       const resolved = await resolveTicketAllocation(updates, ticket);
-      if (resolved.error) return res.status(400).json({ success: false, message: resolved.error });
+      if (resolved.error) return sendError(res, resolved.error, 400);
       Object.assign(updates, resolved.values);
     }
     // Clearing the assignee also clears the allocation — nobody to allocate to.
@@ -507,6 +603,24 @@ const updateTicket = async (req, res, next) => {
       updates.assigneeId = null;
       for (const f of ALLOCATION_FIELDS) updates[f] = null;
       updates.allocationMode = 'total';
+    }
+
+    // ── Group / assignee rules — only when this request actually changes
+    //    assigneeId or groupId. The resulting ticket must then have a servicing
+    //    group and the resulting assignee (if any) must be a member of it.
+    //    Edits that leave both untouched (or re-send the same values) are never
+    //    blocked, so legacy group-less tickets can still change status etc.
+    if (hasOwn(updates, 'groupId') && isBlank(updates.groupId)) updates.groupId = null;
+    const changes = (f) => hasOwn(updates, f) && String(updates[f] ?? '') !== String(ticket[f] ?? '');
+    if (changes('assigneeId') || changes('groupId')) {
+      const nextAssignee = hasOwn(updates, 'assigneeId') ? updates.assigneeId : ticket.assigneeId;
+      const nextGroup    = hasOwn(updates, 'groupId')    ? updates.groupId    : ticket.groupId;
+      // Removing the group is never allowed; setting an assignee needs a group.
+      // Merely UNassigning a legacy group-less ticket is allowed.
+      if (isBlank(nextGroup) && (changes('groupId') || nextAssignee)) return badRequest(res, GROUP_REQUIRED);
+      if (nextAssignee && !(await isGroupMember(nextAssignee, nextGroup))) {
+        return badRequest(res, ASSIGNEE_NOT_IN_GROUP);
+      }
     }
 
     // ── Approval gate: block status change while any approval is pending ─────
@@ -604,14 +718,40 @@ const bulkAssign = async (req, res, next) => {
       const body = {};
       for (const f of ALLOCATION_FIELDS) if (hasOwn(req.body, f)) body[f] = req.body[f];
       const resolved = await resolveTicketAllocation(body);
-      if (resolved.error) return res.status(400).json({ success: false, message: resolved.error });
+      if (resolved.error) return sendError(res, resolved.error, 400);
       alloc = resolved.values;
       // Dates not sent stay as each ticket has them
       if (!hasOwn(body, 'allocationFrom')) delete alloc.allocationFrom;
       if (!hasOwn(body, 'allocationTo'))   delete alloc.allocationTo;
     }
 
-    const tickets = await HdTicket.findAll({ where: { id: { [Op.in]: ticketIds } } });
+    const found = await HdTicket.findAll({ where: { id: { [Op.in]: ticketIds } } });
+
+    // Assignee must belong to each ticket's group. Tickets with no servicing
+    // group, or whose group excludes the assignee, are skipped (not assigned)
+    // and reported back, so the rest of the batch still goes through.
+    const membership = new Map(); // groupId → boolean, one check per distinct group
+    const tickets = [];
+    const skipped = [];
+    const skippedDetails = [];
+    const skip = (ticket, reason) => { skipped.push(ticket.id); skippedDetails.push({ ticketId: ticket.id, reason }); };
+    // Optional body.groupId: the servicing group chosen in the bulk modal. It is
+    // given to tickets that have NO group yet (never replaces an existing one).
+    let adoptGroupId = null;
+    if (!isBlank(req.body.groupId)) {
+      const gid = parseInt(req.body.groupId, 10);
+      if (!Number.isInteger(gid) || !(await HdGroup.findByPk(gid, { attributes: ['id'] }))) {
+        return sendError(res, 'Selected group does not exist', 400);
+      }
+      adoptGroupId = gid;
+    }
+    const adopted = new Set();
+    for (const ticket of found) {
+      if (!ticket.groupId && adoptGroupId) { ticket.groupId = adoptGroupId; adopted.add(ticket.id); }
+      if (!ticket.groupId) { skip(ticket, NO_GROUP_SKIP_REASON); continue; }
+      if (!membership.has(ticket.groupId)) membership.set(ticket.groupId, await isGroupMember(assigneeId, ticket.groupId));
+      if (membership.get(ticket.groupId)) tickets.push(ticket); else skip(ticket, ASSIGNEE_NOT_IN_GROUP);
+    }
 
     const t = await sequelize.transaction();
     try {
@@ -627,6 +767,7 @@ const bulkAssign = async (req, res, next) => {
           }
         }
         await ticket.save({ transaction: t });
+        if (adopted.has(ticket.id)) await logHistory(ticket.id, 'groupId', null, ticket.groupId, req.hdUser.id, t);
         await logHistory(ticket.id, 'assigneeId', old, assigneeId, req.hdUser.id, t);
         for (const [f, prev, next] of changed) {
           await logHistory(ticket.id, f, prev, next, req.hdUser.id, t);
@@ -638,7 +779,15 @@ const bulkAssign = async (req, res, next) => {
       throw err;
     }
 
-    return sendSuccess(res, { updated: tickets.length }, 'Tickets assigned');
+    // skipped (ids) + skippedReason kept for existing clients; skippedDetails
+    // carries the per-ticket reason. skippedReason = the single reason, or all
+    // distinct reasons joined with '; ' when they differ.
+    const reasons = [...new Set(skippedDetails.map((d) => d.reason))];
+    return sendSuccess(
+      res,
+      { updated: tickets.length, skipped, skippedReason: reasons.length ? reasons.join('; ') : null, skippedDetails },
+      skipped.length ? `Tickets assigned (${skipped.length} skipped: ${reasons.join('; ')})` : 'Tickets assigned',
+    );
   } catch (err) {
     next(err);
   }
@@ -767,10 +916,10 @@ const bulkUpload = async (req, res, next) => {
 
     // Fix 3 — Row limit guard
     if (!rows || !Array.isArray(rows) || rows.length === 0) {
-      return res.status(400).json({ success: false, message: 'No rows provided' });
+      return sendError(res, 'No rows provided', 400);
     }
     if (rows.length > 500) {
-      return res.status(400).json({ success: false, message: 'Maximum 500 rows per import' });
+      return sendError(res, 'Maximum 500 rows per import', 400);
     }
 
     // Fix 1 — Header normalization: "Title *" → "title", "Category" → "category", etc.
@@ -838,8 +987,7 @@ const bulkUpload = async (req, res, next) => {
       // Site (optional, free text)
       const site = r.site ? String(r.site).trim() : null;
 
-      // Raised by team (optional, free text)
-      const raisedByTeam = r.raised_by_team ? String(r.raised_by_team).trim() : null;
+      // raised_by_team column is IGNORED — derived from the requester below.
 
       // Billable (optional ENUM: 'Billable' or 'Non-Billable', defaults to 'Non-Billable')
       const billableRaw  = r.billable ? String(r.billable).trim() : 'Non-Billable';
@@ -867,6 +1015,29 @@ const bulkUpload = async (req, res, next) => {
         groupId = group.id;
       }
 
+      // Project (optional project_name column → hd profile id). A linked
+      // profile's name is a synced copy of the master name.
+      let projectId = null;
+      if (r.project_name) {
+        const projectName = String(r.project_name).trim();
+        const project = await HdProject.findOne({
+          where: sequelize.where(sequelize.fn('LOWER', sequelize.col('name')), projectName.toLowerCase()),
+          attributes: ['id', 'groupId'],
+        });
+        if (!project) {
+          errors.push({ row: idx + 1, field: 'project_name', msg: `Project "${projectName}" not found` });
+          continue;
+        }
+        projectId = project.id;
+        if (!groupId && project.groupId) groupId = project.groupId;
+      }
+
+      // Servicing group is required (group_name column or the project's group)
+      if (!groupId) {
+        errors.push({ row: idx + 1, field: 'group_name', msg: GROUP_REQUIRED });
+        continue;
+      }
+
       // Assignee resolution (assignee_email → userId UUID string)
       let assigneeId = null;
       if (r.assignee_email) {
@@ -883,6 +1054,10 @@ const bulkUpload = async (req, res, next) => {
           continue;
         }
         assigneeId = agent.id;
+        if (!(await isGroupMember(assigneeId, groupId))) {
+          errors.push({ row: idx + 1, field: 'assignee_email', msg: ASSIGNEE_NOT_IN_GROUP });
+          continue;
+        }
       }
 
       // requesterId guard: cannot create ticket without an authenticated user
@@ -890,6 +1065,9 @@ const bulkUpload = async (req, res, next) => {
         errors.push({ row: idx + 1, msg: 'Auth session missing — cannot assign requester' });
         continue;
       }
+
+      // Raised by team: the requester's department (requester_email user, else the uploader); null when none
+      const raisedByTeam = await resolveRequesterDepartmentName(widgetEmail, req.hdUser.id);
 
       // Wrap each row in its own short-lived transaction so generateReqNumber
       // can use SELECT FOR UPDATE, preventing concurrent-upload collisions.
@@ -931,6 +1109,7 @@ const bulkUpload = async (req, res, next) => {
           widgetName,
           widgetEmail,
           groupId,
+          projectId,
           assigneeId,
         }, { transaction: rowTx });
 
@@ -1297,4 +1476,7 @@ module.exports = {
   linkTicket,
   getImportTemplate,
   exportTickets,
+  // Teams & managers helpers (used by tests / other controllers)
+  isGroupMember,
+  resolveRequesterDepartmentName,
 };

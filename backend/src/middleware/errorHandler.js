@@ -18,23 +18,27 @@ const errorHandler = (err, req, res, _next) => {
       ? 'A KPI plan already exists for this Department, Financial Year, and Role combination. Use Edit KPI to modify it.'
       : 'A record with this value already exists.';
     logger.warn(`[409 Duplicate] ${label} — ${message}`);
-    return res.status(409).json({ success: false, error: { message, duplicate: true } });
+    return res.status(409).json({ success: false, message, error: { message, duplicate: true } });
   }
 
   if (err instanceof ValidationError) {
     const details = err.errors.map((e) => ({ field: e.path, message: e.message }));
     logger.warn(`[400 Validation] ${label} — ${details.map((d) => `${d.field}: ${d.message}`).join(', ')}`);
+    const message = 'Validation failed';
     return res.status(400).json({
       success: false,
-      error: { message: 'Validation failed', details },
+      message,
+      error: { message, details },
     });
   }
 
   if (err.name === 'SequelizeForeignKeyConstraintError') {
     logger.warn(`[400 FK] ${label} — ${err.message}`);
+    const message = 'Invalid reference (foreign key constraint)';
     return res.status(400).json({
       success: false,
-      error: { message: 'Invalid reference (foreign key constraint)' },
+      message,
+      error: { message },
     });
   }
 
@@ -45,9 +49,11 @@ const errorHandler = (err, req, res, _next) => {
     err.name === 'SequelizeAccessDeniedError'
   ) {
     logger.error(`[503 DB] ${label} — ${err.message}`);
+    const message = 'Database unavailable. Please try again shortly.';
     return res.status(503).json({
       success: false,
-      error: { message: 'Database unavailable. Please try again shortly.' },
+      message,
+      error: { message },
     });
   }
 
@@ -56,14 +62,17 @@ const errorHandler = (err, req, res, _next) => {
     logger[level](`[${err.statusCode} AppError] ${label} — ${err.message}`);
     return res.status(err.statusCode).json({
       success: false,
+      message: err.message,
       error: { message: err.message },
     });
   }
 
   logger.error(`[500 Unhandled] ${label}`, err);
+  const message = process.env.NODE_ENV === 'development' ? err.message : 'Internal server error';
   return res.status(500).json({
     success: false,
-    error: { message: process.env.NODE_ENV === 'development' ? err.message : 'Internal server error' },
+    message,
+    error: { message },
   });
 };
 

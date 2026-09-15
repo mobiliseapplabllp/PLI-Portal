@@ -25,6 +25,9 @@ const HdReminder        = require('./HdReminder');
 const HdAttachment      = require('./HdAttachment');
 const HdDocument        = require('./HdDocument');
 const User              = require('../User');
+// PM master project (ONE PROJECT MASTER). Requiring the model file directly is
+// safe in any load order: pm/Project.js depends only on config/database.
+const Project           = require('../pm/Project');
 
 // â”€â”€ Ticket â†” Group / Project â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 HdGroup.hasMany(HdTicket,   { foreignKey: 'groupId',   as: 'tickets' });
@@ -32,6 +35,12 @@ HdTicket.belongsTo(HdGroup, { foreignKey: 'groupId',   as: 'group' });
 
 HdProject.hasMany(HdTicket,    { foreignKey: 'projectId', as: 'tickets' });
 HdTicket.belongsTo(HdProject,  { foreignKey: 'projectId', as: 'project' });
+
+// ── Helpdesk profile ↔ PM master project ─────────────────────────────────────
+// hd_projects.pm_project_id → pm_projects.id (CHAR(36)). constraints:false —
+// PK types differ (INT vs UUID) and the link is enforced by the app.
+HdProject.belongsTo(Project, { foreignKey: 'pmProjectId', as: 'pmProject',       constraints: false });
+Project.hasOne(HdProject,    { foreignKey: 'pmProjectId', as: 'helpdeskProfile', constraints: false });
 
 // â”€â”€ Project â†” Group (scoped projects per team) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 HdGroup.hasMany(HdProject,   { foreignKey: 'groupId', as: 'projects' });
@@ -109,6 +118,7 @@ module.exports = {
   HdReminder,
   HdAttachment,
   HdDocument,
+  Project,
   // Re-export User so consumers can `const { HdTicket, User } = require('.../helpdesk')` if needed
   User,
 };

@@ -16,9 +16,16 @@ import {
   deleteGroupApi,
 } from '../../api/helpdesk/groups.api';
 import { getUsersApi } from '../../api/users.api';
+import { getDepartmentsApi } from '../../api/departments.api';
 import { HiOutlinePlus, HiOutlineUserGroup, HiOutlineX } from 'react-icons/hi';
 
-const EMPTY_FORM = { name: '', managerId: '', slaEnabled: false, approvalsEnabled: false };
+const EMPTY_FORM = { name: '', managerId: '', departmentId: '', slaEnabled: false, approvalsEnabled: false };
+
+/** API responses rename every `id` to `_id`; accept either. */
+const rid = (o) => (o ? (o._id ?? o.id) : undefined);
+/** Error bodies may be nested `{ error: { message } }` or flat `{ message }`. */
+const errMsg = (err, fallback) =>
+  err?.response?.data?.error?.message || err?.response?.data?.message || fallback;
 
 export default function HdGroups() {
   const dispatch = useDispatch();
@@ -27,6 +34,7 @@ export default function HdGroups() {
   const { user } = useSelector(s => s.auth);
 
   const [managers, setManagers] = useState([]);
+  const [departments, setDepartments] = useState([]);
   const [showModal, setShowModal] = useState(false);
   const [editingGroup, setEditingGroup] = useState(null);
   const [form, setForm] = useState(EMPTY_FORM);
@@ -41,7 +49,17 @@ export default function HdGroups() {
     getUsersApi({ limit: 1000 })
       .then(res => setManagers(res.data?.data?.users || res.data?.data || res.data || []))
       .catch(() => {});
+    // KPI departments (read-only) — a group may be backed by one department
+    getDepartmentsApi()
+      .then(res => setDepartments(res.data?.data || []))
+      .catch(() => setDepartments([]));
   }, [dispatch]);
+
+  const managerName = (g) => {
+    if (g.manager?.name) return g.manager.name;
+    if (!g.managerId) return null;
+    return managers.find(m => String(rid(m)) === String(g.managerId))?.name || null;
+  };
 
   const openCreate = () => {
     setEditingGroup(null);
@@ -53,9 +71,10 @@ export default function HdGroups() {
     setEditingGroup(g);
     setForm({
       name: g.name || '',
-      managerId: g.manager?._id || g.managerId || '',
-      slaEnabled: g.slaEnabled || false,
-      approvalsEnabled: g.approvalsEnabled || false,
+      managerId: rid(g.manager) || g.managerId || '',
+      departmentId: g.departmentId || '',
+      slaEnabled: !!(g.enableSla ?? g.slaEnabled),
+      approvalsEnabled: !!(g.enableApprovals ?? g.approvalsEnabled),
     });
     setShowModal(true);
   };
@@ -64,30 +83,38 @@ export default function HdGroups() {
     e.preventDefault();
     if (!form.name.trim()) { toast.error('Group name is required'); return; }
     setSaving(true);
+    // Backend field names: enableSla / enableApprovals; '' → null clears a reference.
+    const payload = {
+      name: form.name.trim(),
+      managerId: form.managerId || null,
+      departmentId: form.departmentId || null,
+      enableSla: !!form.slaEnabled,
+      enableApprovals: !!form.approvalsEnabled,
+    };
     try {
       if (editingGroup) {
-        await updateGroupApi(editingGroup.id || editingGroup.id, form);
+        await updateGroupApi(rid(editingGroup), payload);
         toast.success('Group updated');
       } else {
-        await createGroupApi(form);
+        await createGroupApi(payload);
         toast.success('Group created');
       }
       dispatch(fetchGroups());
       setShowModal(false);
     } catch (err) {
-      toast.error(err?.response?.data?.error?.message || 'Failed to save group');
+      toast.error(errMsg(err, 'Failed to save group'));
     } finally { setSaving(false); }
   };
 
   const handleDelete = async (g) => {
     if (!window.confirm(`Delete group "${g.name}"? This cannot be undone.`)) return;
-    setDeleting(g.id || g.id);
+    setDeleting(rid(g));
     try {
-      await deleteGroupApi(g.id || g.id);
+      await deleteGroupApi(rid(g));
       toast.success('Group deleted');
       dispatch(fetchGroups());
     } catch (err) {
-      toast.error(err?.response?.data?.error?.message || 'Failed to delete group');
+      toast.error(errMsg(err, 'Failed to delete group'));
     } finally { setDeleting(null); }
   };
 
@@ -140,6 +167,7 @@ export default function HdGroups() {
               <thead className="bg-gray-50 text-xs text-gray-500 uppercase tracking-wider">
                 <tr>
                   <th className="px-5 py-3 text-left">Group Name</th>
+                  <th className="px-5 py-3 text-left">Department</th>
                   <th className="px-5 py-3 text-left">Manager</th>
                   <th className="px-5 py-3 text-left">SLA</th>
                   <th className="px-5 py-3 text-left">Approvals</th>
@@ -148,17 +176,18 @@ export default function HdGroups() {
               </thead>
               <tbody className="divide-y divide-gray-50">
                 {groups.map(g => (
-                  <tr key={g.id || g.id} className="hover:bg-gray-50 transition-colors">
+                  <tr key={rid(g)} className="hover:bg-gray-50 transition-colors">
                     <td className="px-5 py-3 font-medium text-gray-900">{g.name}</td>
-                    <td className="px-5 py-3 text-gray-600">{g.manager?.name || '—'}</td>
+                    <td className="px-5 py-3 text-gray-600">{g.departmentName || '—'}</td>
+                    <td className="px-5 py-3 text-gray-600">{managerName(g) || '—'}</td>
                     <td className="px-5 py-3">
-                      <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${g.slaEnabled ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-500'}`}>
-                        {g.slaEnabled ? 'Enabled' : 'Disabled'}
+                      <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${(g.enableSla ?? g.slaEnabled) ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-500'}`}>
+                        {(g.enableSla ?? g.slaEnabled) ? 'Enabled' : 'Disabled'}
                       </span>
                     </td>
                     <td className="px-5 py-3">
-                      <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${g.approvalsEnabled ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-500'}`}>
-                        {g.approvalsEnabled ? 'Enabled' : 'Disabled'}
+                      <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${(g.enableApprovals ?? g.approvalsEnabled) ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-500'}`}>
+                        {(g.enableApprovals ?? g.approvalsEnabled) ? 'Enabled' : 'Disabled'}
                       </span>
                     </td>
                     {canManage && (
@@ -167,10 +196,10 @@ export default function HdGroups() {
                           <button onClick={() => openEdit(g)} className="text-xs text-blue-600 hover:text-blue-800 font-medium transition-colors">Edit</button>
                           <button
                             onClick={() => handleDelete(g)}
-                            disabled={deleting === (g.id || g.id)}
+                            disabled={deleting === rid(g)}
                             className="text-xs text-red-500 hover:text-red-700 font-medium transition-colors disabled:opacity-40"
                           >
-                            {deleting === (g.id || g.id) ? 'Deleting...' : 'Delete'}
+                            {deleting === rid(g) ? 'Deleting...' : 'Delete'}
                           </button>
                         </div>
                       </td>
@@ -214,8 +243,21 @@ export default function HdGroups() {
                   className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                 >
                   <option value="">No manager</option>
-                  {managers.map(m => <option key={m.id} value={m.id}>{m.name} ({m.role?.replace(/_/g, ' ')})</option>)}
+                  {managers.map(m => <option key={rid(m)} value={rid(m)}>{m.name} ({m.role?.replace(/_/g, ' ')})</option>)}
                 </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1">Department</label>
+                <select
+                  value={form.departmentId}
+                  onChange={e => setForm(f => ({ ...f, departmentId: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="">None</option>
+                  {departments.map(d => <option key={rid(d)} value={rid(d)}>{d.name}</option>)}
+                </select>
+                <p className="text-xs text-gray-400 mt-1">Employees in this department belong to this group automatically.</p>
               </div>
 
               <label className="flex items-center gap-3 cursor-pointer">

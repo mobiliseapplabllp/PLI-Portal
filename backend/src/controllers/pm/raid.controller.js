@@ -1,6 +1,6 @@
 const { Op }     = require('sequelize');
 const sequelize  = require('../../config/database');
-const { sendSuccess } = require('../../utils/response');
+const { sendSuccess, sendError } = require('../../utils/response');
 const PmRaidItem = require('../../models/pm/PmRaidItem');
 const Project    = require('../../models/pm/Project');
 const User       = require('../../models/User');
@@ -33,7 +33,7 @@ const create = async (req, res, next) => {
       throw new ForbiddenError('Only project manager or admin can add RAID items');
     }
     const { type, title, description, impact, probability, status, owner, ownerId, raisedDate, targetDate, mitigationPlan } = req.body;
-    if (!title) return res.status(400).json({ message: 'title is required' });
+    if (!title) return sendError(res, 'title is required', 400);
     const item = await PmRaidItem.create({
       projectId: req.params.id,
       type, title, description, impact, probability, status,

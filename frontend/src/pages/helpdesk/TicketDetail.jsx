@@ -36,7 +36,11 @@ import {
 import {
   requestApprovalApi,
   getApprovalStatusApi,
+  getDefaultApproverApi,
 } from '../../api/helpdesk/approvals.api';
+import { getGroupCapacityApi, getGroupMembersApi } from '../../api/helpdesk/capacity.api';
+import TimeLogControl from '../../components/common/TimeLogControl';
+import { timeEntrySummaryApi } from '../../api/timeEntries.api';
 import { getUsersApi } from '../../api/users.api';
 import api from '../../api/axios';
 import AllocationTypeInput, { formatAllocation } from '../../components/pm/AllocationTypeInput';
@@ -184,6 +188,17 @@ export default function TicketDetail() {
 
   // ── Tab state ──────────────────────────────────────────────────────────────
   const [activeTab, setActiveTab] = useState('conversations');
+  const [timeTotalHours, setTimeTotalHours] = useState(null); // logged hours — summary on load, then kept live by TimeLogControl
+
+  // Fill the "Time (Nh)" tab label without having to open the tab first.
+  useEffect(() => {
+    if (!id) return;
+    let cancelled = false;
+    timeEntrySummaryApi('ticket', String(id))
+      .then(res => { if (!cancelled) setTimeTotalHours(Number(res.data?.data?.totalHours) || 0); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [id]);
 
   // ── Conversations ──────────────────────────────────────────────────────────
   const [conversations, setConversations]   = useState([]);
@@ -345,6 +360,11 @@ export default function TicketDetail() {
   };
 
   const handlePickUp = async () => {
+    // Changing the assignee requires the ticket to have a servicing group (server returns 400 otherwise).
+    if (!(ticket.group?._id || ticket.group?.id || ticket.groupId)) {
+      toast.error('This ticket has no group. Use Assign to select a group first.');
+      return;
+    }
     try {
       await dispatch(updateTicket({ id, data: {
         assigneeId: user?._id || user?.id,
@@ -522,6 +542,7 @@ export default function TicketDetail() {
     { id: 'resolution',    label: 'Resolution',    icon: HiOutlineDocumentText },
     { id: 'history',       label: 'History',       icon: HiOutlineClock },
     { id: 'checklists',    label: 'Checklists',    icon: HiOutlineCheckCircle },
+    { id: 'time',          label: `Time${timeTotalHours != null ? ` (${timeTotalHours}h)` : ''}`, icon: HiOutlineLightningBolt },
   ];
 
   return (
@@ -717,6 +738,20 @@ export default function TicketDetail() {
                 onAdd={handleAddSubTask}
               />
             )}
+            {activeTab === 'time' && (
+              <TimeLogControl
+                entityType="ticket"
+                entityId={String(ticket?._id ?? ticket?.id ?? id)}
+                allocation={{
+                  mode: ticket?.allocationMode,
+                  totalHours: ticket?.allocationTotalHours,
+                  hoursPerDay: ticket?.allocationHoursPerDay,
+                  from: ticket?.allocationFrom,
+                  to: ticket?.allocationTo,
+                }}
+                onTotalsChange={setTimeTotalHours}
+              />
+            )}
           </div>
         </div>
 
@@ -736,6 +771,7 @@ export default function TicketDetail() {
             onUpdateAssigneeWeight={handleUpdateAssigneeWeight}
           />
           <ApprovalsPanel
+            ticketId={id}
             approvals={approvals}
             user={user}
             canManage={canManage}
@@ -774,7 +810,11 @@ export default function TicketDetail() {
               dispatch(fetchTicketById(id));
               toast.success('Ticket updated');
               setShowEditModal(false);
-            } catch (err) { toast.error(typeof err === 'string' ? err : err?.response?.data?.message || err?.message || 'Failed to update ticket'); }
+            } catch (err) {
+              const msg = typeof err === 'string' ? err : err?.response?.data?.message || err?.response?.data?.error?.message || err?.message || 'Failed to update ticket';
+              toast.error(msg);
+              throw new Error(msg); // EditModal shows it inline and stays open
+            }
           }}
         />
       )}
@@ -796,7 +836,11 @@ export default function TicketDetail() {
               dispatch(fetchTicketById(id));
               toast.success('Ticket assigned');
               setShowAssignModal(false);
-            } catch (err) { toast.error(typeof err === 'string' ? err : err?.response?.data?.message || err?.message || 'Failed to assign ticket'); }
+            } catch (err) {
+              const msg = typeof err === 'string' ? err : err?.response?.data?.message || err?.response?.data?.error?.message || err?.message || 'Failed to assign ticket';
+              toast.error(msg);
+              throw new Error(msg); // AssignModal catches and shows it inline, staying open
+            }
           }}
         />
       )}
@@ -1735,6 +1779,7 @@ function AssignmentPanel({ ticket, user, canManage, allUsers, groups, submitting
 // ---------------------------------------------------------------------------
 
 function ApprovalsPanel({
+  ticketId,
   approvals, user, canManage,
   allUsers, approverId, setApproverId,
   approvalNote, setApprovalNote,
@@ -1742,6 +1787,31 @@ function ApprovalsPanel({
   onRequest, onRespond,
 }) {
   const [showRequestForm, setShowRequestForm] = useState(false);
+  // Default approver (reporting manager → group manager), fetched when the request form opens
+  const [defaultApprover, setDefaultApprover] = useState(null);   // { userId, name, email, source } | null
+  const [defaultLoading, setDefaultLoading]   = useState(false);
+
+  useEffect(() => {
+    if (!showRequestForm || !ticketId) return;
+    let alive = true;
+    setDefaultLoading(true);
+    getDefaultApproverApi(ticketId)
+      .then(res => {
+        if (!alive) return;
+        const d = res.data?.data ?? res.data ?? null;
+        setDefaultApprover(d);
+        if (d?.userId != null) setApproverId(String(d.userId));
+      })
+      .catch(() => { if (alive) setDefaultApprover(null); })
+      .finally(() => { if (alive) setDefaultLoading(false); });
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showRequestForm, ticketId]);
+
+  const sourceLabel = (src) =>
+    src === 'reporting_manager' ? 'Reporting manager'
+    : src === 'group_manager'   ? 'Group manager'
+    : 'Default';
 
   const approverOptions = allUsers.filter(u =>
     ['admin', 'manager', 'senior_manager', 'md', 'director'].includes(u.role)
@@ -1829,12 +1899,23 @@ function ApprovalsPanel({
               className="w-full px-2.5 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
             >
               <option value="">Select approver...</option>
+              {defaultApprover?.userId != null
+                && !approverOptions.some(u => String(u._id || u.id) === String(defaultApprover.userId)) && (
+                <option value={String(defaultApprover.userId)}>{defaultApprover.name}</option>
+              )}
               {approverOptions.map(u => (
                 <option key={u._id || u.id} value={u._id || u.id}>
                   {u.name} ({fmtLabel(u.role)})
                 </option>
               ))}
             </select>
+            <p className="text-[11px] text-gray-500 -mt-1">
+              {defaultLoading
+                ? 'Looking up default approver…'
+                : defaultApprover?.userId != null
+                  ? <>Suggested: <span className="font-medium text-gray-700">{defaultApprover.name}</span> ({sourceLabel(defaultApprover.source)})</>
+                  : 'No default approver — select one'}
+            </p>
             <textarea
               value={approvalNote}
               onChange={e => setApprovalNote(e.target.value)}
@@ -1906,22 +1987,28 @@ function EditModal({ ticket, groups, allUsers, submitting, onClose, onSave }) {
     groupId:       ticket.group?._id    || ticket.group?.id    || ticket.groupId    || '',
     assigneeId:    ticket.assigneeUser?._id || ticket.assignee?._id || ticket.assignee?.id || ticket.assigneeId || '',
     site:          ticket.site         || '',
-    raisedByTeam:  ticket.raisedByTeam || ticket.team       || '',
     resolution:    ticket.resolution   || '',
   });
+  // Requester team is derived by the server from the employee master: display only, never sent.
+  const requesterTeam = ticket.raisedByTeam || ticket.team || '';
 
   const [groupUsers, setGroupUsers] = useState([]);
+  const [groupError, setGroupError] = useState('');   // inline: group required when assignee/group changes
+  const [saveError, setSaveError]   = useState('');   // inline: server error from onSave
 
   // Load group members when group changes
   useEffect(() => {
     if (!form.groupId) { setGroupUsers([]); return; }
-    getUsersApi({ groupId: form.groupId, isActive: true, limit: 200 })
-      .then(res => setGroupUsers(res.data?.data?.users || res.data?.data || allUsers))
-      .catch(() => setGroupUsers(allUsers));
-  }, [form.groupId, allUsers]);
+    // Only real members of the group (server rule) — anyone else would be rejected on save.
+    getGroupMembersApi(form.groupId)
+      .then(setGroupUsers)
+      .catch(() => setGroupUsers([]));
+  }, [form.groupId]);
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
+    setGroupError('');
+    setSaveError('');
 
     // Original values, normalised the same way the form state was initialised
     const original = {
@@ -1938,7 +2025,6 @@ function EditModal({ ticket, groups, allUsers, submitting, onClose, onSave }) {
       groupId:      ticket.group?._id    || ticket.group?.id    || ticket.groupId    || '',
       assigneeId:   ticket.assigneeUser?._id || ticket.assignee?._id || ticket.assignee?.id || ticket.assigneeId || '',
       site:         ticket.site         || '',
-      raisedByTeam: ticket.raisedByTeam || ticket.team || '',
       resolution:   ticket.resolution   || '',
     };
 
@@ -1961,7 +2047,19 @@ function EditModal({ ticket, groups, allUsers, submitting, onClose, onSave }) {
       return;
     }
 
-    onSave(payload);
+    // Changing the assignee or the group requires the ticket to end up with a group.
+    if (('assigneeId' in payload || 'groupId' in payload) && !form.groupId) {
+      setGroupError('Select a group first. A ticket needs a servicing group before its assignee or group can change.');
+      return;
+    }
+
+    try {
+      await onSave(payload);
+    } catch (err) {
+      const msg = err?.message || 'Failed to update ticket';
+      if (/group/i.test(msg) && !/not a member/i.test(msg)) setGroupError(msg);
+      else setSaveError(msg);
+    }
   };
 
   const set = (key) => (e) => setForm(f => ({ ...f, [key]: e.target.value }));
@@ -2104,12 +2202,16 @@ function EditModal({ ticket, groups, allUsers, submitting, onClose, onSave }) {
                   value={form.groupId}
                   onChange={(e) => {
                     setForm(f => ({ ...f, groupId: e.target.value, assigneeId: '' }));
+                    setGroupError('');
                   }}
-                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className={`w-full px-3 py-2 border rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 ${groupError ? 'border-red-400' : 'border-gray-200'}`}
                 >
                   <option value="">— Select Group —</option>
                   {(groups || []).map(g => <option key={g._id || g.id} value={g._id || g.id}>{g.name}</option>)}
                 </select>
+                {groupError
+                  ? <p className="text-xs text-red-600 mt-1">{groupError}</p>
+                  : !form.groupId && <p className="text-xs text-gray-400 mt-1">Select a group to choose an assignee</p>}
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1.5">Assignee</label>
@@ -2138,14 +2240,11 @@ function EditModal({ ticket, groups, allUsers, submitting, onClose, onSave }) {
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">Raised by Team</label>
-                <input
-                  type="text"
-                  value={form.raisedByTeam}
-                  onChange={set('raisedByTeam')}
-                  placeholder="Team that raised this"
-                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">Requester team</label>
+                <p className="w-full px-3 py-2 border border-gray-100 rounded-lg text-sm bg-gray-50 text-gray-600">
+                  {requesterTeam || '—'}
+                </p>
+                <p className="text-xs text-gray-400 mt-1">From employee master</p>
               </div>
             </div>
 
@@ -2162,6 +2261,11 @@ function EditModal({ ticket, groups, allUsers, submitting, onClose, onSave }) {
             </div>
           </div>
 
+          {saveError && (
+            <div className="mx-6 mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+              {saveError}
+            </div>
+          )}
           {/* Footer */}
           <div className="flex justify-end gap-3 px-6 py-4 border-t border-gray-200 bg-gray-50 flex-shrink-0">
             <button
@@ -2220,12 +2324,43 @@ function AssignModal({ ticket, groups, allUsers, submitting, editMode = false, o
   const [allocTo,   setAllocTo]   = useState(ticket?.allocationTo   || defaultAllocTo(ticket));
   const [availability, setAvailability] = useState(null);   // GET /pm/users/:id/availability
   const [availLoading, setAvailLoading] = useState(false);
+  const [assignError, setAssignError]   = useState('');     // inline error (e.g. assignee not a member of the group)
+  // Capacity suggestion for the chosen group over the allocation window (GET /helpdesk/groups/:id/capacity)
+  const [capacityData, setCapacityData] = useState(null);   // { members, suggested, ... }
+  const [capLoading, setCapLoading]     = useState(false);
+
+  useEffect(() => {
+    if (!selectedGroupId || !allocFrom || !allocTo || allocFrom > allocTo) { setCapacityData(null); return; }
+    let alive = true;
+    setCapLoading(true);
+    const t = setTimeout(() => {
+      getGroupCapacityApi(selectedGroupId, { from: allocFrom, to: allocTo })
+        .then(res => { if (alive) setCapacityData(res.data?.data ?? res.data ?? null); })
+        .catch(() => { if (alive) setCapacityData(null); })
+        .finally(() => { if (alive) setCapLoading(false); });
+    }, 400); // debounce date typing
+    return () => { alive = false; clearTimeout(t); };
+  }, [selectedGroupId, allocFrom, allocTo]);
+
+  // Top-3 suggested members (best-first), resolved to member records
+  const suggestedMembers = (() => {
+    if (!capacityData) return [];
+    const members = Array.isArray(capacityData.members) ? capacityData.members : [];
+    const ids = Array.isArray(capacityData.suggested) ? capacityData.suggested.slice(0, 3) : [];
+    return ids.map(uid => members.find(m => String(m.userId) === String(uid))).filter(Boolean);
+  })();
+  const pickSuggested = (m) => {
+    const full = (groupUsers.length ? groupUsers : allUsers).find(u => String(u._id || u.id) === String(m.userId));
+    setSelectedUser(full || { _id: m.userId, id: m.userId, name: m.name, email: m.email, role: m.role });
+    setAssignError('');
+  };
 
   useEffect(() => {
     if (!selectedGroupId) { setGroupUsers(allUsers); return; }
-    getUsersApi({ groupId: selectedGroupId, isActive: true, limit: 200 })
-      .then(res => setGroupUsers(res.data?.data?.users || res.data?.data || allUsers))
-      .catch(() => setGroupUsers(allUsers));
+    // Only real members of the group (server rule) — anyone else would be rejected on assign.
+    getGroupMembersApi(selectedGroupId)
+      .then(setGroupUsers)
+      .catch(() => setGroupUsers([]));
   }, [selectedGroupId, allUsers]);
 
   // Capacity feedback for the selected agent over the chosen window
@@ -2257,19 +2392,30 @@ function AssignModal({ ticket, groups, allUsers, submitting, editMode = false, o
   const wouldExceed  = availability && hoursValid && hoursNum != null && capacity > 0 && (peakHours + hoursNum > capacity);
   const round1       = (n) => Math.round(n * 10) / 10;
 
-  const handleConfirm = () => {
+  const handleConfirm = async () => {
     if (!selectedUser || !hoursValid || !datesValid) return;
+    // Assigning an agent requires the ticket to end up with a servicing group.
+    if (!selectedGroupId) {
+      setAssignError('Select a group first. A ticket needs a servicing group before an agent can be assigned.');
+      return;
+    }
     const uid = selectedUser._id || selectedUser.id;
-    onAssign({
-      assigneeId:            uid,
-      assigneeName:          selectedUser.name,
-      groupId:               selectedGroupId || null,
-      allocationMode:        isTotal ? 'total' : 'per_day',
-      allocationHoursPerDay: hoursNum ?? null,
-      allocationTotalHours:  isTotal ? rawNum : null,
-      allocationFrom:        allocFrom,
-      allocationTo:          allocTo,
-    });
+    setAssignError('');
+    try {
+      await onAssign({
+        assigneeId:            uid,
+        assigneeName:          selectedUser.name,
+        groupId:               selectedGroupId || null,
+        allocationMode:        isTotal ? 'total' : 'per_day',
+        allocationHoursPerDay: hoursNum ?? null,
+        allocationTotalHours:  isTotal ? rawNum : null,
+        allocationFrom:        allocFrom,
+        allocationTo:          allocTo,
+      });
+    } catch (err) {
+      // Parent rethrows the server message (e.g. 400 "Assignee is not a member of the selected group") — keep modal open
+      setAssignError(typeof err === 'string' ? err : err?.message || 'Failed to assign ticket');
+    }
   };
 
   return (
@@ -2285,16 +2431,62 @@ function AssignModal({ ticket, groups, allUsers, submitting, editMode = false, o
         <div className="p-5 space-y-4">
           {/* Group filter */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Filter by Group</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">Group <span className="text-red-500">*</span></label>
             <select
               value={selectedGroupId}
-              onChange={e => { setSelectedGroupId(e.target.value); setSelectedUser(null); }}
-              className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+              onChange={e => { setSelectedGroupId(e.target.value); setSelectedUser(null); setAssignError(''); }}
+              className={`w-full px-3 py-2 border rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 ${!selectedGroupId && selectedUser ? 'border-red-400' : 'border-gray-200'}`}
             >
-              <option value="">All Groups</option>
+              <option value="">— Select Group —</option>
               {(groups || []).map(g => <option key={g._id || g.id} value={g._id || g.id}>{g.name}</option>)}
             </select>
+            {!selectedGroupId && (
+              <p className={`text-xs mt-1 ${selectedUser ? 'text-red-600' : 'text-gray-400'}`}>
+                This ticket has no group. Select one before assigning an agent.
+              </p>
+            )}
           </div>
+
+          {/* Suggested for this window — top 3 from group capacity */}
+          {selectedGroupId && datesValid && (capLoading || suggestedMembers.length > 0) && (
+            <div>
+              <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider mb-1.5">
+                Suggested for this window
+                <span className="ml-1 normal-case font-normal text-gray-400">({fmtDdMmm(allocFrom)} – {fmtDdMmm(allocTo)})</span>
+              </p>
+              {capLoading && suggestedMembers.length === 0 ? (
+                <p className="text-[11px] text-gray-400">Checking team capacity…</p>
+              ) : (
+                <div className="grid grid-cols-3 gap-2">
+                  {suggestedMembers.map(m => {
+                    const selId = selectedUser ? String(selectedUser._id || selectedUser.id) : null;
+                    const isSelected = selId === String(m.userId);
+                    return (
+                      <button
+                        key={m.userId}
+                        type="button"
+                        onClick={() => pickSuggested(m)}
+                        title={m.isOverAllocated ? 'Over-allocated in this window' : (m.nextFreeDate ? `Next free: ${fmtDdMmm(m.nextFreeDate)}` : undefined)}
+                        className={`text-left rounded-xl border px-2.5 py-2 transition-colors ${
+                          isSelected ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:bg-gray-50'
+                        }`}
+                      >
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          {m.isOverAllocated && <span className="w-2 h-2 rounded-full bg-red-500 flex-shrink-0" />}
+                          <p className="text-xs font-medium text-gray-800 truncate">{m.name}</p>
+                        </div>
+                        <p className="text-[10px] text-gray-400 capitalize truncate">{fmtLabel(m.designation || m.role || '')}</p>
+                        <p className="text-[11px] text-gray-600 mt-1">
+                          <span className="font-semibold text-emerald-700">{round1(Number(m.freeHours) || 0)}h</span>/day free
+                        </p>
+                        <p className="text-[10px] text-gray-500">{Number(m.openTickets) || 0} open</p>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Search */}
           <div className="relative">
@@ -2414,6 +2606,12 @@ function AssignModal({ ticket, groups, allUsers, submitting, editMode = false, o
           </div>
         </div>
 
+        {assignError && (
+          <div className="mx-5 mb-3 flex items-start gap-1.5 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+            <HiOutlineExclamation className="w-4 h-4 flex-shrink-0" />
+            <span>{assignError}</span>
+          </div>
+        )}
         <div className="flex justify-end gap-3 px-5 py-4 border-t border-gray-200">
           <button onClick={onClose} className="px-4 py-2 border border-gray-200 rounded-lg text-sm text-gray-600 hover:bg-gray-50 transition-colors">
             Cancel

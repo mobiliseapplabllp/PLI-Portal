@@ -4,6 +4,7 @@ const fs      = require('fs');
 const { v4: uuid } = require('uuid');
 const multer  = require('multer');
 const HdDocument = require('../../models/helpdesk/HdDocument');
+const { sendError } = require('../../utils/response');
 
 const UPLOAD_DIR = path.join(__dirname, '../../../../uploads');
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
@@ -19,7 +20,7 @@ exports.uploadDocument = async (req, res) => {
   try {
     const { ticketId } = req.params;
     const file = req.file;
-    if (!file) return res.status(400).json({ error: { message: 'No file uploaded' } });
+    if (!file) return sendError(res, 'No file uploaded', 400);
     const category = req.body.category || 'Others';
     const ext = path.extname(file.originalname) || '';
     const storedName = `${uuid()}${ext}`;
@@ -35,7 +36,7 @@ exports.uploadDocument = async (req, res) => {
     });
     return res.status(201).json({ data: doc });
   } catch (err) {
-    return res.status(500).json({ error: { message: err.message } });
+    return sendError(res, err.message, 500);
   }
 };
 
@@ -49,7 +50,7 @@ exports.listDocuments = async (req, res) => {
     });
     return res.json({ data: docs });
   } catch (err) {
-    return res.status(500).json({ error: { message: err.message } });
+    return sendError(res, err.message, 500);
   }
 };
 
@@ -57,14 +58,14 @@ exports.downloadDocument = async (req, res) => {
   try {
     const { ticketId, docId } = req.params;
     const doc = await HdDocument.findOne({ where: { id: docId, ticketId: Number(ticketId) } });
-    if (!doc) return res.status(404).json({ error: { message: 'Document not found' } });
+    if (!doc) return sendError(res, 'Document not found', 404);
     const filePath = path.join(UPLOAD_DIR, doc.storedName);
-    if (!fs.existsSync(filePath)) return res.status(404).json({ error: { message: 'File not found on server' } });
+    if (!fs.existsSync(filePath)) return sendError(res, 'File not found on server', 404);
     res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(doc.filename)}"`);
     res.setHeader('Content-Type', doc.mimeType || 'application/octet-stream');
     return res.sendFile(filePath);
   } catch (err) {
-    return res.status(500).json({ error: { message: err.message } });
+    return sendError(res, err.message, 500);
   }
 };
 
@@ -72,12 +73,12 @@ exports.deleteDocument = async (req, res) => {
   try {
     const { ticketId, docId } = req.params;
     const doc = await HdDocument.findOne({ where: { id: docId, ticketId: Number(ticketId) } });
-    if (!doc) return res.status(404).json({ error: { message: 'Document not found' } });
+    if (!doc) return sendError(res, 'Document not found', 404);
     const filePath = path.join(UPLOAD_DIR, doc.storedName);
     if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
     await doc.destroy();
     return res.json({ data: { deleted: true } });
   } catch (err) {
-    return res.status(500).json({ error: { message: err.message } });
+    return sendError(res, err.message, 500);
   }
 };

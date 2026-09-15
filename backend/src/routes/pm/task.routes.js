@@ -1,13 +1,12 @@
 const router = require('express').Router({ mergeParams: true });
 const ctrl = require('../../controllers/pm/task.controller');
-const { authorize } = require('../../middleware/rbac');
+const { requirePermission } = require('../../core/rbac');
 
-const ALL = ['admin', 'manager', 'senior_manager', 'employee', 'hr_admin', 'final_approver', 'md', 'director'];
 
-router.get('/', authorize(...ALL), ctrl.getTasks);
-router.post('/', authorize(...ALL), ctrl.createTask);
-router.put('/:taskId', authorize(...ALL), ctrl.updateTask);
-router.delete('/:taskId', authorize('admin', 'manager', 'senior_manager'), ctrl.deleteTask);
-router.patch('/:taskId/status', authorize(...ALL), ctrl.updateTaskStatus);
+router.get('/', requirePermission('pm.task.view'), ctrl.getTasks);
+router.post('/', requirePermission('pm.task.create'), ctrl.createTask);
+router.put('/:taskId', requirePermission('pm.task.update'), ctrl.updateTask);
+router.delete('/:taskId', requirePermission('pm.task.delete'), ctrl.deleteTask);
+router.patch('/:taskId/status', requirePermission('pm.task.update'), ctrl.updateTaskStatus);
 
 module.exports = router;

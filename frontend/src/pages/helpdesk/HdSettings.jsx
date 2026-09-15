@@ -175,6 +175,13 @@ function ProjectsSettings() {
   const [deletingId,     setDeletingId]     = useState(null);
   const [regeneratingId, setRegeneratingId] = useState(null);
   const [copiedId,       setCopiedId]       = useState(null);
+  const [createErrors,   setCreateErrors]   = useState({});   // inline: { name, groupId, form }
+  const [editErrors,     setEditErrors]     = useState({});   // inline: { groupId, form }
+
+  /** Server error text — error bodies carry both `message` and `error.message`. */
+  const apiErrorMessage = (err, fallback) =>
+    err?.response?.data?.error?.message || err?.response?.data?.message || fallback;
+  const GROUP_REQUIRED_MSG = 'Select a support group for this project';
 
   useEffect(() => {
     dispatch(fetchHdProjects());
@@ -185,43 +192,56 @@ function ProjectsSettings() {
 
   const handleCreate = async (e) => {
     e.preventDefault();
-    if (!form.name.trim()) { toast.error('Project name is required'); return; }
+    const errs = {};
+    if (!form.name.trim()) errs.name = 'Project name is required';
+    if (!form.groupId)     errs.groupId = GROUP_REQUIRED_MSG;
+    setCreateErrors(errs);
+    if (Object.keys(errs).length) return;
     setCreating(true);
     try {
       await createHdProjectApi({
         name:        form.name.trim(),
         description: form.description || null,
-        groupId:     form.groupId ? Number(form.groupId) : null,
+        groupId:     Number(form.groupId),
         status:      form.status || 'Active',
       });
       toast.success('Project created');
       dispatch(fetchHdProjects());
       setShowCreate(false);
       setForm({ name: '', description: '', groupId: '', status: 'Active' });
+      setCreateErrors({});
     } catch (err) {
-      toast.error(err?.response?.data?.error?.message || 'Failed to create project');
+      const msg = apiErrorMessage(err, 'Failed to create project');
+      setCreateErrors(/group/i.test(msg) ? { groupId: msg } : { form: msg });
+      toast.error(msg);
     } finally { setCreating(false); }
   };
 
   const startEdit = (p) => {
+    setEditErrors({});
     setEditingId(p._id ?? p.id);
     setEditForm({ name: p.name, description: p.description || '', groupId: p.groupId || '', status: p.status || 'Active' });
   };
 
   const handleSave = async (id) => {
+    // A helpdesk project must always be serviced by a group — it may change but never be removed.
+    if (!editForm.groupId) { setEditErrors({ groupId: GROUP_REQUIRED_MSG }); return; }
+    setEditErrors({});
     setSaving(true);
     try {
       await updateHdProjectApi(id, {
         name:        editForm.name.trim(),
         description: editForm.description || null,
-        groupId:     editForm.groupId ? Number(editForm.groupId) : null,
+        groupId:     Number(editForm.groupId),
         status:      editForm.status,
       });
       toast.success('Project updated');
       dispatch(fetchHdProjects());
       setEditingId(null);
     } catch (err) {
-      toast.error(err?.response?.data?.error?.message || 'Failed to update project');
+      const msg = apiErrorMessage(err, 'Failed to update project');
+      setEditErrors(/group/i.test(msg) ? { groupId: msg } : { form: msg });
+      toast.error(msg);
     } finally { setSaving(false); }
   };
 
@@ -269,6 +289,27 @@ function ProjectsSettings() {
   const groupName = (p) =>
     p.group?.name || groups.find(g => (g._id || g.id) === p.groupId)?.name || '—';
 
+  // PM master link: read-through from GET /helpdesk/projects (pmProjectId + pmProject { id, name, status, projectType, managerId } | null)
+  // `linked` (bool) comes from the master-backed list; older payloads fall back to the pm link fields.
+  const pmProjectCell = (p) => {
+    const pm = p.pmProject;
+    const isLinked = typeof p.linked === 'boolean' ? p.linked : Boolean(pm || p.pmProjectId);
+    if (!isLinked) {
+      return (
+        <span className="inline-block px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-100 text-amber-700"
+          title="Legacy helpdesk project with no Project Management master">
+          Not linked to PM
+        </span>
+      );
+    }
+    return (
+      <div className="flex items-center gap-2 min-w-0">
+        <span className="text-xs text-gray-800 truncate max-w-[10rem]" title={pm?.name || ''}>{pm?.name || `#${p.pmProjectId}`}</span>
+        <span className="inline-block px-2 py-0.5 rounded-full text-[11px] font-medium bg-emerald-100 text-emerald-700 flex-shrink-0">Linked</span>
+      </div>
+    );
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -291,17 +332,22 @@ function ProjectsSettings() {
           <div className="flex gap-3 flex-wrap items-end">
             <div>
               <label className="text-xs font-medium text-gray-600 block mb-1">Name *</label>
-              <input type="text" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-                placeholder="e.g. IT Helpdesk" autoFocus required
-                className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm w-48 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              <input type="text" value={form.name}
+                onChange={e => { setForm(f => ({ ...f, name: e.target.value })); setCreateErrors(x => ({ ...x, name: '', form: '' })); }}
+                placeholder="e.g. IT Helpdesk" autoFocus
+                className={`px-3 py-1.5 border rounded-lg text-sm w-48 focus:outline-none focus:ring-2 focus:ring-blue-500 ${createErrors.name ? 'border-red-400' : 'border-gray-200'}`} />
+              {createErrors.name && <p className="text-[11px] text-red-600 mt-1">{createErrors.name}</p>}
+              <p className="text-[11px] text-gray-500 mt-1">Creates a project of type Operations in Project Management and enables helpdesk for it.</p>
             </div>
             <div>
-              <label className="text-xs font-medium text-gray-600 block mb-1">Team / Group</label>
-              <select value={form.groupId} onChange={e => setForm(f => ({ ...f, groupId: e.target.value }))}
-                className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm w-40 focus:outline-none focus:ring-2 focus:ring-blue-500">
-                <option value="">— No group —</option>
+              <label className="text-xs font-medium text-gray-600 block mb-1">Support group *</label>
+              <select value={form.groupId}
+                onChange={e => { setForm(f => ({ ...f, groupId: e.target.value })); setCreateErrors(x => ({ ...x, groupId: '', form: '' })); }}
+                className={`px-3 py-1.5 border rounded-lg text-sm w-40 focus:outline-none focus:ring-2 focus:ring-blue-500 ${createErrors.groupId ? 'border-red-400' : 'border-gray-200'}`}>
+                <option value="">— Select group —</option>
                 {groups.map(g => <option key={g._id || g.id} value={g._id || g.id}>{g.name}</option>)}
               </select>
+              {createErrors.groupId && <p className="text-[11px] text-red-600 mt-1 max-w-[10rem]">{createErrors.groupId}</p>}
             </div>
             <div>
               <label className="text-xs font-medium text-gray-600 block mb-1">Status</label>
@@ -323,6 +369,7 @@ function ProjectsSettings() {
               {creating ? 'Creating…' : 'Create'}
             </button>
           </div>
+          {createErrors.form && <p className="text-xs text-red-600 mt-2">{createErrors.form}</p>}
         </form>
       )}
 
@@ -339,6 +386,7 @@ function ProjectsSettings() {
               <tr>
                 <th className="px-4 py-2.5 text-left">Project</th>
                 <th className="px-4 py-2.5 text-left">Team</th>
+                <th className="px-4 py-2.5 text-left">PM project</th>
                 <th className="px-4 py-2.5 text-left">Status</th>
                 <th className="px-4 py-2.5 text-left">Widget Token</th>
                 <th className="px-4 py-2.5 text-left">Actions</th>
@@ -356,12 +404,16 @@ function ProjectsSettings() {
                           placeholder="Description" className="mt-1 px-2 py-1 border border-gray-200 rounded text-xs w-36 focus:outline-none" />
                       </td>
                       <td className="px-4 py-2">
-                        <select value={editForm.groupId} onChange={e => setEditForm(f => ({ ...f, groupId: e.target.value }))}
-                          className="px-2 py-1 border border-gray-200 rounded text-xs w-32 focus:outline-none">
-                          <option value="">— None —</option>
+                        <select value={editForm.groupId}
+                          onChange={e => { setEditForm(f => ({ ...f, groupId: e.target.value })); setEditErrors({}); }}
+                          className={`px-2 py-1 border rounded text-xs w-32 focus:outline-none ${editErrors.groupId ? 'border-red-400' : 'border-gray-200'}`}>
+                          <option value="">— Select group —</option>
                           {groups.map(g => <option key={g._id || g.id} value={g._id || g.id}>{g.name}</option>)}
                         </select>
+                        {editErrors.groupId && <p className="text-[11px] text-red-600 mt-1 max-w-[10rem]">{editErrors.groupId}</p>}
+                        {editErrors.form && <p className="text-[11px] text-red-600 mt-1 max-w-[10rem]">{editErrors.form}</p>}
                       </td>
+                      <td className="px-4 py-2">{pmProjectCell(p)}</td>
                       <td className="px-4 py-2">
                         <select value={editForm.status} onChange={e => setEditForm(f => ({ ...f, status: e.target.value }))}
                           className="px-2 py-1 border border-gray-200 rounded text-xs w-28 focus:outline-none">
@@ -392,6 +444,7 @@ function ProjectsSettings() {
                         {p.description && <p className="text-xs text-gray-400 mt-0.5">{p.description}</p>}
                       </td>
                       <td className="px-4 py-2.5 text-gray-600 text-xs">{groupName(p)}</td>
+                      <td className="px-4 py-2.5">{pmProjectCell(p)}</td>
                       <td className="px-4 py-2.5">{statusBadge(p.status)}</td>
                       <td className="px-4 py-2.5">
                         {p.publicToken
@@ -456,26 +509,52 @@ function UserMasterSettings() {
       .finally(() => setLoading(false));
   }, []);
 
-  const handleGroupChange = async (userId, groupId) => {
+  const groupNameById = (id) =>
+    id == null || id === '' ? null : (groups.find(g => String(g._id ?? g.id) === String(id))?.name ?? null);
+
+  /** Apply an override locally: effective = override ?? derived (mirrors the server). */
+  const withOverride = (u, overrideId) => {
+    const oid = overrideId == null || overrideId === '' ? null : Number(overrideId);
+    const effectiveGroupId = oid ?? u.derivedGroupId ?? null;
+    return {
+      ...u,
+      hdGroupId:          oid,
+      overrideGroupId:    oid,
+      overrideGroupName:  groupNameById(oid),
+      effectiveGroupId,
+      effectiveGroupName: oid != null ? groupNameById(oid) : (u.derivedGroupName ?? null),
+    };
+  };
+
+  const errMsg = (err, fallback) =>
+    err?.response?.data?.error?.message || err?.response?.data?.message || fallback;
+
+  const handleOverrideChange = async (userId, groupId) => {
     setSaving(p => ({ ...p, [userId]: true }));
     try {
       await assignUserGroupApi(userId, groupId ? Number(groupId) : null);
-      setData(prev => prev.map(u => (u._id || u.id) === userId ? { ...u, hdGroupId: groupId || null } : u));
-      toast.success('Group updated');
-    } catch { toast.error('Failed to update group'); }
+      setData(prev => prev.map(u => (u._id || u.id) === userId ? withOverride(u, groupId) : u));
+      toast.success(groupId ? 'Override set' : 'Override cleared');
+    } catch (err) { toast.error(errMsg(err, 'Failed to update override')); }
     finally { setSaving(p => ({ ...p, [userId]: false })); }
   };
 
+  const BULK_CLEAR = '__clear__';
   const handleBulkAssign = async () => {
-    if (!bulkGroup) { toast.error('Select a group first'); return; }
-    if (!window.confirm(`Assign all ${filtered.length} visible users to this group?`)) return;
+    if (!bulkGroup) { toast.error('Select an override (or clear) first'); return; }
+    const clearing = bulkGroup === BULK_CLEAR;
+    const target   = clearing ? null : Number(bulkGroup);
+    const question = clearing
+      ? `Clear the override for all ${filtered.length} visible users? They will fall back to their department's group.`
+      : `Set the override to "${groupNameById(target)}" for all ${filtered.length} visible users? This replaces their department-derived group.`;
+    if (!window.confirm(question)) return;
     setBulkAssigning(true);
     try {
-      const assignments = filtered.map(u => ({ userId: u._id || u.id, groupId: Number(bulkGroup) }));
-      await bulkAssignUserGroupsApi(assignments);
-      setData(prev => prev.map(u => ({ ...u, hdGroupId: Number(bulkGroup) })));
-      toast.success('All users assigned');
-    } catch { toast.error('Bulk assign failed'); }
+      const ids = new Set(filtered.map(u => String(u._id || u.id)));
+      await bulkAssignUserGroupsApi([...ids].map(userId => ({ userId, groupId: target })));
+      setData(prev => prev.map(u => (ids.has(String(u._id || u.id)) ? withOverride(u, target) : u)));
+      toast.success(clearing ? 'Overrides cleared' : 'Override set for visible users');
+    } catch (err) { toast.error(errMsg(err, 'Bulk update failed')); }
     finally { setBulkAssigning(false); }
   };
 
@@ -488,7 +567,7 @@ function UserMasterSettings() {
       <div>
         <h2 className="text-base font-semibold text-gray-800">User Master</h2>
         <p className="text-sm text-gray-500 mt-0.5">
-          Assign each PLI user to a helpdesk group so Project and Raised-by-Team auto-fill when selecting a requester.
+          Users belong to their department's group automatically. Use an override only for exceptions.
         </p>
       </div>
 
@@ -510,13 +589,15 @@ function UserMasterSettings() {
                   <th className="px-4 py-2.5 text-left">Name</th>
                   <th className="px-4 py-2.5 text-left">Email</th>
                   <th className="px-4 py-2.5 text-left">Role</th>
-                  <th className="px-4 py-2.5 text-left">Helpdesk Group</th>
-                  <th className="px-4 py-2.5 text-left">Status</th>
+                  <th className="px-4 py-2.5 text-left">Department</th>
+                  <th className="px-4 py-2.5 text-left">Group (from department)</th>
+                  <th className="px-4 py-2.5 text-left">Override</th>
+                  <th className="px-4 py-2.5 text-left">Effective group</th>
                 </tr>
               </thead>
               <tbody>
                 {filtered.length === 0 ? (
-                  <tr><td colSpan={5} className="px-4 py-8 text-center text-gray-400 text-sm">No users found.</td></tr>
+                  <tr><td colSpan={7} className="px-4 py-8 text-center text-gray-400 text-sm">No users found.</td></tr>
                 ) : filtered.map(u => {
                   const uid = u._id || u.id;
                   return (
@@ -526,16 +607,28 @@ function UserMasterSettings() {
                       <td className="px-4 py-2 text-xs">
                         <span className="px-1.5 py-0.5 bg-gray-100 rounded text-[10px]">{u.role}</span>
                       </td>
+                      <td className="px-4 py-2 text-xs text-gray-600">{u.departmentName || '—'}</td>
+                      <td className="px-4 py-2 text-xs text-gray-600">
+                        {u.derivedGroupName || <span className="text-gray-400">No group for department</span>}
+                      </td>
                       <td className="px-4 py-2">
-                        <select value={u.hdGroupId || ''} onChange={e => handleGroupChange(uid, e.target.value)}
+                        <select value={u.overrideGroupId ?? u.hdGroupId ?? ''} onChange={e => handleOverrideChange(uid, e.target.value)}
                           disabled={saving[uid]}
-                          className="text-xs border border-gray-200 rounded px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-blue-500">
-                          <option value="">— Unassigned —</option>
+                          className={`text-xs border rounded px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 ${
+                            (u.overrideGroupId ?? u.hdGroupId) != null ? 'border-amber-300' : 'border-gray-200'}`}>
+                          <option value="">— none —</option>
                           {groups.map(g => <option key={g._id || g.id} value={g._id || g.id}>{g.name}</option>)}
                         </select>
                       </td>
-                      <td className="px-4 py-2 text-xs text-gray-400">
-                        {saving[uid] ? 'Saving…' : (u.hdGroup?.name || groups.find(g => (g._id || g.id) == u.hdGroupId)?.name || '—')}
+                      <td className="px-4 py-2 text-xs">
+                        {saving[uid] ? <span className="text-gray-400">Saving…</span> : u.effectiveGroupName ? (
+                          <span className="inline-flex items-center gap-1.5">
+                            <span className="text-gray-800 font-medium">{u.effectiveGroupName}</span>
+                            {u.overrideGroupId != null && (
+                              <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-amber-100 text-amber-700">override</span>
+                            )}
+                          </span>
+                        ) : <span className="text-gray-400">—</span>}
                       </td>
                     </tr>
                   );
@@ -546,15 +639,16 @@ function UserMasterSettings() {
 
           {/* Bulk assign */}
           <div className="px-4 py-3 border-t border-gray-100 bg-gray-50 flex items-center gap-3">
-            <span className="text-xs font-medium text-gray-700">Bulk Assign:</span>
+            <span className="text-xs font-medium text-gray-700">Override:</span>
             <select value={bulkGroup} onChange={e => setBulkGroup(e.target.value)}
               className="text-xs border border-gray-200 rounded px-2 py-1.5 bg-white focus:outline-none">
-              <option value="">— Select Group —</option>
+              <option value="">— Select override —</option>
+              <option value={BULK_CLEAR}>— none (clear override) —</option>
               {groups.map(g => <option key={g._id || g.id} value={g._id || g.id}>{g.name}</option>)}
             </select>
-            <button onClick={handleBulkAssign} disabled={bulkAssigning || !bulkGroup}
+            <button onClick={handleBulkAssign} disabled={bulkAssigning || !bulkGroup || filtered.length === 0}
               className="px-3 py-1.5 bg-[#2196f3] text-white rounded text-xs font-medium hover:bg-[#1976d2] disabled:opacity-50 transition-colors">
-              {bulkAssigning ? 'Assigning…' : 'Assign All Visible'}
+              {bulkAssigning ? 'Saving…' : 'Set override for all visible users'}
             </button>
           </div>
         </div>

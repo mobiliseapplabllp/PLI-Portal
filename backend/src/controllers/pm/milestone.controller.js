@@ -1,5 +1,5 @@
 const milestoneService  = require('../../services/pm/milestone.service');
-const { sendSuccess }   = require('../../utils/response');
+const { sendSuccess, sendError } = require('../../utils/response');
 // config/database exports the Sequelize instance directly — do NOT destructure
 const sequelize         = require('../../config/database');
 const Project           = require('../../models/pm/Project');
@@ -69,13 +69,13 @@ const deleteMilestone = async (req, res, next) => {
 const updateStatus = async (req, res, next) => {
   try {
     const { status } = req.body;
-    if (!status) return res.status(400).json({ success: false, message: 'status is required' });
+    if (!status) return sendError(res, 'status is required', 400);
     if (typeof status !== 'string' || !status.trim()) {
-      return res.status(400).json({ success: false, message: 'Invalid status value' });
+      return sendError(res, 'Invalid status value', 400);
     }
     const VALID_STATUSES = ['not_started', 'in_progress', 'completed', 'delayed', 'on_hold', 'cancelled'];
     if (!VALID_STATUSES.includes(status.trim())) {
-      return res.status(400).json({ success: false, message: `Invalid status "${status}". Valid values: ${VALID_STATUSES.join(', ')}` });
+      return sendError(res, `Invalid status "${status}". Valid values: ${VALID_STATUSES.join(', ')}`, 400);
     }
     sendSuccess(res, await milestoneService.updateMilestoneStatus(req.params.id, req.params.milestoneId, status.trim(), req.user), 'Status updated');
   } catch (e) { next(e); }
@@ -85,7 +85,7 @@ const updateProgress = async (req, res, next) => {
   try {
     const pct = Number(req.body.completionPercentage);
     if (!Number.isFinite(pct) || pct < 0 || pct > 100) {
-      return res.status(400).json({ success: false, message: 'completionPercentage must be a number between 0 and 100' });
+      return sendError(res, 'completionPercentage must be a number between 0 and 100', 400);
     }
     req.body.completionPercentage = pct;
     sendSuccess(res, await milestoneService.updateMilestoneProgress(req.params.id, req.params.milestoneId, pct, req.user), 'Progress updated');
@@ -105,12 +105,12 @@ const exportMilestones = async (req, res, next) => {
 
     if (!isAdminOrManager) {
       if (!projectId) {
-        return res.status(403).json({ success: false, message: 'projectId is required for your role to export milestones' });
+        return sendError(res, 'projectId is required for your role to export milestones', 403);
       }
       const ProjectMember = require('../../models/pm/ProjectMember');
       const membership = await ProjectMember.findOne({ where: { projectId, userId: req.user.id } });
       if (!membership) {
-        return res.status(403).json({ success: false, message: 'You are not a member of this project' });
+        return sendError(res, 'You are not a member of this project', 403);
       }
     }
 
@@ -191,18 +191,18 @@ const exportMilestones = async (req, res, next) => {
  */
 const validateMilestoneImport = async (req, res, next) => {
   try {
-    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    if (!req.file) return sendError(res, 'No file uploaded', 400);
     if (req.file.size > 2 * 1024 * 1024) {
-      return res.status(400).json({ success: false, message: 'File too large. Maximum size is 2MB.' });
+      return sendError(res, 'File too large. Maximum size is 2MB.', 400);
     }
     const ExcelJS = require('exceljs');
     const wb = new ExcelJS.Workbook();
     await wb.xlsx.load(req.file.buffer);
     const ws = wb.worksheets[0];
-    if (!ws) return res.status(400).json({ error: 'No worksheet found in file' });
+    if (!ws) return sendError(res, 'No worksheet found in file', 400);
     const dataRowCount = ws.rowCount - 1;
     if (dataRowCount > 1000) {
-      return res.status(400).json({ success: false, message: 'File exceeds 1000 data rows. Please split into smaller files.' });
+      return sendError(res, 'File exceeds 1000 data rows. Please split into smaller files.', 400);
     }
     const rows = [], errors = [];
     ws.eachRow((row, rowNumber) => {
@@ -243,7 +243,7 @@ const commitMilestoneImport = async (req, res, next) => {
   try {
     const { rows } = req.body;
     if (!Array.isArray(rows) || rows.length === 0)
-      return res.status(400).json({ error: 'No rows provided' });
+      return sendError(res, 'No rows provided', 400);
 
     // Server-side re-validation — do not trust client's r.valid flag
     const validRows = [];
@@ -299,11 +299,7 @@ const commitMilestoneImport = async (req, res, next) => {
       await t.commit();
     } catch (e) {
       await t.rollback();
-      return res.status(500).json({
-        success: false,
-        message: 'Import failed — all rows rolled back',
-        error:   e.message,
-      });
+      return sendError(res, 'Import failed — all rows rolled back', 500, e.message);
     }
     return sendSuccess(res, results, `Import complete: ${results.inserted} inserted, ${results.skipped} skipped`);
   } catch (err) { next(err); }
@@ -361,9 +357,14 @@ const getMilestoneImportTemplate = async (req, res, next) => {
 
     // Fetch real project names
     const Project = require('../../models/pm/Project');
+    const { Op } = require('sequelize');
     const projects = await Project.findAll({
       attributes: ['name'],
-      where: { status: { [require('sequelize').Op.notIn]: ['completed', 'cancelled'] } },
+      where: {
+        status: { [Op.notIn]: ['completed', 'cancelled'] },
+        // Operations (helpdesk-only) projects have no milestones to import into
+        [Op.or]: [{ projectType: null }, { projectType: { [Op.ne]: 'Operations' } }],
+      },
       order: [['name', 'ASC']],
       limit: 500,
     });
@@ -477,13 +478,13 @@ const updateActualDates = async (req, res, next) => {
   try {
     const { reason, actualStartDate, actualEndDate } = req.body;
     if (actualStartDate && isNaN(new Date(actualStartDate).getTime())) {
-      return res.status(400).json({ success: false, message: 'Invalid actualStartDate format' });
+      return sendError(res, 'Invalid actualStartDate format', 400);
     }
     if (actualEndDate && isNaN(new Date(actualEndDate).getTime())) {
-      return res.status(400).json({ success: false, message: 'Invalid actualEndDate format' });
+      return sendError(res, 'Invalid actualEndDate format', 400);
     }
     if (actualStartDate && actualEndDate && new Date(actualStartDate) > new Date(actualEndDate)) {
-      return res.status(400).json({ success: false, message: 'actualStartDate must be before or equal to actualEndDate' });
+      return sendError(res, 'actualStartDate must be before or equal to actualEndDate', 400);
     }
     const result = await milestoneService.updateMilestoneActualDates(
       req.params.id,

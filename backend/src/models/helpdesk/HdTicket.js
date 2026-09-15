@@ -220,6 +220,19 @@ const HdTicket = sequelize.define('HdTicket', {
     allowNull: true,
     field:     'sla_breach_at',
   },
+  // Escalation (migration 046) — set once by jobs/hdEscalation.job.js when the
+  // breach is escalated to the group manager; non-NULL = never escalate again.
+  escalatedAt: {
+    type:      DataTypes.DATE,
+    allowNull: true,
+    field:     'escalated_at',
+  },
+  escalatedToId: {
+    type:      DataTypes.STRING(36),
+    allowNull: true,
+    field:     'escalated_to_id',
+    comment:   'users.id of the manager escalated to (audit)',
+  },
   // Ticket linking
   linkedTicketId: {
     type:      DataTypes.INTEGER,

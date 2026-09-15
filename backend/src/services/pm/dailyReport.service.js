@@ -8,6 +8,10 @@ const User = require('../../models/User');
 const { sendEmail } = require('../../utils/emailService');
 const pmSettingsService = require('./pmSettings.service');
 
+// Operations (helpdesk-only) projects have no milestones/daily logs — skip them.
+// `[Op.or]` is a Symbol key, so spreading NOT_OPERATIONS into a where merges cleanly.
+const NOT_OPERATIONS = { [Op.or]: [{ projectType: null }, { projectType: { [Op.ne]: 'Operations' } }] };
+
 const STATUS_COLORS = {
   on_track: '#059669',
   at_risk: '#d97706',
@@ -291,7 +295,7 @@ async function runAllDailyReports() {
   console.log('[PM DailyReport] Running daily report job...');
   try {
     const activeProjects = await Project.findAll({
-      where: { status: { [Op.in]: ['Active', 'active'] } },
+      where: { status: { [Op.in]: ['Active', 'active'] }, ...NOT_OPERATIONS },
       include: [
         { model: User, as: 'projectManager', attributes: ['id', 'name', 'email'] },
         { model: User, as: 'owner', attributes: ['id', 'name', 'email'] },
@@ -814,7 +818,7 @@ async function runConsolidatedDailyReport() {
 
     // Fetch all active + on_hold projects
     const projects = await Project.findAll({
-      where: { status: { [Op.in]: ['Active', 'active', 'On Hold', 'on_hold'] } },
+      where: { status: { [Op.in]: ['Active', 'active', 'On Hold', 'on_hold'] }, ...NOT_OPERATIONS },
       include: [
         { model: User, as: 'projectManager', attributes: ['id', 'name', 'email'] },
         { model: User, as: 'owner', attributes: ['id', 'name', 'email'] },

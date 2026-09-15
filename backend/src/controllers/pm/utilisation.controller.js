@@ -7,7 +7,7 @@
  */
 
 const utilisationService = require('../../services/pm/utilisation.service');
-const { sendSuccess } = require('../../utils/response');
+const { sendSuccess, sendError } = require('../../utils/response');
 const { ValidationError } = require('../../utils/errors');
 
 const MGMT_ROLES = ['admin', 'manager', 'senior_manager', 'md', 'director'];
@@ -19,7 +19,7 @@ const currentMonth = () => {
 
 const handleError = (e, res, next) => {
   if (e instanceof ValidationError) {
-    return res.status(400).json({ success: false, message: e.message });
+    return sendError(res, e.message, 400);
   }
   return next(e);
 };
@@ -30,7 +30,7 @@ const getUserUtilisation = async (req, res, next) => {
     const requesterId = String(req.user._id ?? req.user.id);
     const isMgmt = MGMT_ROLES.includes(req.user.role);
     if (!isMgmt && requesterId !== String(req.params.userId)) {
-      return res.status(403).json({ success: false, message: 'You can only view your own utilisation' });
+      return sendError(res, 'You can only view your own utilisation', 403);
     }
     const data = await utilisationService.getUserUtilisation(req.params.userId, month);
     return sendSuccess(res, data);

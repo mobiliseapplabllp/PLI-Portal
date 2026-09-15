@@ -7,6 +7,7 @@ import {
   HiOutlineViewGrid, HiOutlineViewList, HiOutlineEye, HiX,
 } from 'react-icons/hi';
 import api from '../../api/axios';
+import { getProjectsApi } from '../../api/pm/projects.api';
 
 // New status names (from pm_statuses config table)
 const STATUS_COLORS = {
@@ -45,6 +46,22 @@ export default function ProjectList() {
   const [managerFilter,     setManagerFilter]     = useState('');
   const [myProjects,        setMyProjects]        = useState(false);
 
+  // ── Operations projects (excluded by default; fetched directly, not via the slice) ──
+  const [showOps,     setShowOps]     = useState(false);
+  const [opsProjects, setOpsProjects] = useState([]);
+  const [opsLoading,  setOpsLoading]  = useState(false);
+
+  useEffect(() => {
+    if (!showOps) return;
+    let cancelled = false;
+    setOpsLoading(true);
+    getProjectsApi({ includeOperations: 1 })
+      .then(res => { if (!cancelled) setOpsProjects(res.data?.data || []); })
+      .catch(() => { if (!cancelled) setOpsProjects([]); })
+      .finally(() => { if (!cancelled) setOpsLoading(false); });
+    return () => { cancelled = true; };
+  }, [showOps]);
+
   // ── View toggle ──────────────────────────────────────────────────────────────
   const [view,        setView]        = useState('card');
   const [raidSummary, setRaidSummary] = useState({});
@@ -69,14 +86,19 @@ export default function ProjectList() {
   const canCreate = CREATOR_ROLES.includes(user?.role);
   const uid = String(user?._id || user?.id || '');
 
+  // Source list: the slice's default list, or the includeOperations fetch when toggled on
+  const allProjects  = showOps ? opsProjects : projects;
+  const listLoading  = projectsLoading || (showOps && opsLoading);
+  const isOperations = (p) => p.projectType === 'Operations';
+
   // ── Dynamic filter options derived from loaded data ──────────────────────────
-  const uniqueStatuses     = [...new Set(projects.map(p => p.status).filter(Boolean))].sort();
-  const uniqueProjectTypes = [...new Set(projects.map(p => p.projectType).filter(Boolean))].sort();
-  const uniqueClients      = [...new Set(projects.map(p => p.clientOrg?.name || p.clientName).filter(Boolean))].sort();
-  const uniqueManagers     = [...new Set(projects.map(p => p.projectManager?.name).filter(Boolean))].sort();
+  const uniqueStatuses     = [...new Set(allProjects.map(p => p.status).filter(Boolean))].sort();
+  const uniqueProjectTypes = [...new Set(allProjects.map(p => p.projectType).filter(Boolean))].sort();
+  const uniqueClients      = [...new Set(allProjects.map(p => p.clientOrg?.name || p.clientName).filter(Boolean))].sort();
+  const uniqueManagers     = [...new Set(allProjects.map(p => p.projectManager?.name).filter(Boolean))].sort();
 
   // ── Composed filter (AND logic — all active filters must match) ──────────────
-  const filtered = projects.filter(p => {
+  const filtered = allProjects.filter(p => {
     const matchSearch  = !search            || p.name?.toLowerCase().includes(search.toLowerCase());
     const matchStatus  = !statusFilter      || p.status === statusFilter;
     const matchBilling = !billingFilter     || p.billingType?.toLowerCase() === billingFilter.toLowerCase();
@@ -113,7 +135,7 @@ export default function ProjectList() {
   const emptyState = (
     <div className="bg-white rounded-xl border border-gray-200 p-12 text-center">
       <HiOutlineFolderOpen className="w-12 h-12 text-gray-300 mx-auto mb-3" />
-      {projects.length === 0 ? (
+      {allProjects.length === 0 ? (
         <>
           <p className="text-gray-500 font-medium">No projects yet</p>
           <p className="text-xs text-gray-400 mt-1">Get started by creating your first project.</p>
@@ -149,10 +171,10 @@ export default function ProjectList() {
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Projects</h1>
           <p className="text-sm text-gray-500 mt-1">
-            {projectsLoading ? (
+            {listLoading ? (
               <span className="inline-block w-24 h-3 bg-gray-200 rounded animate-pulse" />
             ) : (
-              `${filtered.length} project${filtered.length !== 1 ? 's' : ''}${filtered.length !== projects.length ? ` of ${projects.length}` : ''}`
+              `${filtered.length} project${filtered.length !== 1 ? 's' : ''}${filtered.length !== allProjects.length ? ` of ${allProjects.length}` : ''}`
             )}
           </p>
         </div>
@@ -280,6 +302,24 @@ export default function ProjectList() {
           My Projects
         </button>
 
+        {/* Show operations projects toggle */}
+        <label
+          className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium border cursor-pointer select-none transition-colors ${
+            showOps
+              ? 'bg-gray-700 text-white border-gray-700'
+              : 'bg-white text-gray-600 border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+          }`}
+          title="Operations-type projects are hidden by default"
+        >
+          <input
+            type="checkbox"
+            checked={showOps}
+            onChange={e => setShowOps(e.target.checked)}
+            className="w-3.5 h-3.5 rounded border-gray-300 accent-gray-700"
+          />
+          Show operations projects
+        </label>
+
         {/* Clear + active filter count badge */}
         {activeFilterCount > 0 && (
           <button
@@ -309,7 +349,7 @@ export default function ProjectList() {
       )}
 
       {/* ── Content area ─────────────────────────────────────────────────────── */}
-      {projectsLoading ? (
+      {listLoading ? (
         /* Loading skeleton */
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {[...Array(6)].map((_, i) => (
@@ -354,6 +394,11 @@ export default function ProjectList() {
                     <td className="px-4 py-3 max-w-[220px]">
                       <span title={p.name} className="font-medium text-gray-900 text-sm truncate block">
                         {p.name}
+                        {showOps && isOperations(p) && (
+                          <span className="ml-1.5 align-middle px-1.5 py-0.5 rounded text-[10px] font-semibold bg-gray-100 text-gray-500 border border-gray-200">
+                            Operations
+                          </span>
+                        )}
                       </span>
                       {p.billingType && (
                         <span className={`text-xs font-medium ${p.billingType === 'Billable' ? 'text-emerald-600' : 'text-gray-400'}`}>
@@ -447,7 +492,14 @@ export default function ProjectList() {
               >
                 {/* Top row */}
                 <div className="flex items-start justify-between mb-3">
-                  <h3 className="font-semibold text-gray-900 text-base leading-tight pr-2">{p.name}</h3>
+                  <h3 className="font-semibold text-gray-900 text-base leading-tight pr-2">
+                    {p.name}
+                    {showOps && isOperations(p) && (
+                      <span className="ml-1.5 align-middle px-1.5 py-0.5 rounded text-[10px] font-semibold bg-gray-100 text-gray-500 border border-gray-200">
+                        Operations
+                      </span>
+                    )}
+                  </h3>
                   <div className="flex flex-col items-end gap-1 flex-shrink-0">
                     {/* Status badge */}
                     <span className={`px-2 py-0.5 rounded-full text-xs font-semibold whitespace-nowrap ${STATUS_COLORS[p.status] || 'bg-gray-100 text-gray-700'}`}>

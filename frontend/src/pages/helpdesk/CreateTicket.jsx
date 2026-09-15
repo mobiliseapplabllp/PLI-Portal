@@ -23,6 +23,7 @@ import {
 import { getGroupsApi } from '../../api/helpdesk/groups.api';
 import { getHdProjectsApi } from '../../api/helpdesk/hdProjects.api';
 import { getUsersApi } from '../../api/users.api';
+import { getGroupMembersApi } from '../../api/helpdesk/capacity.api';
 import AllocationTypeInput from '../../components/pm/AllocationTypeInput';
 import {
   HiOutlineArrowLeft,
@@ -30,6 +31,11 @@ import {
   HiOutlineChevronDown,
   HiOutlineSearch,
 } from 'react-icons/hi';
+
+
+// import { getProjectsApi } from '../../api/pm/projects.api';
+import { getProjectsApi } from '../../api/pm/projects.api'; // manual
+
 
 // ── Static option lists for MySQL ENUM fields (cannot be changed via UI) ─────
 // These 2 fields are MySQL ENUMs in hd_tickets — the DB defines the allowed values.
@@ -176,6 +182,8 @@ export default function CreateTicket() {
   const [saving,      setSaving]      = useState(false);
   const [submitError, setSubmitError] = useState('');
   const [attachment,  setAttachment]  = useState(null);
+  const [requesterTeam, setRequesterTeam] = useState(''); // read-only: derived department / hd group of the requester
+  const [groupAutoFilled, setGroupAutoFilled] = useState(false); // group was filled from the selected project
 
   // ── Phase 3: effort allocation — only shown/sent when an assignee is chosen ─
   const isoDay = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -214,18 +222,35 @@ export default function CreateTicket() {
   const [showRequesterDropdown, setShowRequesterDropdown] = useState(false);
   const requesterRef = useRef(null);
 
+  // manual 
+
+   const [showOps,     setShowOps]     = useState(true);
+  const [opsProjects, setOpsProjects] = useState([]);
+  const [opsLoading,  setOpsLoading]  = useState(false);
+
+  useEffect(() => {
+      if (!showOps) return;
+      let cancelled = false;
+      setOpsLoading(true);
+      getProjectsApi()
+        .then(res => { if (!cancelled) setOpsProjects(res.data?.data || []); })
+        .catch(() => { if (!cancelled) setOpsProjects([]); })
+        .finally(() => { if (!cancelled) setOpsLoading(false); });
+      return () => { cancelled = true; };
+    }, [showOps]);
+
+  // manual
+
   // ── On mount: load groups + all active users + configurable options ──────────
   useEffect(() => {
     getGroupsApi()
       .then(res => setGroups(res.data?.data || res.data || []))
       .catch(() => toast.error('Failed to load groups'));
-    // Load ALL active users so the assignee dropdown is always populated
-    getUsersApi({ isActive: true, pageSize: 200 })
-      .then(res => {
-        const list = res.data?.data?.users || res.data?.data || res.data || [];
-        setGroupUsers(Array.isArray(list) ? list : []);
-      })
-      .catch(() => setGroupUsers([]));
+    // Load ALL projects up-front so the dropdown is never empty; refetched (scoped) once a requester is picked
+    getHdProjectsApi()
+      .then(res => setProjects(res.data?.data || res.data || []))
+      .catch(() => setProjects([]));
+    // Assignee options are the selected group's members — loaded when the group is set (see effect below).
     // Only fetch options if not already loaded (avoid redundant network calls)
     if (!hdOptions || Object.keys(hdOptions).length === 0) {
       dispatch(fetchHdOptions());
@@ -257,23 +282,35 @@ export default function CreateTicket() {
   }, []);
 
   // ── When Assignment Group changes, clear the selected assignee ──────────────
-  // (We no longer filter the agent list by group — all active users are always shown)
+  // and offer only real members of that group (same rule the server enforces).
   useEffect(() => {
     setFormData(prev => ({ ...prev, assigneeId: '' }));
+    if (!formData.groupId) { setGroupUsers([]); return; }
+    let cancelled = false;
+    getGroupMembersApi(formData.groupId)
+      .then(list => { if (!cancelled) setGroupUsers(list); })
+      .catch(() => { if (!cancelled) setGroupUsers([]); });
+    return () => { cancelled = true; };
   }, [formData.groupId]);
 
   // ── Select a requester from picker ──────────────────────────────────────────
   const selectRequester = (r) => {
     const hdGroupId   = r.hdGroupId || r.hd_group_id || null;
-    const hdGroupName = r.hdGroup?.name || r.hdGroupName || r.groupName || r.group_name || r.department || '';
+    const hdGroupName = r.hdGroup?.name || r.hdGroupName || r.groupName || r.group_name || '';
+    // Requester's team is DERIVED: department name first, then helpdesk group name.
+    // Display only — the server derives raisedByTeam from the requester's department and it is never sent.
+    const deptName = (typeof r.department === 'object' ? r.department?.name : r.department) || r.departmentName || '';
+    const teamName = deptName || hdGroupName || '';
 
+    setRequesterTeam(teamName);
     setFormData(prev => ({
       ...prev,
       requesterName:  r.name,
       requesterEmail: r.email,
-      raisedByTeam:   hdGroupName,
+      raisedByTeam:   teamName,
       projectId:      '',     // Reset project on requester change
     }));
+    setGroupAutoFilled(false);
     setRequesterSearch('');
     setShowRequesterDropdown(false);
 
@@ -292,11 +329,37 @@ export default function CreateTicket() {
 
   // ── Assignment group change: clear agent (matches original handleAssignmentGroupChange) ─
   const handleAssignmentGroupChange = (value) => {
+    setGroupAutoFilled(false);
     setFormData(prev => ({
       ...prev,
       groupId:    value,
       assigneeId: '',
     }));
+    if (errors.groupId) setErrors(prev => ({ ...prev, groupId: '' }));
+  };
+
+  // ── Project change: auto-fill the assignment group from the project's group ─
+  const projectGroupIdOf = (projectId) => {
+    if (!projectId) return null;
+    const proj = projects.find(p => String(p._id ?? p.id) === String(projectId));
+    return proj?.groupId ?? proj?.group_id ?? proj?.group?._id ?? proj?.group?.id ?? null;
+  };
+  const handleProjectChange = (value) => {
+    const projGroupId = projectGroupIdOf(value);
+    setFormData(prev => {
+      const next = { ...prev, projectId: value };
+      if (projGroupId) {
+        next.groupId = String(projGroupId);
+        if (String(prev.groupId) !== String(projGroupId)) next.assigneeId = '';
+      } else if (groupAutoFilled) {
+        // The previous project's group no longer applies — make the user choose one.
+        next.groupId = '';
+        next.assigneeId = '';
+      }
+      return next;
+    });
+    setGroupAutoFilled(!!projGroupId);
+    setErrors(prev => ({ ...prev, projectId: '', groupId: '' }));
   };
 
   const handleChange = (e) => {
@@ -331,6 +394,12 @@ export default function CreateTicket() {
 
     if (!formData.category) newErrors.category = 'Category is required';
     if (!formData.priority) newErrors.priority  = 'Priority is required';
+    // A servicing group is REQUIRED: chosen here, or supplied by the selected project's helpdesk group.
+    if (!formData.groupId && !projectGroupIdOf(formData.projectId)) {
+      newErrors.groupId = formData.projectId
+        ? 'This project has no support group — select a servicing group for this ticket'
+        : 'Select a servicing group for this ticket';
+    }
     if (formData.dueDate && new Date(formData.dueDate) <= new Date()) {
       newErrors.dueDate = 'Due date must be in the future';
     }
@@ -360,8 +429,10 @@ export default function CreateTicket() {
         requestType: REQUEST_TYPE_VALUE[formData.requestType] || formData.requestType,
         mode:        MODE_VALUE[formData.mode]            || formData.mode,
       };
+      // raisedByTeam is derived by the server from the requester's department — never send it.
+      delete normalized.raisedByTeam;
       // Strip empty optional fields
-      ['groupId', 'assigneeId', 'dueDate', 'projectId', 'raisedByTeam'].forEach(k => {
+      ['groupId', 'assigneeId', 'dueDate', 'projectId'].forEach(k => {
         if (!normalized[k]) delete normalized[k];
       });
       // Phase 3 — effort allocation only travels with an assignee
@@ -407,7 +478,14 @@ export default function CreateTicket() {
       const msg =
         typeof err === 'string'
           ? err
-          : err?.message || 'Failed to create request. Please try again.';
+          : err?.message || err?.response?.data?.message || err?.response?.data?.error?.message || 'Failed to create request. Please try again.';
+      if (/not a member/i.test(msg)) {
+        // 400 — assignee is not a member of the selected group: surface under the assignee field
+        setErrors(prev => ({ ...prev, assigneeId: msg }));
+      } else if (/group/i.test(msg)) {
+        // 400 — e.g. "Select a servicing group for this ticket": surface under the group field
+        setErrors(prev => ({ ...prev, groupId: msg }));
+      }
       setSubmitError(msg);
       toast.error(msg);
     } finally {
@@ -689,18 +767,16 @@ export default function CreateTicket() {
                       <select
                         name="projectId"
                         value={formData.projectId}
-                        onChange={handleChange}
+                        onChange={e => handleProjectChange(e.target.value)}
                         className={sel()}
                       >
                         <option value="">
-                          {projects.length
+                          {opsProjects.length
                             ? '-- Select Project --'
-                            : !formData.requesterName
-                              ? '-- Select requester first --'
-                              : '-- No projects found --'}
+                            : '-- No projects found --'}
                         </option>
-                        {projects.map(p => (
-                          <option key={p.id} value={p.id}>
+                        {opsProjects.map(p => (
+                          <option key={p._id ?? p.id} value={p._id ?? p.id}>
                             {p.name}
                             {p.status && p.status !== 'Active' ? ` (${p.status})` : ''}
                           </option>
@@ -708,20 +784,15 @@ export default function CreateTicket() {
                       </select>
                     </div>
                     <div>
-                      <label className={LBL}>Raised by Team</label>
-                      <p className={HINT}>Which team raised it (≠ Assignment Group)</p>
-                      <select
-                        value={formData.raisedByTeam}
-                        onChange={e =>
-                          setFormData(prev => ({ ...prev, raisedByTeam: e.target.value }))
-                        }
-                        className={sel()}
-                      >
-                        <option value="">-- Select Group --</option>
-                        {groups.map(g => (
-                          <option key={g.id} value={g.name}>{g.name}</option>
-                        ))}
-                      </select>
+                      <label className={LBL}>Requester's team</label>
+                      <p className={HINT}>Derived from the requester's department (≠ Assignment Group)</p>
+                      <input
+                        type="text"
+                        value={requesterTeam || formData.raisedByTeam || '—'}
+                        readOnly
+                        tabIndex={-1}
+                        className={`${inp(false)} bg-gray-50 text-gray-600 cursor-default`}
+                      />
                     </div>
                   </div>
 
@@ -858,28 +929,34 @@ export default function CreateTicket() {
 
                   {/* Group */}
                   <div>
-                    <label className={LBL}>Group</label>
+                    <label className={LBL}>
+                      Manager / Team <span className="text-red-500">*</span>
+                    </label>
                     <select
                       name="groupId"
                       value={formData.groupId}
                       onChange={e => handleAssignmentGroupChange(e.target.value)}
-                      className={sel()}
+                      className={sel(errors.groupId)}
                     >
                       <option value="">-- Select Group --</option>
                       {groups.map(g => (
-                        <option key={g.id} value={g.id}>{g.name}</option>
+                        <option key={g._id ?? g.id} value={g._id ?? g.id}>{g.name}</option>
                       ))}
                     </select>
+                    {groupAutoFilled && formData.groupId && (
+                      <p className="text-[10px] text-indigo-500 mt-0.5">From project</p>
+                    )}
+                    {errors.groupId && <p className={ERR}>{errors.groupId}</p>}
                   </div>
 
                   {/* Assign to Agent — disabled until group selected (matches original) */}
                   <div>
-                    <label className={LBL}>Assign to Agent</label>
+                    <label className={LBL}>Assign to</label>
                     <select
                       name="assigneeId"
                       value={formData.assigneeId}
                       onChange={handleChange}
-                      className={sel()}
+                      className={sel(errors.assigneeId)}
                     >
                       <option value="">-- Unassigned --</option>
                       {groupUsers.map(u => (
@@ -888,8 +965,11 @@ export default function CreateTicket() {
                         </option>
                       ))}
                     </select>
+                    {errors.assigneeId && <p className={ERR}>{errors.assigneeId}</p>}
                     {groupUsers.length === 0 && (
-                      <p className="text-xs text-gray-500 mt-0.5">Loading agents…</p>
+                      <p className="text-xs text-gray-500 mt-0.5">
+                        {formData.groupId ? 'No members in this group yet' : 'Choose a group to see its agents'}
+                      </p>
                     )}
                   </div>
 

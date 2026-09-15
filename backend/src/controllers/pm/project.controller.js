@@ -1,7 +1,7 @@
 const { Op } = require('sequelize');
 const projectService = require('../../services/pm/project.service');
 const pmSettingsService = require('../../services/pm/pmSettings.service');
-const { sendSuccess } = require('../../utils/response');
+const { sendSuccess, sendError } = require('../../utils/response');
 const { AllocationConflictError, ValidationError } = require('../../utils/errors');
 const { checkConflict, summarise, toPct, toDate: toLocalDate, resolveAllocation } = require('../../utils/capacityEngine');
 
@@ -35,7 +35,7 @@ const updateProject = async (req, res, next) => {
         if (!isProjectOwner) {
           const { endDate } = req.body;
           if (!endDate) {
-            return res.status(400).json({ success: false, message: 'Only endDate can be updated by managers. Please provide a valid endDate.' });
+            return sendError(res, 'Only endDate can be updated by managers. Please provide a valid endDate.', 400);
           }
           return sendSuccess(
             res,
@@ -62,17 +62,48 @@ const getProjectSummary = async (req, res, next) => {
   catch (e) { next(e); }
 };
 
+// ── Helpdesk profile (ONE PROJECT MASTER) ────────────────────────────────────
+// 4xx from the service (404 / 403 / 409 / 400) are answered with the flat
+// unified { success:false, message, error:{ message } } body; anything else goes to the error handler.
+const mapHelpdeskError = (e, res, next) => {
+  if (e && e.isOperational && e.statusCode >= 400 && e.statusCode < 500) {
+    return sendError(res, e.message, e.statusCode);
+  }
+  return next(e);
+};
+
+// GET /pm/projects/:id/helpdesk → { enabled, profile }
+const getHelpdeskProfile = async (req, res, next) => {
+  try { sendSuccess(res, await projectService.getHelpdeskProfile(req.params.id)); }
+  catch (e) { mapHelpdeskError(e, res, next); }
+};
+// POST /pm/projects/:id/helpdesk { groupId }
+const enableHelpdesk = async (req, res, next) => {
+  try { sendSuccess(res, await projectService.enableHelpdesk(req.params.id, req.body.groupId, req.user), 'Helpdesk enabled', 201); }
+  catch (e) { mapHelpdeskError(e, res, next); }
+};
+// PUT /pm/projects/:id/helpdesk { groupId }
+const updateHelpdeskProfile = async (req, res, next) => {
+  try { sendSuccess(res, await projectService.updateHelpdeskProfile(req.params.id, req.body, req.user), 'Helpdesk profile updated'); }
+  catch (e) { mapHelpdeskError(e, res, next); }
+};
+// DELETE /pm/projects/:id/helpdesk
+const disableHelpdesk = async (req, res, next) => {
+  try { await projectService.disableHelpdesk(req.params.id, req.user); sendSuccess(res, { enabled: false, profile: null }, 'Helpdesk disabled'); }
+  catch (e) { mapHelpdeskError(e, res, next); }
+};
+
 // ── Allocation error mapping ─────────────────────────────────────────────────
 // The capacity engine raises AllocationConflictError (409) from the service so
 // the check cannot be bypassed; the controller only maps it to the API body.
-// hoursPerDay validation (400) uses the flat { success, message } shape the
-// member endpoints have always used.
+// hoursPerDay validation (400) uses the unified error shape; the 409 keeps the
+// top-level `conflict` key ProjectDetail.jsx reads (data.conflict).
 const mapAllocationError = (e, res, next) => {
   if (e instanceof AllocationConflictError) {
-    return res.status(409).json({ success: false, message: e.message, conflict: e.conflict });
+    return sendError(res, e.message, 409, null, { conflict: e.conflict });
   }
   if (e instanceof ValidationError) {
-    return res.status(400).json({ success: false, message: e.message });
+    return sendError(res, e.message, 400);
   }
   return next(e);
 };
@@ -266,13 +297,13 @@ const requestAllocationApproval = async (req, res, next) => {
 
     // Validate dates
     if (!fromDate || isNaN(new Date(fromDate).getTime())) {
-      return res.status(400).json({ success: false, message: 'Invalid fromDate' });
+      return sendError(res, 'Invalid fromDate', 400);
     }
     if (!toDate || isNaN(new Date(toDate).getTime())) {
-      return res.status(400).json({ success: false, message: 'Invalid toDate' });
+      return sendError(res, 'Invalid toDate', 400);
     }
     if (new Date(fromDate) > new Date(toDate)) {
-      return res.status(400).json({ success: false, message: 'fromDate must be before toDate' });
+      return sendError(res, 'fromDate must be before toDate', 400);
     }
 
     // Allocation: per_day (hoursPerDay, or legacy allocationPct → converted) or total (allocationTotalHours)
@@ -284,7 +315,7 @@ const requestAllocationApproval = async (req, res, next) => {
     let mode = req.body.allocationMode;
     if (blank(mode)) mode = (blank(hoursPerDay) && !blank(req.body.allocationTotalHours)) ? 'total' : 'per_day';
     if (mode !== 'per_day' && mode !== 'total') {
-      return res.status(400).json({ success: false, message: "allocationMode must be 'per_day' or 'total'" });
+      return sendError(res, "allocationMode must be 'per_day' or 'total'", 400);
     }
     const resolved = resolveAllocation({
       allocationMode: mode,
@@ -293,16 +324,16 @@ const requestAllocationApproval = async (req, res, next) => {
       allocationFrom: fromDate,
       allocationTo:   toDate,
     }, calendar);
-    if (!resolved.ok) return res.status(400).json({ success: false, message: resolved.error });
+    if (!resolved.ok) return sendError(res, resolved.error, 400);
     const hours = resolved.hoursPerDay;
     // Validate userId exists
     if (!userId) {
-      return res.status(400).json({ success: false, message: 'userId is required' });
+      return sendError(res, 'userId is required', 400);
     }
     const User = require('../../models/User');
     const targetUser = await User.findByPk(userId, { attributes: ['id'] });
     if (!targetUser) {
-      return res.status(404).json({ success: false, message: 'User not found' });
+      return sendError(res, 'User not found', 404);
     }
     const PmAllocationApproval = require('../../models/pm/PmAllocationApproval');
     const approval = await PmAllocationApproval.create({
@@ -362,20 +393,17 @@ const respondToAllocationApproval = async (req, res, next) => {
     const { approvalId } = req.params;
     const { action, responseNote } = req.body; // action: 'approve' | 'reject'
     if (!['approve', 'reject'].includes(action)) {
-      return res.status(400).json({ success: false, message: 'action must be approve or reject' });
+      return sendError(res, 'action must be approve or reject', 400);
     }
     const PmAllocationApproval = require('../../models/pm/PmAllocationApproval');
     const ProjectMember = require('../../models/pm/ProjectMember');
 
     const approval = await PmAllocationApproval.findByPk(approvalId);
-    if (!approval) return res.status(404).json({ success: false, message: 'Approval request not found' });
+    if (!approval) return sendError(res, 'Approval request not found', 404);
 
     // Guard: prevent re-deciding an already approved or rejected request
     if (approval.status !== 'pending') {
-      return res.status(409).json({
-        success: false,
-        message: `This request has already been ${approval.status}. No changes made.`,
-      });
+      return sendError(res, `This request has already been ${approval.status}. No changes made.`, 409);
     }
 
     await approval.update({
@@ -565,6 +593,7 @@ const getMembersAvailability = async (req, res, next) => {
 
 module.exports = {
   getProjects, getProjectById, createProject, updateProject, deleteProject, getProjectSummary,
+  getHelpdeskProfile, enableHelpdesk, updateHelpdeskProfile, disableHelpdesk,
   getMembers, addMember, updateMember, confirmMemberHours, removeMember,
   getRecipients, addRecipient, removeRecipient,
   getAllocationPreview, requestAllocationApproval,

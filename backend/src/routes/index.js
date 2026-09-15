@@ -18,6 +18,7 @@ router.use('/audit-logs', require('./audit.routes'));
 router.use('/pm', require('./pm/index'));
 router.use('/csat', require('./csat/index'));
 router.use('/helpdesk', require('./helpdesk/index'));
+router.use('/time-entries', require('./timeEntries.routes'));
 
 // Public (no-auth) routes — rate-limited inside the file
 router.use('/public/survey', require('./public/publicSurvey.routes'));

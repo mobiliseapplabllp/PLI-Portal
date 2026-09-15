@@ -5,6 +5,7 @@ import toast from 'react-hot-toast';
 import { createProjectApi, addMemberApi } from '../../api/pm/projects.api';
 import { getUsersApi } from '../../api/users.api';
 import { getProjectTypesApi, getPmStatusesApi, getMemberRolesApi } from '../../api/pm/config.api';
+import { getGroupsApi } from '../../api/helpdesk/groups.api';
 import api from '../../api/axios';
 import { HiOutlineArrowLeft, HiOutlinePlus, HiOutlineX, HiOutlineUserGroup, HiOutlineUserAdd } from 'react-icons/hi';
 import ResourceAvailabilityCard from '../../components/pm/ResourceAvailabilityCard';
@@ -59,6 +60,7 @@ export default function CreateProject() {
   const [statuses,     setStatuses]     = useState([]);
   const [clientOrgs,   setClientOrgs]   = useState([]);
   const [memberRoles,  setMemberRoles]  = useState([]);
+  const [groups,       setGroups]       = useState([]);   // helpdesk support groups
   const [saving,       setSaving]       = useState(false);
   const [loading,      setLoading]      = useState(true);
 
@@ -78,6 +80,8 @@ export default function CreateProject() {
     billingType:  'Non-Billable',
     projectType:  '',
     status:       'Yet to Start',
+    enableHelpdesk:  false,
+    helpdeskGroupId: '',
   });
 
   // Close member modal on Escape
@@ -92,6 +96,9 @@ export default function CreateProject() {
     api.get('/pm/config/client-orgs')
       .then(res => setClientOrgs(res.data?.data ?? []))
       .catch(() => {});
+    getGroupsApi()
+      .then(res => { const raw = res.data?.data ?? res.data; setGroups(Array.isArray(raw) ? raw : []); })
+      .catch(() => {}); // non-fatal — helpdesk section just shows an empty list
     Promise.all([
       getUsersApi({ isActive: true, limit: 200 }),
       getProjectTypesApi(),
@@ -109,6 +116,8 @@ export default function CreateProject() {
   }, []);
 
   const set = (field, val) => setForm(f => ({ ...f, [field]: val }));
+  const [helpdeskGroupError, setHelpdeskGroupError] = useState('');   // inline: group required when helpdesk enabled
+  const HELPDESK_GROUP_REQUIRED = 'Select a support group for this project';
   const selectedOrg = clientOrgs.find(o => (o._id || o.id) === form.clientOrgId) || null;
   const setDraft    = (f, v) => setMemberDraft(p => ({ ...p, [f]: v }));
 
@@ -142,6 +151,12 @@ export default function CreateProject() {
     e.preventDefault();
     if (!form.name.trim())  return toast.error('Project name is required');
     if (!form.projectType)  return toast.error('Select a project type');
+    // Enabling helpdesk requires a servicing group (the server returns the same 400 otherwise).
+    if (form.enableHelpdesk && !form.helpdeskGroupId) {
+      setHelpdeskGroupError(HELPDESK_GROUP_REQUIRED);
+      return toast.error(HELPDESK_GROUP_REQUIRED);
+    }
+    setHelpdeskGroupError('');
     setSaving(true);
     const fullName = selectedOrg
       ? `${selectedOrg.name} - ${form.name.trim()}`
@@ -159,6 +174,8 @@ export default function CreateProject() {
         managerId:        derivedManagerId || (isMgr ? userId : undefined),
         startDate:        form.plannedStart || undefined,
         endDate:          form.plannedEnd   || undefined,
+        enableHelpdesk:   !!form.enableHelpdesk,
+        helpdeskGroupId:  form.enableHelpdesk && form.helpdeskGroupId ? Number(form.helpdeskGroupId) : null,
       });
       const newId = res.data?.data?._id || res.data?.data?.id;
       if (!newId) throw new Error('Server did not return a project ID. Please try again.');
@@ -184,11 +201,13 @@ export default function CreateProject() {
       toast.success('Project created successfully');
       navigate(`/pm/projects/${newId}`);
     } catch (err) {
-      toast.error(
+      const msg =
         err.response?.data?.message ||
         err.response?.data?.error?.message ||
-        'Failed to create project',
-      );
+        err.message ||
+        'Failed to create project';
+      if (/support group/i.test(msg)) setHelpdeskGroupError(msg);
+      toast.error(msg);
     } finally { setSaving(false); }
   };
 
@@ -323,6 +342,39 @@ export default function CreateProject() {
                   ))}
                 </div>
               </div>
+            </div>
+
+            {/* ── ROW 2b: Helpdesk ───────────────────────────────────────── */}
+            <div className="grid grid-cols-3 gap-5 items-end">
+              <label className="flex items-center gap-2 h-9 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={form.enableHelpdesk}
+                  onChange={e => { setHelpdeskGroupError(''); setForm(f => ({ ...f, enableHelpdesk: e.target.checked, helpdeskGroupId: e.target.checked ? f.helpdeskGroupId : '' })); }}
+                  className="w-4 h-4 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500/30"
+                />
+                <span className="text-sm text-gray-700">Enable helpdesk for this project</span>
+              </label>
+              {form.enableHelpdesk && (
+                <div>
+                  <Lbl required>Support group</Lbl>
+                  <select
+                    value={form.helpdeskGroupId}
+                    onChange={e => { set('helpdeskGroupId', e.target.value); setHelpdeskGroupError(''); }}
+                    className={`${inp} ${helpdeskGroupError ? '!border-red-400' : ''}`}
+                    required
+                    title="Tickets raised for this project are routed to this group"
+                  >
+                    <option value="">Select group…</option>
+                    {groups.map(g => (
+                      <option key={g._id || g.id} value={g._id || g.id}>{g.name}</option>
+                    ))}
+                  </select>
+                  {helpdeskGroupError
+                    ? <p className="text-xs text-red-600 mt-1">{helpdeskGroupError}</p>
+                    : <p className="text-xs text-gray-400 mt-1">Required when helpdesk is enabled</p>}
+                </div>
+              )}
             </div>
 
             {/* ── ROW 3: Planned Start | Planned End ─────────────────────── */}

@@ -2,7 +2,7 @@
  * PM Configuration Controller
  * Manages: Project Types, Project Statuses, Milestone Templates
  */
-const { sendSuccess } = require('../../utils/response');
+const { sendSuccess, sendError } = require('../../utils/response');
 const PmProjectType       = require('../../models/pm/PmProjectType');
 const PmStatus            = require('../../models/pm/PmStatus');
 const PmMilestoneTemplate = require('../../models/pm/PmMilestoneTemplate');
@@ -19,9 +19,9 @@ const getProjectTypes = async (req, res, next) => {
 const createProjectType = async (req, res, next) => {
   try {
     const { name, sortOrder } = req.body;
-    if (!name) return res.status(400).json({ message: 'name is required' });
+    if (!name) return sendError(res, 'name is required', 400);
     const existing = await PmProjectType.findOne({ where: { name } });
-    if (existing) return res.status(409).json({ message: `Project type "${name}" already exists` });
+    if (existing) return sendError(res, `Project type "${name}" already exists`, 409);
     const maxOrder = await PmProjectType.max('sortOrder') || 0;
     const type = await PmProjectType.create({ name, sortOrder: sortOrder ?? maxOrder + 1 });
     sendSuccess(res, type, 'Project type created', 201);
@@ -31,7 +31,7 @@ const createProjectType = async (req, res, next) => {
 const updateProjectType = async (req, res, next) => {
   try {
     const type = await PmProjectType.findByPk(req.params.id);
-    if (!type) return res.status(404).json({ message: 'Project type not found' });
+    if (!type) return sendError(res, 'Project type not found', 404);
     const { name, isActive, sortOrder } = req.body;
     if (name !== undefined) type.name = name;
     if (isActive !== undefined) type.isActive = isActive;
@@ -44,14 +44,12 @@ const updateProjectType = async (req, res, next) => {
 const deleteProjectType = async (req, res, next) => {
   try {
     const type = await PmProjectType.findByPk(req.params.id);
-    if (!type) return res.status(404).json({ message: 'Project type not found' });
+    if (!type) return sendError(res, 'Project type not found', 404);
     // Check if in use
     const Project = require('../../models/pm/Project');
     const count = await Project.count({ where: { projectType: type.name } });
     if (count > 0) {
-      return res.status(409).json({
-        message: `Cannot delete: ${count} project(s) use this type. Disable it instead.`,
-      });
+      return sendError(res, `Cannot delete: ${count} project(s) use this type. Disable it instead.`, 409);
     }
     await type.destroy();
     sendSuccess(res, null, 'Project type deleted');
@@ -81,12 +79,12 @@ const getAllStatuses = async (req, res, next) => {
 const createStatus = async (req, res, next) => {
   try {
     const { name, color, sortOrder, forProject, forMilestone, forSubMilestone } = req.body;
-    if (!name) return res.status(400).json({ message: 'name is required' });
+    if (!name) return sendError(res, 'name is required', 400);
     if (!forProject && !forMilestone && !forSubMilestone) {
-      return res.status(400).json({ message: 'At least one scope (project, milestone, or sub-milestone) must be selected.' });
+      return sendError(res, 'At least one scope (project, milestone, or sub-milestone) must be selected.', 400);
     }
     const existing = await PmStatus.findOne({ where: { name } });
-    if (existing) return res.status(409).json({ message: `Status "${name}" already exists` });
+    if (existing) return sendError(res, `Status "${name}" already exists`, 409);
     const maxOrder = await PmStatus.max('sortOrder') || 0;
     const status = await PmStatus.create({
       name,
@@ -103,14 +101,14 @@ const createStatus = async (req, res, next) => {
 const updateStatus = async (req, res, next) => {
   try {
     const status = await PmStatus.findByPk(req.params.id);
-    if (!status) return res.status(404).json({ message: 'Status not found' });
+    if (!status) return sendError(res, 'Status not found', 404);
     const { name, color, isActive, sortOrder, forProject, forMilestone, forSubMilestone } = req.body;
     // Determine effective scope values after applying incoming changes
     const effectiveForProject      = forProject      !== undefined ? forProject      : status.forProject;
     const effectiveForMilestone    = forMilestone    !== undefined ? forMilestone    : status.forMilestone;
     const effectiveForSubMilestone = forSubMilestone !== undefined ? forSubMilestone : status.forSubMilestone;
     if (!effectiveForProject && !effectiveForMilestone && !effectiveForSubMilestone) {
-      return res.status(400).json({ message: 'At least one scope (project, milestone, or sub-milestone) must be selected.' });
+      return sendError(res, 'At least one scope (project, milestone, or sub-milestone) must be selected.', 400);
     }
     if (name !== undefined)           status.name           = name;
     if (color !== undefined)          status.color          = color;
@@ -127,8 +125,8 @@ const updateStatus = async (req, res, next) => {
 const deleteStatus = async (req, res, next) => {
   try {
     const status = await PmStatus.findByPk(req.params.id);
-    if (!status) return res.status(404).json({ message: 'Status not found' });
-    if (status.isSystem) return res.status(403).json({ message: 'System status cannot be deleted' });
+    if (!status) return sendError(res, 'Status not found', 404);
+    if (status.isSystem) return sendError(res, 'System status cannot be deleted', 403);
     await status.destroy();
     sendSuccess(res, null, 'Status deleted');
   } catch (e) { next(e); }
@@ -158,9 +156,9 @@ const getMilestoneTemplates = async (req, res, next) => {
 const createMilestoneTemplate = async (req, res, next) => {
   try {
     const { projectType, name, minPct, maxPct, sortOrder } = req.body;
-    if (!projectType || !name) return res.status(400).json({ message: 'projectType and name are required' });
+    if (!projectType || !name) return sendError(res, 'projectType and name are required', 400);
     if (Number(minPct) < 0 || Number(maxPct) > 100 || Number(minPct) > Number(maxPct)) {
-      return res.status(400).json({ message: 'Invalid percentage range' });
+      return sendError(res, 'Invalid percentage range', 400);
     }
     const maxOrder = await PmMilestoneTemplate.max('sortOrder', { where: { projectType } }) || 0;
     const tmpl = await PmMilestoneTemplate.create({
@@ -176,7 +174,7 @@ const createMilestoneTemplate = async (req, res, next) => {
 const updateMilestoneTemplate = async (req, res, next) => {
   try {
     const tmpl = await PmMilestoneTemplate.findByPk(req.params.id);
-    if (!tmpl) return res.status(404).json({ message: 'Template not found' });
+    if (!tmpl) return sendError(res, 'Template not found', 404);
     const { name, minPct, maxPct, sortOrder, isActive } = req.body;
     if (name !== undefined) tmpl.name = name;
     if (minPct !== undefined) tmpl.minPct = Number(minPct);
@@ -184,7 +182,7 @@ const updateMilestoneTemplate = async (req, res, next) => {
     if (sortOrder !== undefined) tmpl.sortOrder = sortOrder;
     if (isActive !== undefined) tmpl.isActive = isActive;
     if (Number(tmpl.minPct) > Number(tmpl.maxPct)) {
-      return res.status(400).json({ message: 'minPct cannot exceed maxPct' });
+      return sendError(res, 'minPct cannot exceed maxPct', 400);
     }
     await tmpl.save();
     sendSuccess(res, tmpl, 'Milestone template updated');
@@ -194,7 +192,7 @@ const updateMilestoneTemplate = async (req, res, next) => {
 const deleteMilestoneTemplate = async (req, res, next) => {
   try {
     const tmpl = await PmMilestoneTemplate.findByPk(req.params.id);
-    if (!tmpl) return res.status(404).json({ message: 'Template not found' });
+    if (!tmpl) return sendError(res, 'Template not found', 404);
     await tmpl.destroy();
     sendSuccess(res, null, 'Milestone template deleted');
   } catch (e) { next(e); }
@@ -229,7 +227,7 @@ const reorderMilestoneTemplates = async (req, res, next) => {
   try {
     const items = req.body; // [{ id, order }, ...]
     if (!Array.isArray(items) || items.length === 0) {
-      return res.status(400).json({ success: false, message: 'items array required' });
+      return sendError(res, 'items array required', 400);
     }
     for (const item of items) {
       await PmMilestoneTemplate.update({ sortOrder: item.sortOrder ?? item.order }, { where: { id: item.id } });
@@ -260,9 +258,9 @@ const createPmClientOrg = async (req, res, next) => {
   try {
     const ClientOrganisation = require('../../models/csat/ClientOrganisation');
     const { name } = req.body;
-    if (!name || !name.trim()) return res.status(400).json({ message: 'Organisation name is required' });
+    if (!name || !name.trim()) return sendError(res, 'Organisation name is required', 400);
     const existing = await ClientOrganisation.findOne({ where: { name: name.trim() } });
-    if (existing) return res.status(409).json({ message: `Organisation "${name.trim()}" already exists` });
+    if (existing) return sendError(res, `Organisation "${name.trim()}" already exists`, 409);
     const org = await ClientOrganisation.create({ name: name.trim() });
     sendSuccess(res, org, 'Client organisation created', 201);
   } catch (e) { next(e); }
@@ -272,7 +270,7 @@ const deletePmClientOrg = async (req, res, next) => {
   try {
     const ClientOrganisation = require('../../models/csat/ClientOrganisation');
     const org = await ClientOrganisation.findByPk(req.params.id);
-    if (!org) return res.status(404).json({ message: 'Organisation not found' });
+    if (!org) return sendError(res, 'Organisation not found', 404);
     await org.destroy();
     sendSuccess(res, null, 'Client organisation deleted');
   } catch (e) { next(e); }
@@ -294,9 +292,9 @@ const getMemberRoles = async (req, res, next) => {
 const createMemberRole = async (req, res, next) => {
   try {
     const { name, sortOrder } = req.body;
-    if (!name?.trim()) return res.status(400).json({ message: 'name is required' });
+    if (!name?.trim()) return sendError(res, 'name is required', 400);
     const existing = await PmMemberRole.findOne({ where: { name: name.trim() } });
-    if (existing) return res.status(409).json({ message: `Role "${name.trim()}" already exists` });
+    if (existing) return sendError(res, `Role "${name.trim()}" already exists`, 409);
     const maxOrder = await PmMemberRole.max('sortOrder') || 0;
     const role = await PmMemberRole.create({ name: name.trim(), sortOrder: sortOrder ?? maxOrder + 1 });
     sendSuccess(res, role, 'Member role created', 201);
@@ -306,7 +304,7 @@ const createMemberRole = async (req, res, next) => {
 const updateMemberRole = async (req, res, next) => {
   try {
     const role = await PmMemberRole.findByPk(req.params.id);
-    if (!role) return res.status(404).json({ message: 'Member role not found' });
+    if (!role) return sendError(res, 'Member role not found', 404);
     const { name, isActive, sortOrder } = req.body;
     if (name      !== undefined) role.name      = name;
     if (isActive  !== undefined) role.isActive  = isActive;
@@ -319,7 +317,7 @@ const updateMemberRole = async (req, res, next) => {
 const deleteMemberRole = async (req, res, next) => {
   try {
     const role = await PmMemberRole.findByPk(req.params.id);
-    if (!role) return res.status(404).json({ message: 'Member role not found' });
+    if (!role) return sendError(res, 'Member role not found', 404);
     await role.destroy();
     sendSuccess(res, null, 'Member role deleted');
   } catch (e) { next(e); }

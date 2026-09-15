@@ -6,7 +6,7 @@
  */
 
 const crypto             = require('crypto');
-const { HdTicketApproval, HdTicket } = require('../../models/helpdesk');
+const { HdTicketApproval, HdTicket, HdGroup } = require('../../models/helpdesk');
 const User = require('../../models/User');
 const { sendSuccess, sendError }     = require('../../utils/response');
 const { NotFoundError, ForbiddenError } = require('../../utils/errors');
@@ -48,20 +48,82 @@ const listApprovals = async (req, res, next) => {
   }
 };
 
+// ─── Default approver resolution ─────────────────────────────────────────────
+
+const NO_APPROVER = Object.freeze({ userId: null, name: null, email: null, source: null });
+
+/** An active user's { id, name, email }, or null. */
+async function activeUser(userId) {
+  if (!userId) return null;
+  return User.findOne({ where: { id: userId, isActive: true }, attributes: ['id', 'name', 'email'] });
+}
+
+/**
+ * Who should approve a ticket when the caller does not pick someone:
+ *   1. the requester's KPI reporting manager (`users.managerId`, must be active) → 'reporting_manager'
+ *   2. the ticket group's manager (`hd_groups.manager_id`, must be active)      → 'group_manager'
+ *   3. nobody                                                                    → source null
+ *
+ * @param {{ requesterId?: string|null, groupId?: number|null }} ticket
+ * @returns {Promise<{ userId: string|null, name: string|null, email: string|null, source: 'reporting_manager'|'group_manager'|null }>}
+ */
+async function resolveDefaultApprover(ticket) {
+  if (ticket.requesterId) {
+    const requester = await User.findByPk(ticket.requesterId, { attributes: ['id', 'managerId'] });
+    const manager   = await activeUser(requester?.managerId);
+    if (manager) return { userId: manager.id, name: manager.name, email: manager.email, source: 'reporting_manager' };
+  }
+  if (ticket.groupId) {
+    const group   = await HdGroup.findByPk(ticket.groupId, { attributes: ['id', 'managerId'] });
+    const manager = await activeUser(group?.managerId);
+    if (manager) return { userId: manager.id, name: manager.name, email: manager.email, source: 'group_manager' };
+  }
+  return { ...NO_APPROVER };
+}
+
+/**
+ * GET /helpdesk/approvals/:ticketId/default-approver
+ * The approver `requestApproval` would use when no approverId is sent.
+ * Response: { userId, name, email, source } — userId/source null when nobody could be determined.
+ * @type {import('express').RequestHandler}
+ */
+const getDefaultApprover = async (req, res, next) => {
+  try {
+    const ticketId = Number(req.params.ticketId);
+    const ticket   = await HdTicket.findByPk(ticketId, { attributes: ['id', 'requesterId', 'groupId'] });
+    if (!ticket) return next(new NotFoundError('Ticket'));
+
+    const approver = await resolveDefaultApprover(ticket);
+    return sendSuccess(res, approver, approver.userId ? 'Default approver resolved' : 'No default approver');
+  } catch (err) {
+    next(err);
+  }
+};
+
 /**
  * POST /helpdesk/approvals/:ticketId/request
- * Request approval for a ticket. Body: { approverId }
+ * Request approval for a ticket. Body: { approverId?, notes? }
+ * When approverId is omitted the default approver is used (see resolveDefaultApprover);
+ * 400 if none can be determined. Response data carries `approverSource`
+ * ('manual' | 'reporting_manager' | 'group_manager').
  * @type {import('express').RequestHandler}
  */
 const requestApproval = async (req, res, next) => {
   try {
     const ticketId   = Number(req.params.ticketId);
-    const { approverId, notes } = req.body;
-
-    if (!approverId) return sendError(res, 'approverId is required', 400);
+    const { notes }  = req.body;
+    let { approverId } = req.body;
+    let approverSource = 'manual';
 
     const ticket = await HdTicket.findByPk(ticketId);
     if (!ticket) return next(new NotFoundError('Ticket'));
+
+    if (!approverId) {
+      const resolved = await resolveDefaultApprover(ticket);
+      if (!resolved.userId) return sendError(res, 'No approver could be determined — select one', 400);
+      approverId     = resolved.userId;
+      approverSource = resolved.source;
+    }
 
     const token = crypto.randomBytes(32).toString('hex');
 
@@ -102,7 +164,7 @@ const requestApproval = async (req, res, next) => {
       ).catch(() => {});
     }
 
-    return sendSuccess(res, approval, 'Approval requested', 201);
+    return sendSuccess(res, { ...approval.get({ plain: true }), approverSource }, 'Approval requested', 201);
   } catch (err) {
     next(err);
   }
@@ -228,4 +290,7 @@ const respondApprovalAuth = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
-module.exports = { listApprovals, requestApproval, respondApproval, getApprovalStatus, respondApprovalAuth };
+module.exports = {
+  listApprovals, requestApproval, respondApproval, getApprovalStatus, respondApprovalAuth,
+  getDefaultApprover, resolveDefaultApprover,
+};

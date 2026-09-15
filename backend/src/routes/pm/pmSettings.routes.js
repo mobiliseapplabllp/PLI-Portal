@@ -1,11 +1,11 @@
 const router = require('express').Router();
 const ctrl = require('../../controllers/pm/pmSettings.controller');
-const { authorize } = require('../../middleware/rbac');
+const { requirePermission } = require('../../core/rbac');
 
-router.get('/', authorize('admin'), ctrl.getSettings);
-router.put('/', authorize('admin'), ctrl.updateSettings);
+router.get('/', requirePermission('pm.settings.manage'), ctrl.getSettings);
+router.put('/', requirePermission('pm.settings.manage'), ctrl.updateSettings);
 
 // Admin-only: manually trigger the daily report job (for testing)
-router.post('/trigger-report', authorize('admin'), ctrl.triggerReport);
+router.post('/trigger-report', requirePermission('pm.settings.manage'), ctrl.triggerReport);
 
 module.exports = router;

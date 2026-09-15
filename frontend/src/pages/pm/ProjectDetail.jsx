@@ -10,9 +10,13 @@ import {
   HiOutlinePaperClip, HiOutlineTrash, HiOutlineX, HiOutlineDocumentText,
   HiOutlineDownload, HiOutlineUpload, HiOutlinePlus,
   HiOutlineCash, HiOutlineCheckCircle, HiOutlineExclamationCircle,
-  HiOutlineClipboard,
+  HiOutlineClipboard, HiOutlineTicket,
 } from 'react-icons/hi';
-import { updateProjectApi, addMemberApi, updateMemberApi, removeMemberApi } from '../../api/pm/projects.api';
+import {
+  updateProjectApi, addMemberApi, updateMemberApi, removeMemberApi,
+  getHelpdeskProfileApi, enableHelpdeskApi, updateHelpdeskProfileApi, disableHelpdeskApi,
+} from '../../api/pm/projects.api';
+import { getGroupsApi } from '../../api/helpdesk/groups.api';
 // Member roles are now fetched from /pm/config/member-roles (admin-configurable)
 import {
   getProjectDocumentsApi, uploadProjectDocumentApi,
@@ -267,6 +271,15 @@ export default function ProjectDetail() {
   const [closureSaving,setClosureSaving]= useState(false);
   const [closing,      setClosing]      = useState(false);
 
+  // Helpdesk (per-project support profile)
+  const [hdState,   setHdState]   = useState(null);   // { enabled, profile } | null (not yet loaded)
+  const [hdLoading, setHdLoading] = useState(false);
+  const [hdGroups,  setHdGroups]  = useState([]);
+  const [hdGroupId, setHdGroupId] = useState('');     // select value (string)
+  const [hdSaving,  setHdSaving]  = useState(false);
+  const [hdCopied,  setHdCopied]  = useState(false);
+  const [hdError,   setHdError]   = useState('');     // inline error on the Helpdesk tab (validation or server)
+
   // ── Load core data ──────────────────────────────────────────────────────────
   useEffect(() => {
     dispatch(clearActiveProject());
@@ -310,6 +323,20 @@ export default function ProjectDetail() {
     if (activeTab === 'closure') {
       setCloseLoading(true);
       closureApi.get(id).then(res => { const d = res.data?.data; setClosure(d || null); setChecklist(d?.checklist || []); setClosureNotes(d?.closureNotes || ''); }).catch(() => {}).finally(() => setCloseLoading(false));
+    }
+    if (activeTab === 'helpdesk') {
+      setHdLoading(true);
+      getHelpdeskProfileApi(id)
+        .then(res => {
+          const d = res.data?.data || { enabled: false, profile: null };
+          setHdState(d);
+          setHdGroupId(d.profile?.groupId != null ? String(d.profile.groupId) : '');
+        })
+        .catch(() => toast.error('Failed to load helpdesk settings'))
+        .finally(() => setHdLoading(false));
+      getGroupsApi()
+        .then(res => { const raw = res.data?.data ?? res.data; setHdGroups(Array.isArray(raw) ? raw : []); })
+        .catch(() => {});
     }
   }, [activeTab, id]);
 
@@ -667,6 +694,76 @@ export default function ProjectDetail() {
   const delayedMs  = milestones.filter(m => m.status === 'delayed' || (m.plannedEndDate && m.plannedEndDate < today && m.status !== 'completed')).length;
   const pct        = total > 0 ? Math.round((completedMs / total) * 100) : 0;
 
+  // ── Helpdesk handlers ───────────────────────────────────────────────────────
+  const hdErrMsg = (err, fallback) =>
+    err.response?.data?.message || err.response?.data?.error?.message || fallback;
+
+  const HD_GROUP_REQUIRED = 'Select a support group for this project';
+
+  const handleEnableHelpdesk = async () => {
+    // Enabling helpdesk requires a servicing group (server returns the same 400 otherwise).
+    if (!hdGroupId) { setHdError(HD_GROUP_REQUIRED); return; }
+    setHdError('');
+    setHdSaving(true);
+    try {
+      const res = await enableHelpdeskApi(id, { groupId: Number(hdGroupId) });
+      const d = res.data?.data;
+      if (d && typeof d === 'object' && 'enabled' in d) setHdState(d);
+      else {
+        // Re-read so the token/group name come from the server
+        const fresh = await getHelpdeskProfileApi(id);
+        setHdState(fresh.data?.data || { enabled: true, profile: d || null });
+      }
+      toast.success('Helpdesk enabled');
+    } catch (err) {
+      const msg = hdErrMsg(err, 'Failed to enable helpdesk');
+      setHdError(msg);
+      toast.error(msg);
+    }
+    finally { setHdSaving(false); }
+  };
+
+  const handleSaveHelpdeskGroup = async () => {
+    if (!hdGroupId) { setHdError(HD_GROUP_REQUIRED); return; }
+    setHdError('');
+    setHdSaving(true);
+    try {
+      await updateHelpdeskProfileApi(id, { groupId: Number(hdGroupId) });
+      const fresh = await getHelpdeskProfileApi(id);
+      setHdState(fresh.data?.data || hdState);
+      toast.success('Support group updated');
+    } catch (err) {
+      const msg = hdErrMsg(err, 'Failed to update support group');
+      setHdError(msg);
+      toast.error(msg);
+    }
+    finally { setHdSaving(false); }
+  };
+
+  const handleDisableHelpdesk = async () => {
+    if (!window.confirm('Disable helpdesk for this project? The widget token will stop working.')) return;
+    setHdSaving(true);
+    try {
+      await disableHelpdeskApi(id);
+      setHdState({ enabled: false, profile: null });
+      setHdGroupId('');
+      toast.success('Helpdesk disabled');
+    } catch (err) {
+      // 409 → tickets exist; backend sends a flat { success:false, message }
+      toast.error(hdErrMsg(err, 'Failed to disable helpdesk'));
+    } finally { setHdSaving(false); }
+  };
+
+  const handleCopyToken = async () => {
+    const token = hdState?.profile?.publicToken;
+    if (!token) return;
+    try {
+      await navigator.clipboard.writeText(token);
+      setHdCopied(true);
+      setTimeout(() => setHdCopied(false), 1500);
+    } catch { toast.error('Copy failed — select the token and copy manually'); }
+  };
+
   const TABS = [
     { id: 'overview',       label: 'Overview',                   icon: HiOutlineChartBar },
     { id: 'team',           label: `Team Setup (${members.length})`, icon: HiOutlineUsers },
@@ -677,6 +774,7 @@ export default function ProjectDetail() {
     { id: 'financial',      label: 'Financial',                  icon: HiOutlineCash },
     { id: 'closure',        label: 'Closure',                    icon: HiOutlineCheckCircle },
     { id: 'documents',      label: `Documents`,                  icon: HiOutlinePaperClip },
+    { id: 'helpdesk',       label: 'Helpdesk',                   icon: HiOutlineTicket },
   ];
 
   // Status options for dropdown — from config + legacy fallback
@@ -2071,6 +2169,128 @@ export default function ProjectDetail() {
               </div>
             )}
           </div>
+        </div>
+      )}
+
+      {/* ═══ TAB: HELPDESK ═══════════════════════════════════════════════════ */}
+      {activeTab === 'helpdesk' && (
+        <div className="space-y-4">
+          {hdLoading || !hdState ? (
+            <div className="bg-white rounded-xl border border-gray-200 p-8 text-center text-gray-400 text-sm">
+              {hdLoading ? 'Loading helpdesk settings…' : 'Helpdesk settings unavailable'}
+            </div>
+          ) : !hdState.enabled ? (
+            /* ── Not enabled ── */
+            <div className="bg-white rounded-xl border border-gray-200 p-5">
+              <h3 className="font-semibold text-gray-900 flex items-center gap-2">
+                <HiOutlineTicket className="w-4 h-4 text-gray-400" />
+                Helpdesk is not enabled for this project
+              </h3>
+              <p className="text-xs text-gray-400 mt-1">
+                Enable it to let this project's users raise support tickets that route to a helpdesk group.
+              </p>
+              {canManage && (
+                <div className="flex flex-wrap gap-3 items-end mt-4">
+                  <div>
+                    <label className="text-xs font-medium text-gray-600 block mb-1">Support group <span className="text-red-400">*</span></label>
+                    <select
+                      value={hdGroupId}
+                      onChange={e => { setHdGroupId(e.target.value); setHdError(''); }}
+                      className={`px-3 py-2 border rounded-lg text-sm bg-white min-w-56 focus:outline-none focus:ring-2 focus:ring-emerald-500 ${hdError ? 'border-red-400' : 'border-gray-200'}`}
+                    >
+                      <option value="">Select group…</option>
+                      {hdGroups.map(g => (
+                        <option key={g._id || g.id} value={g._id || g.id}>{g.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <button
+                    onClick={handleEnableHelpdesk}
+                    disabled={hdSaving}
+                    className="px-5 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:opacity-50 transition-colors"
+                  >
+                    {hdSaving ? 'Enabling…' : 'Enable helpdesk'}
+                  </button>
+                </div>
+              )}
+              {hdError && <p className="text-xs text-red-600 mt-2">{hdError}</p>}
+            </div>
+          ) : (
+            /* ── Enabled ── */
+            <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+              <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+                <h3 className="font-semibold text-gray-900 flex items-center gap-2">
+                  <HiOutlineTicket className="w-4 h-4 text-emerald-600" />
+                  Helpdesk
+                </h3>
+                <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-700">Enabled</span>
+              </div>
+
+              <div className="p-5 space-y-5">
+                {/* Support group */}
+                <div>
+                  <label className="text-xs font-medium text-gray-600 block mb-1">Support group</label>
+                  {canManage ? (
+                    <div className="flex flex-wrap gap-2 items-center">
+                      <select
+                        value={hdGroupId}
+                        onChange={e => { setHdGroupId(e.target.value); setHdError(''); }}
+                        className={`px-3 py-2 border rounded-lg text-sm bg-white min-w-56 focus:outline-none focus:ring-2 focus:ring-emerald-500 ${hdError ? 'border-red-400' : 'border-gray-200'}`}
+                      >
+                        <option value="">Select group…</option>
+                        {hdGroups.map(g => (
+                          <option key={g._id || g.id} value={g._id || g.id}>{g.name}</option>
+                        ))}
+                      </select>
+                      <button
+                        onClick={handleSaveHelpdeskGroup}
+                        disabled={hdSaving || !hdGroupId || String(hdState.profile?.groupId ?? '') === hdGroupId}
+                        className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:opacity-50 transition-colors"
+                      >
+                        {hdSaving ? 'Saving…' : 'Save'}
+                      </button>
+                    </div>
+                  ) : (
+                    <p className="text-sm text-gray-800">{hdState.profile?.groupName || '—'}</p>
+                  )}
+                  {hdError && <p className="text-xs text-red-600 mt-1">{hdError}</p>}
+                </div>
+
+                {/* Widget token */}
+                <div>
+                  <label className="text-xs font-medium text-gray-600 block mb-1">Widget token</label>
+                  <div className="flex items-stretch gap-2">
+                    <code className="flex-1 min-w-0 px-3 py-2 rounded-lg bg-gray-50 border border-gray-200 text-xs font-mono text-gray-800 break-all select-all">
+                      {hdState.profile?.publicToken || '—'}
+                    </code>
+                    <button
+                      onClick={handleCopyToken}
+                      disabled={!hdState.profile?.publicToken}
+                      className="flex items-center gap-1.5 px-3 py-2 border border-gray-200 rounded-lg text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-50 transition-colors whitespace-nowrap"
+                      title="Copy token"
+                    >
+                      <HiOutlineClipboard className="w-4 h-4" />
+                      {hdCopied ? 'Copied' : 'Copy'}
+                    </button>
+                  </div>
+                  <p className="text-[11px] text-gray-400 mt-1">Paste this token into the support widget to link it to this project.</p>
+                </div>
+
+                {canManage && (
+                  <div className="pt-3 border-t border-gray-100">
+                    <button
+                      onClick={handleDisableHelpdesk}
+                      disabled={hdSaving}
+                      className="px-4 py-2 text-sm font-medium text-red-600 rounded-lg hover:bg-red-50 disabled:opacity-50 transition-colors"
+                    >
+                      Disable helpdesk
+                    </button>
+                    <span className="text-[11px] text-gray-400 ml-2">Not allowed while tickets exist.</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       )}
 

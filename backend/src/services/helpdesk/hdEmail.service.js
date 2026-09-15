@@ -405,17 +405,33 @@ const sendWidgetTicketReopened = async (ticket, manager) => {
 };
 
 /**
- * Notify a manager's manager when a ticket is escalated due to a high
- * reopen count or other escalation trigger.
+ * Notify a manager when a ticket is escalated — either because of a high
+ * reopen count (default wording) or an SLA breach (pass `options.reason`).
+ *
+ * Never throws. Returns true only when the mail was actually handed to SMTP
+ * (sendEmail returns null when SMTP is unconfigured or delivery failed), so a
+ * caller that records "escalated" can tell a real send from a no-op.
  *
  * @param {object} ticket      - HdTicket instance.
  * @param {object} escalateTo  - { name: string, email: string }
- * @returns {Promise<void>}
+ * @param {object} [options]
+ * @param {string} [options.reason] - Plain-text explanation shown in place of the
+ *                                    reopen-count wording (e.g. SLA breach details).
+ * @returns {Promise<boolean>}
  */
-const sendEscalation = async (ticket, escalateTo) => {
+const sendEscalation = async (ticket, escalateTo, options = {}) => {
   try {
     const reqNumber = ticket.reqNumber || ticket.req_number || '—';
     const subject   = `[ESCALATED] Helpdesk Ticket Requires Attention: ${reqNumber}`;
+    const reason    = options && options.reason ? String(options.reason) : null;
+
+    const whyText = reason
+      ? `to you because ${reason}.`
+      : 'to you because it has been reopened multiple times and remains unresolved.';
+    const bannerText = reason
+      ? `&#9888; ESCALATED — ${reason}.`
+      : `&#9888; ESCALATED — This ticket has been reopened
+              ${ticket.reopenCount != null ? `<strong>${ticket.reopenCount}</strong> time(s)` : 'multiple times'}.`;
 
     const body = `
       <p style="margin:0 0 8px 0;font-size:16px;color:#1e293b;">
@@ -423,7 +439,7 @@ const sendEscalation = async (ticket, escalateTo) => {
       </p>
       <p style="margin:0 0 16px 0;font-size:14px;color:#475569;">
         The following helpdesk ticket has been <strong style="color:#dc2626;">escalated</strong>
-        to you because it has been reopened multiple times and remains unresolved.
+        ${whyText}
         Your intervention is required.
       </p>
 
@@ -432,8 +448,7 @@ const sendEscalation = async (ticket, escalateTo) => {
         <tr>
           <td bgcolor="#fef2f2" style="background-color:#fef2f2;border:1px solid #fecaca;border-radius:6px;padding:12px 16px;">
             <p style="margin:0;font-size:13px;font-weight:700;color:#dc2626;">
-              &#9888; ESCALATED — This ticket has been reopened
-              ${ticket.reopenCount != null ? `<strong>${ticket.reopenCount}</strong> time(s)` : 'multiple times'}.
+              ${bannerText}
             </p>
           </td>
         </tr>
@@ -445,9 +460,11 @@ const sendEscalation = async (ticket, escalateTo) => {
         ${ctaButton(`${frontendBase()}/helpdesk/tickets/${ticket.id || ''}`, 'View Escalated Ticket', '#dc2626')}
       </div>`;
 
-    await sendEmail(escalateTo.email, subject, wrapEmail(body));
+    const info = await sendEmail(escalateTo.email, subject, wrapEmail(body));
+    return Boolean(info);
   } catch (err) {
     console.error('[HdEmail] sendEscalation failed:', err.message);
+    return false;
   }
 };
 

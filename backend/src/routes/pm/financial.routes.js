@@ -1,11 +1,9 @@
 const router = require('express').Router({ mergeParams: true });
 const ctrl   = require('../../controllers/pm/financial.controller');
-const { authorize } = require('../../middleware/rbac');
+const { requirePermission } = require('../../core/rbac');
 
-const MANAGERS = ['admin', 'manager', 'senior_manager'];
-const ALL      = ['admin', 'manager', 'senior_manager', 'employee', 'hr_admin', 'final_approver', 'md', 'director'];
 
-router.get ('/', authorize(...ALL),     ctrl.get);
-router.put ('/', authorize(...MANAGERS), ctrl.upsert);
+router.get ('/', requirePermission('pm.financial.view'),     ctrl.get);
+router.put ('/', requirePermission('pm.financial.manage'), ctrl.upsert);
 
 module.exports = router;

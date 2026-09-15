@@ -1,6 +1,7 @@
 export * from './tickets.api';
 export * from './conversations.api';
 export * from './approvals.api';
+export * from './capacity.api';
 export * from './groups.api';
 export * from './hdProjects.api';
 export * from './solutions.api';

@@ -57,5 +57,7 @@ router.use('/dashboard',     hdDashboardRouter);
 router.use('/attachments',   attachmentsRouter);
 router.use('/tickets/:ticketId/documents', require('./hdDocuments.routes'));
 router.use('/user-groups',   require('./hdUserGroups.routes'));
+// capacity: serves /groups/:groupId/capacity and /capacity — mounted at root
+router.use('/',              require('./capacity.routes'));
 
 module.exports = router;

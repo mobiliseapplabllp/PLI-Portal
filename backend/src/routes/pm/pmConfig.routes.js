@@ -1,58 +1,55 @@
 const router = require('express').Router();
 const ctrl   = require('../../controllers/pm/config.controller');
 const cal    = require('../../controllers/pm/calendar.controller');
-const { authorize } = require('../../middleware/rbac');
+const { requirePermission } = require('../../core/rbac');
 const upload = require('../../middleware/upload');
 
-const ADMIN    = ['admin'];
-const MANAGERS = ['admin', 'manager', 'senior_manager', 'md', 'director'];
-const ALL      = ['admin', 'manager', 'senior_manager', 'employee', 'hr_admin', 'final_approver', 'md', 'director'];
 
 // ── Project Types ─────────────────────────────────────────────────────────────
-router.get   ('/project-types',            authorize(...ALL),     ctrl.getProjectTypes);
-router.post  ('/project-types',            authorize(...MANAGERS), ctrl.createProjectType);
-router.put   ('/project-types/:id',        authorize(...MANAGERS), ctrl.updateProjectType);
-router.delete('/project-types/:id',        authorize(...MANAGERS), ctrl.deleteProjectType);
+router.get   ('/project-types',            requirePermission('pm.projectType.view'),     ctrl.getProjectTypes);
+router.post  ('/project-types',            requirePermission('pm.projectType.manage'), ctrl.createProjectType);
+router.put   ('/project-types/:id',        requirePermission('pm.projectType.manage'), ctrl.updateProjectType);
+router.delete('/project-types/:id',        requirePermission('pm.projectType.manage'), ctrl.deleteProjectType);
 
 // ── Project Statuses ──────────────────────────────────────────────────────────
-router.get   ('/statuses/all',             authorize(...MANAGERS), ctrl.getAllStatuses);
-router.get   ('/statuses',                 authorize(...ALL),     ctrl.getStatuses);
-router.post  ('/statuses',                 authorize(...MANAGERS), ctrl.createStatus);
-router.put   ('/statuses/:id',             authorize(...MANAGERS), ctrl.updateStatus);
-router.delete('/statuses/:id',             authorize(...MANAGERS), ctrl.deleteStatus);
+router.get   ('/statuses/all',             requirePermission('pm.projectStatus.manage'), ctrl.getAllStatuses);
+router.get   ('/statuses',                 requirePermission('pm.projectStatus.view'),     ctrl.getStatuses);
+router.post  ('/statuses',                 requirePermission('pm.projectStatus.manage'), ctrl.createStatus);
+router.put   ('/statuses/:id',             requirePermission('pm.projectStatus.manage'), ctrl.updateStatus);
+router.delete('/statuses/:id',             requirePermission('pm.projectStatus.manage'), ctrl.deleteStatus);
 
 // ── Milestone Templates ───────────────────────────────────────────────────────
-router.get   ('/milestone-templates',                          authorize(...ALL),     ctrl.getMilestoneTemplates);
-router.post  ('/milestone-templates',                          authorize(...MANAGERS), ctrl.createMilestoneTemplate);
-router.put   ('/milestone-templates/reorder',                  authorize(...MANAGERS), ctrl.reorderMilestoneTemplates);
-router.put   ('/milestone-templates/:id',                      authorize(...MANAGERS), ctrl.updateMilestoneTemplate);
-router.delete('/milestone-templates/:id',                      authorize(...MANAGERS), ctrl.deleteMilestoneTemplate);
-router.get   ('/milestone-templates/:projectType/validate',    authorize(...MANAGERS), ctrl.validateTemplateRanges);
+router.get   ('/milestone-templates',                          requirePermission('pm.milestoneTemplate.view'),     ctrl.getMilestoneTemplates);
+router.post  ('/milestone-templates',                          requirePermission('pm.milestoneTemplate.manage'), ctrl.createMilestoneTemplate);
+router.put   ('/milestone-templates/reorder',                  requirePermission('pm.milestoneTemplate.manage'), ctrl.reorderMilestoneTemplates);
+router.put   ('/milestone-templates/:id',                      requirePermission('pm.milestoneTemplate.manage'), ctrl.updateMilestoneTemplate);
+router.delete('/milestone-templates/:id',                      requirePermission('pm.milestoneTemplate.manage'), ctrl.deleteMilestoneTemplate);
+router.get   ('/milestone-templates/:projectType/validate',    requirePermission('pm.milestoneTemplate.manage'), ctrl.validateTemplateRanges);
 
 // ── PM Client Orgs ────────────────────────────────────────────────────────────
-router.get   ('/client-orgs',     authorize(...MANAGERS), ctrl.getPmClientOrgs);
-router.post  ('/client-orgs',     authorize(...MANAGERS), ctrl.createPmClientOrg);
-router.delete('/client-orgs/:id', authorize(...MANAGERS), ctrl.deletePmClientOrg);
+router.get   ('/client-orgs',     requirePermission('pm.clientOrg.manage'), ctrl.getPmClientOrgs);
+router.post  ('/client-orgs',     requirePermission('pm.clientOrg.manage'), ctrl.createPmClientOrg);
+router.delete('/client-orgs/:id', requirePermission('pm.clientOrg.manage'), ctrl.deletePmClientOrg);
 
 // ── PM Member Roles ───────────────────────────────────────────────────────────
-router.get   ('/member-roles',     authorize(...ALL),      ctrl.getMemberRoles);
-router.post  ('/member-roles',     authorize(...MANAGERS), ctrl.createMemberRole);
-router.put   ('/member-roles/:id', authorize(...MANAGERS), ctrl.updateMemberRole);
-router.delete('/member-roles/:id', authorize(...MANAGERS), ctrl.deleteMemberRole);
+router.get   ('/member-roles',     requirePermission('pm.memberRole.view'),      ctrl.getMemberRoles);
+router.post  ('/member-roles',     requirePermission('pm.memberRole.manage'), ctrl.createMemberRole);
+router.put   ('/member-roles/:id', requirePermission('pm.memberRole.manage'), ctrl.updateMemberRole);
+router.delete('/member-roles/:id', requirePermission('pm.memberRole.manage'), ctrl.deleteMemberRole);
 
 // ── Working Calendar (Phase 1) ────────────────────────────────────────────────
-router.get   ('/calendar',         authorize(...ALL),   cal.getCalendar);
-router.put   ('/calendar',         authorize(...ADMIN), cal.updateCalendar);
-router.get   ('/calendar/preview', authorize(...ALL),   cal.getCalendarPreview);
-router.get   ('/calendar/working-days', authorize(...ALL), cal.getWorkingDays);
+router.get   ('/calendar',         requirePermission('pm.calendar.view'),   cal.getCalendar);
+router.put   ('/calendar',         requirePermission('pm.calendar.manage'), cal.updateCalendar);
+router.get   ('/calendar/preview', requirePermission('pm.calendar.view'),   cal.getCalendarPreview);
+router.get   ('/calendar/working-days', requirePermission('pm.calendar.view'), cal.getWorkingDays);
 
 // Holidays — import routes MUST precede /holidays/:id
-router.get   ('/holidays/import/template', authorize(...ALL),   cal.getHolidayImportTemplate);
-router.post  ('/holidays/import/validate', authorize(...ADMIN), upload.single('file'), cal.validateHolidayImport);
-router.post  ('/holidays/import/commit',   authorize(...ADMIN), cal.commitHolidayImport);
-router.get   ('/holidays',     authorize(...ALL),   cal.getHolidays);
-router.post  ('/holidays',     authorize(...ADMIN), cal.createHoliday);
-router.put   ('/holidays/:id', authorize(...ADMIN), cal.updateHoliday);
-router.delete('/holidays/:id', authorize(...ADMIN), cal.deleteHoliday);
+router.get   ('/holidays/import/template', requirePermission('pm.holiday.view'),   cal.getHolidayImportTemplate);
+router.post  ('/holidays/import/validate', requirePermission('pm.holiday.manage'), upload.single('file'), cal.validateHolidayImport);
+router.post  ('/holidays/import/commit',   requirePermission('pm.holiday.manage'), cal.commitHolidayImport);
+router.get   ('/holidays',     requirePermission('pm.holiday.view'),   cal.getHolidays);
+router.post  ('/holidays',     requirePermission('pm.holiday.manage'), cal.createHoliday);
+router.put   ('/holidays/:id', requirePermission('pm.holiday.manage'), cal.updateHoliday);
+router.delete('/holidays/:id', requirePermission('pm.holiday.manage'), cal.deleteHoliday);
 
 module.exports = router;

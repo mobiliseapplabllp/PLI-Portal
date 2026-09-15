@@ -83,6 +83,8 @@ app.listen(PORT, () => {
   startHelpdeskDailyReportJob().catch(err => console.error('[Helpdesk DailyReport] Startup error:', err.message));
   const { startSurveyCron } = require('./src/jobs/surveyCron.job');
   startSurveyCron();
+  const { startHdEscalationJob } = require('./src/jobs/hdEscalation.job');
+  startHdEscalationJob();
 });
 
 module.exports = app;

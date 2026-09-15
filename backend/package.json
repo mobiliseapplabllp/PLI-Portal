@@ -8,7 +8,12 @@
     "dev": "nodemon server.js",
     "seed": "node scripts/seed.js",
     "seed:q1": "node scripts/seedQ1.js",
-    "db:init": "node scripts/init-db-and-sync.js"
+    "db:init": "node scripts/init-db-and-sync.js",
+    "migrate": "node scripts/migrate.js up",
+    "migrate:status": "node scripts/migrate.js status",
+    "migrate:baseline": "node scripts/migrate.js baseline",
+    "test": "node scripts/run-tests.js",
+    "test:parallel": "node --test test/"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

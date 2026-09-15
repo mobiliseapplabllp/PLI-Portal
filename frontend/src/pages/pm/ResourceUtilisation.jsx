@@ -42,6 +42,8 @@ const dayLabel = (iso) => {
 };
 const fmtHours = (x) => Math.round((Number(x) || 0) * 10) / 10;
 const fmtPct = (x) => Math.round(Number(x) || 0);
+const errMsg = (e, fallback) =>
+  e?.response?.data?.error?.message || e?.response?.data?.message || fallback;
 const getId = (u) => u?._id || u?.id || u?.userId || '';
 const initialOf = (name) => (name || '?').trim().charAt(0).toUpperCase() || '?';
 
@@ -88,12 +90,19 @@ function HeatCell({ cell, onOpen }) {
   }
   const band = BAND_CELL[cell.band] ? cell.band : 'free';
   const peakOnly = cell.isOverAllocated && cell.totalPct < 100;
+  // Actuals (time entries) are secondary info — band colour stays plan-based.
+  const hasActual = Number(cell.actualTotalHours) > 0;
   return (
     <td className="p-1 border-l border-gray-100 align-middle">
       <button
         type="button"
         onClick={onOpen}
-        title={`${fmtPct(cell.totalPct)}% — ${fmtHours(cell.totalHours)}h (PM ${fmtHours(cell.pmHours)}h · HD ${fmtHours(cell.hdHours)}h)`}
+        title={
+          `Planned ${fmtPct(cell.totalPct)}% — ${fmtHours(cell.totalHours)}h (PM ${fmtHours(cell.pmHours)}h · HD ${fmtHours(cell.hdHours)}h)` +
+          (hasActual
+            ? `\nActual ${fmtPct(cell.actualPct)}% — ${fmtHours(cell.actualTotalHours)}h logged (PM ${fmtHours(cell.actualPmHours)}h · HD ${fmtHours(cell.actualHdHours)}h)`
+            : '\nNo time logged')
+        }
         className={[
           'relative w-full min-w-[84px] rounded-lg px-2 py-2 text-center transition-shadow',
           'focus:outline-none focus:ring-2 focus:ring-emerald-500 hover:shadow-sm',
@@ -109,6 +118,11 @@ function HeatCell({ cell, onOpen }) {
         )}
         <span className="block text-sm font-bold tabular-nums">{fmtPct(cell.totalPct)}%</span>
         <span className="block text-[11px] text-gray-500 tabular-nums">{fmtHours(cell.totalHours)}h</span>
+        {hasActual && (
+          <span className="block mt-0.5 text-[10px] font-medium text-indigo-600 tabular-nums">
+            {fmtHours(cell.actualTotalHours)}h act
+          </span>
+        )}
       </button>
     </td>
   );
@@ -129,7 +143,7 @@ function DrillDown({ target, onClose }) {
       const res = await getUserUtilisationApi(target.userId, target.month);
       setDetail(res.data.data);
     } catch (e) {
-      setError(e?.response?.data?.message || 'Failed to load utilisation detail');
+      setError(errMsg(e, 'Failed to load utilisation detail'));
     } finally {
       setLoading(false);
     }
@@ -153,6 +167,10 @@ function DrillDown({ target, onClose }) {
   const barPct     = capHours > 0 ? Math.min(100, (totalHours / capHours) * 100) : 0;
   const lines      = Array.isArray(detail?.lines) ? detail.lines : [];
   const totDays    = lines.reduce((s, l) => s + (Number(l.workingDaysInMonth) || 0), 0);
+  const actualTotal = detail?.actualTotalHours != null
+    ? Number(detail.actualTotalHours) || 0
+    : lines.reduce((s, l) => s + (Number(l.actualHours) || 0), 0);
+  const variance   = Math.round((actualTotal - totalHours) * 10) / 10;
 
   return (
     <div className="fixed inset-0 z-50" role="dialog" aria-modal="true" aria-labelledby="util-drill-title">
@@ -231,6 +249,10 @@ function DrillDown({ target, onClose }) {
                   {fmtHours(totalHours)}h committed · PM {fmtHours(detail.pmHours)}h · Helpdesk {fmtHours(detail.hdHours)}h
                   {' · '}avg {fmtHours(detail.avgHoursPerDay)}h/day
                 </p>
+                <p className="mt-0.5 text-xs text-indigo-600 tabular-nums">
+                  {fmtHours(actualTotal)}h actual logged ({fmtPct(detail.actualPct)}% of capacity)
+                  {' · '}PM {fmtHours(detail.actualPmHours)}h · Helpdesk {fmtHours(detail.actualHdHours)}h
+                </p>
               </div>
 
               {/* Over-capacity callout */}
@@ -263,7 +285,7 @@ function DrillDown({ target, onClose }) {
               {/* Lines */}
               <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
                 {lines.length === 0 ? (
-                  <p className="px-4 py-8 text-sm text-gray-500 text-center">No allocations this month</p>
+                  <p className="px-4 py-8 text-sm text-gray-500 text-center">No allocations or logged time this month</p>
                 ) : (
                   <div className="overflow-x-auto">
                     <table className="w-full text-sm">
@@ -275,11 +297,12 @@ function DrillDown({ target, onClose }) {
                           <th className={`${thCls} text-right`}>Days</th>
                           <th className={`${thCls} text-right`}>Hours</th>
                           <th className={`${thCls} text-right`}>%</th>
+                          <th className={`${thCls} text-right`}>Actual h</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-100">
                         {lines.map((l, i) => (
-                          <tr key={`${l.source}-${l.refId ?? i}`} className="hover:bg-gray-50">
+                          <tr key={`${l.source}-${l.refId ?? i}${l.unplanned ? '-u' : ''}`} className={l.unplanned ? 'bg-indigo-50/30 hover:bg-indigo-50/60' : 'hover:bg-gray-50'}>
                             <td className="px-4 py-2.5">
                               <span
                                 className={[
@@ -295,6 +318,14 @@ function DrillDown({ target, onClose }) {
                             <td className="px-4 py-2.5">
                               <div className="flex items-center gap-2 min-w-0">
                                 <span className="text-gray-900 truncate">{l.name}</span>
+                                {l.unplanned && (
+                                  <span
+                                    className="inline-flex px-1.5 py-0.5 rounded-full bg-indigo-50 text-indigo-700 text-[10px] font-medium uppercase tracking-wide shrink-0"
+                                    title="Hours logged with no planned allocation this month"
+                                  >
+                                    Unplanned
+                                  </span>
+                                )}
                                 {l.isEstimated && (
                                   <span
                                     className="inline-flex px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-700 text-[10px] font-medium uppercase tracking-wide shrink-0"
@@ -306,10 +337,13 @@ function DrillDown({ target, onClose }) {
                               </div>
                               {l.status && <p className="text-xs text-gray-400">{l.status}</p>}
                             </td>
-                            <td className="px-4 py-2.5 text-right tabular-nums text-gray-700">{fmtHours(l.hoursPerDay)}h</td>
-                            <td className="px-4 py-2.5 text-right tabular-nums text-gray-700">{l.workingDaysInMonth ?? 0}</td>
-                            <td className="px-4 py-2.5 text-right tabular-nums text-gray-900 font-medium">{fmtHours(l.hours)}</td>
-                            <td className="px-4 py-2.5 text-right tabular-nums text-gray-700">{fmtPct(l.pct)}%</td>
+                            <td className="px-4 py-2.5 text-right tabular-nums text-gray-700">{l.unplanned || l.hoursPerDay == null ? '—' : `${fmtHours(l.hoursPerDay)}h`}</td>
+                            <td className="px-4 py-2.5 text-right tabular-nums text-gray-700">{l.unplanned ? '—' : (l.workingDaysInMonth ?? 0)}</td>
+                            <td className="px-4 py-2.5 text-right tabular-nums text-gray-900 font-medium">{l.unplanned ? '—' : fmtHours(l.hours)}</td>
+                            <td className="px-4 py-2.5 text-right tabular-nums text-gray-700">{l.unplanned ? '—' : `${fmtPct(l.pct)}%`}</td>
+                            <td className={`px-4 py-2.5 text-right tabular-nums font-medium ${Number(l.actualHours) > 0 ? 'text-indigo-700' : 'text-gray-300'}`}>
+                              {fmtHours(l.actualHours)}
+                            </td>
                           </tr>
                         ))}
                       </tbody>
@@ -319,6 +353,21 @@ function DrillDown({ target, onClose }) {
                           <td className="px-4 py-2.5 text-right tabular-nums text-gray-700 font-semibold">{totDays}</td>
                           <td className="px-4 py-2.5 text-right tabular-nums text-gray-900 font-bold">{fmtHours(totalHours)}</td>
                           <td className="px-4 py-2.5 text-right tabular-nums text-gray-900 font-bold">{fmtPct(detail.totalPct)}%</td>
+                          <td className="px-4 py-2.5 text-right tabular-nums text-indigo-700 font-bold">{fmtHours(actualTotal)}</td>
+                        </tr>
+                        <tr className="border-t border-gray-200">
+                          <td className="px-4 py-2.5" colSpan={7}>
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Planned vs actual</span>
+                              <span className="tabular-nums text-sm font-medium text-gray-700">
+                                Planned {fmtHours(totalHours)}h · Actual {fmtHours(actualTotal)}h ·{' '}
+                                <span className={variance > 0 ? 'text-red-600' : variance < 0 ? 'text-amber-600' : 'text-emerald-700'}>
+                                  {variance > 0 ? '+' : ''}{fmtHours(variance)}h
+                                  {totalHours > 0 ? ` (${fmtPct((actualTotal / totalHours) * 100)}% of plan)` : ''}
+                                </span>
+                              </span>
+                            </div>
+                          </td>
                         </tr>
                       </tfoot>
                     </table>
@@ -372,7 +421,7 @@ export default function ResourceUtilisation() {
         users: Array.isArray(d.users) ? d.users : [],
       });
     } catch (e) {
-      setError(e?.response?.data?.message || 'Failed to load resource utilisation');
+      setError(errMsg(e, 'Failed to load resource utilisation'));
     } finally {
       setLoading(false);
     }
@@ -661,6 +710,10 @@ export default function ResourceUtilisation() {
             <span className="inline-flex items-center gap-1.5">
               <span className="inline-block w-2 h-2 rounded-full bg-red-500" />
               Red dot: under 100% overall but over capacity on at least one day
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="font-medium text-indigo-600 tabular-nums">6.5h act</span>
+              Actual hours logged (time entries); colours and % stay based on planned hours
             </span>
           </div>
         </div>

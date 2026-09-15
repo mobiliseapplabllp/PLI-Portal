@@ -1,6 +1,6 @@
 const router = require('express').Router();
 const { authenticate } = require('../../middleware/auth');
-const { authorize } = require('../../middleware/rbac');
+const { requirePermission } = require('../../core/rbac');
 
 const projectRoutes      = require('./project.routes');
 const milestoneRoutes    = require('./milestone.routes');
@@ -22,20 +22,17 @@ const utilCtrl           = require('../../controllers/pm/utilisation.controller'
 
 router.use(authenticate);
 
-const ALL        = ['admin', 'manager', 'senior_manager', 'employee', 'hr_admin', 'final_approver', 'md', 'director'];
-const MANAGERS   = ['admin', 'manager', 'senior_manager'];
-const MGMT_ROLES = ['admin', 'manager', 'senior_manager', 'md', 'director'];
-router.get('/my-tasks', authorize(...ALL), taskCtrl.getMyTasks);
+router.get('/my-tasks', requirePermission('pm.task.viewMine'), taskCtrl.getMyTasks);
 
 // ── User resource availability / utilisation ─────────────────────────────────
-router.get('/users/:userId/availability', authorize(...ALL),        projectCtrl.getUserAvailability);
-router.get('/users/:userId/utilisation',  authorize(...ALL),        utilCtrl.getUserUtilisation);
+router.get('/users/:userId/availability', requirePermission('pm.availability.view'),        projectCtrl.getUserAvailability);
+router.get('/users/:userId/utilisation',  requirePermission('pm.utilisation.viewUser'),        utilCtrl.getUserUtilisation);
 // Team × months grid (heat map). Registered before any router.use('/...') mounts —
 // no top-level '/:param' route exists in this file, so '/utilisation' is unambiguous.
-router.get('/utilisation',                authorize(...MGMT_ROLES), utilCtrl.getTeamUtilisation);
+router.get('/utilisation',                requirePermission('pm.utilisation.viewTeam'), utilCtrl.getTeamUtilisation);
 
 // ── RAID summary (must be before /projects/:id catch-all) ────────────────────
-router.get('/projects/raid-summary', authorize(...MANAGERS), raidCtrl.raidSummary);
+router.get('/projects/raid-summary', requirePermission('pm.raid.viewSummary'), raidCtrl.raidSummary);
 
 // ── Core project routes ───────────────────────────────────────────────────────
 router.use('/projects', projectRoutes);
@@ -62,11 +59,10 @@ router.use('/projects/:projectId/milestones/:milestoneId/documents', documentRou
 // ── Flat milestone routes — import/export only at /api/pm/milestones/* ────────
 const milestoneCtrl = require('../../controllers/pm/milestone.controller');
 const upload        = require('../../middleware/upload');
-const ADMIN_ONLY    = ['admin'];
-router.get('/milestones/export',           authorize(...ALL),        milestoneCtrl.exportMilestones);
-router.get('/milestones/import/template',  authorize(...ALL),        milestoneCtrl.getMilestoneImportTemplate);
-router.post('/milestones/import/validate', authorize(...ADMIN_ONLY), upload.single('file'), milestoneCtrl.validateMilestoneImport);
-router.post('/milestones/import/commit',   authorize(...ADMIN_ONLY), milestoneCtrl.commitMilestoneImport);
+router.get('/milestones/export',           requirePermission('pm.milestone.export'),        milestoneCtrl.exportMilestones);
+router.get('/milestones/import/template',  requirePermission('pm.milestone.importTemplate'),        milestoneCtrl.getMilestoneImportTemplate);
+router.post('/milestones/import/validate', requirePermission('pm.milestone.import'), upload.single('file'), milestoneCtrl.validateMilestoneImport);
+router.post('/milestones/import/commit',   requirePermission('pm.milestone.import'), milestoneCtrl.commitMilestoneImport);
 
 // ── Dashboard stats ───────────────────────────────────────────────────────────
 router.use('/dashboard', require('./pmDashboard.routes'));

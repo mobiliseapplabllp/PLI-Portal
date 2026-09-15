@@ -24,6 +24,8 @@ router.use(authenticate, helpdeskAuth);
 router.get('/',                             approvalCtrl.listApprovals);
 router.post('/:ticketId/request',           approvalCtrl.requestApproval);
 router.get('/:ticketId/status',             approvalCtrl.getApprovalStatus);
+// GET /helpdesk/approvals/:ticketId/default-approver — who would approve if no approverId is sent
+router.get('/:ticketId/default-approver',   approvalCtrl.getDefaultApprover);
 router.post('/:approvalId/respond-auth',    approvalCtrl.respondApprovalAuth);
 
 module.exports = router;

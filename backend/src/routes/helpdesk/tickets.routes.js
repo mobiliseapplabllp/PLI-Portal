@@ -7,6 +7,7 @@
 
 const router   = require('express').Router();
 const upload   = require('../../middleware/upload');
+const { sendError } = require('../../utils/response');
 
 const ticketCtrl   = require('../../controllers/helpdesk/ticket.controller');
 const convCtrl     = require('../../controllers/helpdesk/conversation.controller');
@@ -22,7 +23,7 @@ router.post('/bulk-assign',  ticketCtrl.bulkAssign);
 router.post('/bulk-upload',
   (req, res, next) => {
     if (!req.hdUser?.isAdmin && !req.hdUser?.permissions?.canAssign) {
-      return res.status(403).json({ success: false, message: 'You do not have permission to bulk upload tickets' });
+      return sendError(res, 'You do not have permission to bulk upload tickets', 403);
     }
     next();
   },
@@ -40,7 +41,7 @@ router.put('/:id',           ticketCtrl.updateTicket);
 router.delete('/:id',
   (req, res, next) => {
     if (!req.hdUser?.isAdmin) {
-      return res.status(403).json({ success: false, message: 'Only admins can delete tickets' });
+      return sendError(res, 'Only admins can delete tickets', 403);
     }
     next();
   },

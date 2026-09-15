@@ -1,17 +1,32 @@
 const { Op } = require('sequelize');
+const crypto = require('crypto');
+// config/database exports the Sequelize instance directly — do NOT destructure
+const sequelize = require('../../config/database');
 const Project = require('../../models/pm/Project');
+// ONE PROJECT MASTER: helpdesk profile of a PM project (hd_projects.pm_project_id).
+// The barrel registers the pmProject / helpdeskProfile / group associations.
+const { HdProject, HdGroup, HdTicket } = require('../../models/helpdesk');
 const ProjectMember = require('../../models/pm/ProjectMember');
 const Milestone = require('../../models/pm/Milestone');
 const Task = require('../../models/pm/Task');
 const DailyStatusLog = require('../../models/pm/DailyStatusLog');
 const ProjectNotificationRecipient = require('../../models/pm/ProjectNotificationRecipient');
 const User = require('../../models/User');
-const { NotFoundError, ForbiddenError, ValidationError, AllocationConflictError } = require('../../utils/errors');
+const { NotFoundError, ForbiddenError, ValidationError, ConflictError, AllocationConflictError } = require('../../utils/errors');
 const pmSettingsService = require('./pmSettings.service');
 const { createDefaultMilestones } = require('./milestone.service');
 const { checkConflict, toPct, normaliseCalendar, resolveAllocation, workingDaysBetween } = require('../../utils/capacityEngine');
 
 const INACTIVE_PROJECT_STATUSES = ['completed', 'cancelled', 'closed'];
+
+/**
+ * Helpdesk-only projects live in pm_projects under this type. They are real
+ * work (counted in utilisation) but are hidden from PM lists, dashboard
+ * aggregates and daily reports unless explicitly requested.
+ */
+const OPERATIONS_TYPE = 'Operations';
+/** `where` fragment that keeps every non-Operations project (NULL type included). */
+const NOT_OPERATIONS = { [Op.or]: [{ projectType: null }, { projectType: { [Op.ne]: OPERATIONS_TYPE } }] };
 
 const PROJECT_INCLUDE = [
   { model: User, as: 'owner',          attributes: ['id', 'name', 'email', 'designation'] },
@@ -47,6 +62,10 @@ const getProjects = async (query, user) => {
   const where = {};
   if (query.status) where.status = query.status;
   if (query.search) where.name = { [Op.like]: `%${query.search}%` };
+  // Operations (helpdesk-only) projects are hidden unless the caller asks for a
+  // specific type or opts in with includeOperations=1.
+  if (query.projectType) where.projectType = query.projectType;
+  else if (String(query.includeOperations) !== '1') Object.assign(where, NOT_OPERATIONS);
 
   const projects = await Project.findAll({
     where,
@@ -110,7 +129,13 @@ const createProject = async (data, user) => {
     managerId, ownerId, accountManagerId,
     status, billingType, projectType,
     startDate, endDate,
+    enableHelpdesk, helpdeskGroupId,
   } = data;
+
+  // Helpdesk opt-in needs a servicing group — validated BEFORE the master is
+  // created so a bad request never leaves a half-created project behind.
+  const wantsHelpdesk = enableHelpdesk === true || enableHelpdesk === 'true' || enableHelpdesk === 1;
+  if (wantsHelpdesk) await requireHelpdeskGroup(helpdeskGroupId);
 
   const project = await Project.create({
     name, description, purpose, clientName, clientEmail, notifyClient,
@@ -124,8 +149,10 @@ const createProject = async (data, user) => {
     createdById: user._id ?? user.id,
   });
 
-  // Auto-create milestones from project type template
-  if (project.projectType) {
+  // Auto-create milestones from project type template.
+  // Operations projects (helpdesk-only) get NO milestones — not even the
+  // single "Development" fallback createDefaultMilestones would otherwise add.
+  if (project.projectType && project.projectType !== OPERATIONS_TYPE) {
     try {
       await createDefaultMilestones(project.id, project.projectType);
     } catch (err) {
@@ -136,6 +163,11 @@ const createProject = async (data, user) => {
         `(type "${project.projectType}"):`, err
       );
     }
+  }
+
+  // Helpdesk profile (hd_projects) pointing at this master — opt-in at creation
+  if (wantsHelpdesk) {
+    await createHelpdeskProfile(project, helpdeskGroupId);
   }
 
   // Email alert: notify on project creation if enabled
@@ -182,7 +214,19 @@ const updateProject = async (id, data, user) => {
   const updateData = {};
   ALLOWED_FIELDS.forEach((key) => { if (key in data) updateData[key] = data[key]; });
   Object.assign(project, updateData);
-  await project.save();
+
+  // ONE PROJECT MASTER: the linked helpdesk profile keeps a synced copy of
+  // name / description — written in the same transaction as the master.
+  const profilePatch = {};
+  if (project.changed('name'))        profilePatch.name        = project.name;
+  if (project.changed('description')) profilePatch.description = project.description ?? null;
+
+  await sequelize.transaction(async (transaction) => {
+    await project.save({ transaction });
+    if (Object.keys(profilePatch).length) {
+      await HdProject.update(profilePatch, { where: { pmProjectId: project.id }, transaction });
+    }
+  });
   return project;
 };
 
@@ -191,6 +235,114 @@ const deleteProject = async (id, user) => {
   const project = await Project.findByPk(id);
   if (!project) throw new NotFoundError('Project');
   await project.destroy();
+};
+
+// ── Helpdesk profile (ONE PROJECT MASTER) ─────────────────────────────────────
+// hd_projects is a per-project helpdesk profile: group + public widget token.
+// The PM project stays the master for name / status / manager; the hd columns
+// are a cache that the helpdesk controller reads through.
+
+const toGroupId = (v) => {
+  if (v === undefined || v === null || v === '') return null;
+  const n = parseInt(v, 10);
+  if (Number.isNaN(n)) throw new ValidationError('groupId must be an integer');
+  return n;
+};
+
+const assertGroupExists = async (groupId) => {
+  if (groupId === null) return;
+  const g = await HdGroup.findByPk(groupId, { attributes: ['id'] });
+  if (!g) throw new NotFoundError('Helpdesk group');
+};
+
+const HELPDESK_GROUP_REQUIRED = 'Select a support group for this project';
+
+/**
+ * A helpdesk profile must always have a servicing group: blank → 400
+ * (ValidationError), unknown group → 404. Returns the integer group id.
+ */
+const requireHelpdeskGroup = async (groupId) => {
+  const gid = toGroupId(groupId);
+  if (gid === null) throw new ValidationError(HELPDESK_GROUP_REQUIRED);
+  await assertGroupExists(gid);
+  return gid;
+};
+
+/** Create the hd_projects row for a master project (caller has validated permissions). */
+const createHelpdeskProfile = async (project, groupId, options = {}) => {
+  const gid = await requireHelpdeskGroup(groupId);
+  return HdProject.create({
+    pmProjectId: project.id,
+    name:        project.name,
+    description: project.description ?? null,
+    groupId:     gid,
+    managerId:   project.managerId ?? null,
+    // Helpdesk status = accepting tickets. Never copy the PM lifecycle status
+    // ("Yet to Start" etc.) — the public widget refuses anything but 'Active'.
+    status:      'Active',
+    publicToken: crypto.randomUUID(),
+  }, options);
+};
+
+const shapeProfile = (row) => row ? ({
+  id:          row.id,
+  groupId:     row.groupId ?? null,
+  groupName:   row.group ? row.group.name : null,
+  publicToken: row.publicToken,
+  managerId:   row.managerId ?? null,
+}) : null;
+
+const findProfile = (projectId) => HdProject.findOne({
+  where: { pmProjectId: projectId },
+  include: [{ model: HdGroup, as: 'group', attributes: ['id', 'name'], required: false }],
+});
+
+/** Same rule as updateProject: admin/manager roles or the project's own manager. */
+const assertCanManageHelpdesk = async (projectId, user) => {
+  const project = await Project.findByPk(projectId);
+  if (!project) throw new NotFoundError('Project');
+  if (!canManageProject(user) && String(project.managerId) !== String(user._id ?? user.id)) {
+    throw new ForbiddenError('Only project manager or admin can manage the helpdesk profile');
+  }
+  return project;
+};
+
+/** `{ enabled, profile }` — profile is null when the project has no helpdesk profile. */
+const getHelpdeskProfile = async (projectId) => {
+  const project = await Project.findByPk(projectId, { attributes: ['id'] });
+  if (!project) throw new NotFoundError('Project');
+  const row = await findProfile(projectId);
+  return { enabled: Boolean(row), profile: shapeProfile(row) };
+};
+
+const enableHelpdesk = async (projectId, groupId, user) => {
+  const project = await assertCanManageHelpdesk(projectId, user);
+  if (await HdProject.findOne({ where: { pmProjectId: projectId }, attributes: ['id'] })) {
+    throw new ConflictError('Helpdesk is already enabled for this project');
+  }
+  await createHelpdeskProfile(project, groupId);
+  return getHelpdeskProfile(projectId);
+};
+
+const updateHelpdeskProfile = async (projectId, data, user) => {
+  await assertCanManageHelpdesk(projectId, user);
+  const row = await HdProject.findOne({ where: { pmProjectId: projectId } });
+  if (!row) throw new NotFoundError('Helpdesk profile');
+  if ('groupId' in data) {
+    // The group may be changed but never removed.
+    row.groupId = await requireHelpdeskGroup(data.groupId);
+  }
+  await row.save();
+  return getHelpdeskProfile(projectId);
+};
+
+const disableHelpdesk = async (projectId, user) => {
+  await assertCanManageHelpdesk(projectId, user);
+  const row = await HdProject.findOne({ where: { pmProjectId: projectId } });
+  if (!row) throw new NotFoundError('Helpdesk profile');
+  const tickets = await HdTicket.count({ where: { projectId: row.id } });
+  if (tickets > 0) throw new ConflictError('Project has tickets; disable instead');
+  await row.destroy();
 };
 
 const getProjectSummary = async (id, user) => {
@@ -519,6 +671,9 @@ module.exports = {
   getProjects, getProjectById, getProject, createProject, updateProject, deleteProject, getProjectSummary,
   getMembers, addMember, updateMember, confirmMemberHours, removeMember,
   getRecipients, addRecipient, removeRecipient,
+  // helpdesk profile (ONE PROJECT MASTER)
+  getHelpdeskProfile, enableHelpdesk, updateHelpdeskProfile, disableHelpdesk,
+  OPERATIONS_TYPE, NOT_OPERATIONS,
   // allocation helpers shared with the controller
   effectiveHours, toAllocation, getOtherActiveAllocations, INACTIVE_PROJECT_STATUSES,
 };

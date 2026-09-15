@@ -1,4 +1,4 @@
-import { useEffect, useState, Fragment } from 'react';
+import { useEffect, useState, useRef, Fragment } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useSelector } from 'react-redux';
 import toast from 'react-hot-toast';
@@ -18,11 +18,13 @@ import {
   downloadMilestoneDocumentUrl,
 } from '../../api/pm/documents.api';
 import { getUsersApi } from '../../api/users.api';
+import { timeEntrySummaryApi } from '../../api/timeEntries.api';
+import TimeLogControl from '../../components/common/TimeLogControl';
 import {
   HiOutlineArrowLeft, HiOutlinePlus, HiOutlineTrash, HiOutlinePencil,
   HiOutlineFlag, HiOutlineExclamation, HiOutlinePaperClip,
   HiOutlineDownload, HiOutlineUpload, HiOutlineDocumentText,
-  HiOutlineX, HiOutlineCheckCircle, HiOutlineCalendar,
+  HiOutlineX, HiOutlineCheckCircle, HiOutlineCalendar, HiOutlineClock,
 } from 'react-icons/hi';
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -105,6 +107,15 @@ const CaretIcon = ({ className = '' }) => (
   </svg>
 );
 
+// ── Time logging ─────────────────────────────────────────────────────────────
+const fmtHours = (n) => {
+  const v = Number(n) || 0;
+  return Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/\.?0+$/, '');
+};
+
+// Log form / entries list / edit / delete live in the shared
+// components/common/TimeLogControl.jsx (also used by helpdesk TicketDetail).
+
 // Shared field styles for the default-milestone card
 const ACTUAL_DATE_BASE =
   'border rounded-md focus:outline-none focus:ring-1 focus:ring-emerald-400 focus:border-emerald-400 transition-colors';
@@ -166,6 +177,11 @@ export default function MilestoneBoard() {
   const [mDocCategory, setMDocCategory] = useState('SOW / Client Contracts');
   const [mDocCategoryOther, setMDocCategoryOther] = useState('');
   const [mDocUploading, setMDocUploading] = useState(false);
+
+  // Time logging (actual hours against milestones / sub-milestones)
+  const [timeTotals,    setTimeTotals]    = useState({});   // entityId → totalHours
+  const [timeLogFor,    setTimeLogFor]    = useState(null); // entityId with the panel open
+  const timeLoadedCards = useRef(new Set());                // card ids whose summaries were batch-fetched
 
   // Per-card inline edit
   const [editingCardId,  setEditingCardId]  = useState(null);
@@ -708,6 +724,58 @@ export default function MilestoneBoard() {
     }
   };
 
+  // ── Time logging handlers ───────────────────────────────────────────────
+  const fetchTimeTotal = async (entityId) => {
+    try {
+      const res = await timeEntrySummaryApi('milestone', entityId);
+      setTimeTotals(prev => ({ ...prev, [entityId]: Number(res.data?.data?.totalHours) || 0 }));
+    } catch { /* non-fatal — total just stays hidden */ }
+  };
+
+  // Batch the summaries for a card (milestone + its sub-milestones) the first
+  // time the user opens a log panel inside it — not on page load.
+  const ensureCardTimeTotals = (card) => {
+    const cardId = card._id || card.id;
+    if (timeLoadedCards.current.has(cardId)) return;
+    timeLoadedCards.current.add(cardId);
+    [cardId, ...(card.subMilestones || []).map(s => s._id || s.id)].forEach(fetchTimeTotal);
+  };
+
+  const openTimeLog = (entityId, card) => {
+    if (timeLogFor === entityId) { setTimeLogFor(null); return; }
+    setTimeLogFor(entityId);
+    if (card) ensureCardTimeTotals(card); else fetchTimeTotal(entityId);
+  };
+
+  // Entries load lazily: TimeLogControl mounts only when its panel is opened.
+  const renderTimeLog = (entityId) => (
+    <TimeLogControl
+      entityType="milestone"
+      entityId={entityId}
+      compact
+      onTotalsChange={(hours) => setTimeTotals(prev => (prev[entityId] === hours ? prev : { ...prev, [entityId]: hours }))}
+      onClose={() => setTimeLogFor(null)}
+    />
+  );
+
+  const TimeLogButton = ({ entityId, card, size = 'w-4 h-4' }) => (
+    <button
+      type="button"
+      onClick={() => openTimeLog(entityId, card)}
+      className={`flex items-center gap-1 px-1.5 py-1 rounded-lg text-xs transition-colors ${
+        timeLogFor === entityId
+          ? 'bg-emerald-50 text-emerald-700'
+          : 'text-gray-400 hover:text-emerald-700 hover:bg-emerald-50'
+      }`}
+      title="Log time"
+    >
+      <HiOutlineClock className={size} />
+      {timeTotals[entityId] != null && (
+        <span className="font-semibold text-gray-600">{fmtHours(timeTotals[entityId])}h</span>
+      )}
+    </button>
+  );
+
   // ── Render ──────────────────────────────────────────────────────────────
   return (
     <div className="space-y-5">
@@ -932,6 +1000,7 @@ export default function MilestoneBoard() {
                             </span>
                           )}
 
+                          <TimeLogButton entityId={mId} card={m} />
                           <button
                             onClick={() => openDocModal(m)}
                             className="p-1.5 text-gray-400 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors"
@@ -1159,6 +1228,13 @@ export default function MilestoneBoard() {
                         </div>
                       </div>
                     </div>
+
+                    {/* ── Time log panel (milestone) ────────────────────── */}
+                    {timeLogFor === mId && (
+                      <div className="border-t border-gray-100 bg-gray-50/60 px-5 py-3">
+                        {renderTimeLog(mId)}
+                      </div>
+                    )}
 
                     {/* ── Per-card inline edit panel ───────────────────── */}
                     {editingCardId === mId && (
@@ -1448,6 +1524,7 @@ export default function MilestoneBoard() {
                                   {/* Actions */}
                                   <td className="px-3 py-3 pr-6 align-top">
                                     <div className="flex items-center justify-end gap-1">
+                                      <TimeLogButton entityId={smId} card={m} size="w-3.5 h-3.5" />
                                       <button
                                         onClick={() => openDocModal(sm)}
                                         className="p-1.5 rounded-md text-gray-400 hover:text-emerald-700 hover:bg-emerald-50 transition-colors"
@@ -1535,6 +1612,13 @@ export default function MilestoneBoard() {
                                         <button onClick={() => setEditingSubId(null)} className="px-3 py-1.5 text-xs text-gray-500 border border-gray-200 rounded-lg hover:bg-gray-50">Cancel</button>
                                         <button onClick={() => handleSubEdit(smId)} className="px-4 py-1.5 text-xs font-medium bg-emerald-600 text-white rounded-lg hover:bg-emerald-700">Save Changes</button>
                                       </div>
+                                    </td>
+                                  </tr>
+                                )}
+                                {timeLogFor === smId && (
+                                  <tr className="bg-gray-50/70">
+                                    <td colSpan={8} className="px-8 py-3">
+                                      {renderTimeLog(smId)}
                                     </td>
                                   </tr>
                                 )}
@@ -1680,7 +1764,8 @@ export default function MilestoneBoard() {
                       const mId = m._id || m.id;
                       const isDelayed = m.plannedEndDate && m.plannedEndDate.slice(0, 10) < today && normalizeStatus(m.status) !== 'completed';
                       return (
-                        <tr key={mId} className={isDelayed ? 'bg-red-50' : 'hover:bg-gray-50'}>
+                        <Fragment key={mId}>
+                        <tr className={isDelayed ? 'bg-red-50' : 'hover:bg-gray-50'}>
                           <td className="px-5 py-3 text-gray-400 text-xs">{i + 1}</td>
                           <td className="px-5 py-3">
                             <p className="font-medium text-gray-900 flex items-center flex-wrap gap-1">
@@ -1803,13 +1888,16 @@ export default function MilestoneBoard() {
                             )}
                           </td>
                           <td className="px-5 py-3">
-                            <button
-                              onClick={() => openDocModal(m)}
-                              className="flex items-center gap-1 px-2 py-1 text-xs text-gray-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors"
-                              title="Manage milestone documents"
-                            >
-                              <HiOutlinePaperClip className="w-3.5 h-3.5" /> Docs
-                            </button>
+                            <div className="flex items-center gap-1">
+                              <button
+                                onClick={() => openDocModal(m)}
+                                className="flex items-center gap-1 px-2 py-1 text-xs text-gray-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors"
+                                title="Manage milestone documents"
+                              >
+                                <HiOutlinePaperClip className="w-3.5 h-3.5" /> Docs
+                              </button>
+                              <TimeLogButton entityId={mId} size="w-3.5 h-3.5" />
+                            </div>
                           </td>
                           {canAddTopLevel && (
                             <td className="px-5 py-3">
@@ -1824,6 +1912,14 @@ export default function MilestoneBoard() {
                             </td>
                           )}
                         </tr>
+                        {timeLogFor === mId && (
+                          <tr className="bg-gray-50/70">
+                            <td colSpan={canAddTopLevel ? 11 : 10} className="px-8 py-3">
+                              {renderTimeLog(mId)}
+                            </td>
+                          </tr>
+                        )}
+                        </Fragment>
                       );
                     })}
                   </tbody>

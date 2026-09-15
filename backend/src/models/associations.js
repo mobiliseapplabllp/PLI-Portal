@@ -13,6 +13,7 @@ const PliSlab = require('./PliSlab');
 const Notification = require('./Notification');
 const AuditLog = require('./AuditLog');
 const KpiTemplate = require('./KpiTemplate');
+const TimeEntry = require('./TimeEntry');
 
 // ── PM Models ─────────────────────────────────────────────────────────────────
 const Project                    = require('./pm/Project');
@@ -153,6 +154,10 @@ PmAllocationApproval.belongsTo(User,         { foreignKey: 'approvedById',  as: 
 PmClosure.belongsTo(Project, { foreignKey: 'projectId',   as: 'project',   constraints: false });
 PmClosure.belongsTo(User,    { foreignKey: 'signedOffById',as: 'signedOffBy', constraints: false });
 
+// ── TimeEntry (polymorphic via entityType + entityId; actual hours) ───────────
+TimeEntry.belongsTo(User, { foreignKey: 'userId', as: 'user' });
+TimeEntry.belongsTo(User, { foreignKey: 'createdById', as: 'createdBy', constraints: false });
+
 // ── PmDocument (polymorphic via entityType + entityId) ────────────────────────
 PmDocument.belongsTo(User, { foreignKey: 'uploadedById', as: 'uploadedBy', constraints: false });
 
@@ -218,6 +223,8 @@ module.exports = {
   PmProjectType, PmStatus, PmMilestoneTemplate, PmMemberRole,
   PmStatusReport, PmRaidItem, PmFinancialDetail, PmClosure,
   PmMilestoneDateLog, PmAllocationApproval,
+  // Cross-module
+  TimeEntry,
   // CSAT
   ClientOrganisation, ClientEmployee, Survey, SurveyQuestion,
   SurveyDispatch, SurveyRecipient, SurveyResponse,

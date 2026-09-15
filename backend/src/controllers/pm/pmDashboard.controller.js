@@ -4,6 +4,8 @@ const Project      = require('../../models/pm/Project');
 const Milestone    = require('../../models/pm/Milestone');
 const User         = require('../../models/User');
 const { sendSuccess } = require('../../utils/response');
+// Operations (helpdesk-only) projects are excluded from every dashboard aggregate
+const { NOT_OPERATIONS } = require('../../services/pm/project.service');
 
 /**
  * GET /api/pm/dashboard/stats
@@ -11,6 +13,7 @@ const { sendSuccess } = require('../../utils/response');
  */
 const getDashboardStats = async (req, res, next) => {
   try {
+    const scoped = (where = {}) => ({ where: { ...NOT_OPERATIONS, ...where } });
     const [
       totalProjects,
       billableCount,
@@ -19,22 +22,27 @@ const getDashboardStats = async (req, res, next) => {
       completedCount,
       onHoldCount,
     ] = await Promise.all([
-      Project.count(),
-      Project.count({ where: { projectType: 'Billable' } }),
-      Project.count({ where: { projectType: 'Non-Billable' } }),
-      Project.count({ where: { status: 'active' } }),
-      Project.count({ where: { status: 'completed' } }),
-      Project.count({ where: { status: 'on_hold' } }),
+      Project.count(scoped()),
+      // Billable / Non-Billable live in billingType (projectType is the category)
+      Project.count(scoped({ billingType: 'Billable' })),
+      Project.count(scoped({ billingType: 'Non-Billable' })),
+      Project.count(scoped({ status: 'active' })),
+      Project.count(scoped({ status: 'completed' })),
+      Project.count(scoped({ status: 'on_hold' })),
     ]);
 
     // Projects with milestone counts (top 20 by updatedAt)
     const projects = await Project.findAll({
-      attributes: ['id', 'name', 'status', 'projectType', 'startDate', 'endDate', 'managerId'],
+      where: NOT_OPERATIONS,
+      // updatedAt must be selected: with limit + hasMany include Sequelize wraps
+      // the project query in a subquery and the outer ORDER BY needs the column
+      attributes: ['id', 'name', 'status', 'projectType', 'startDate', 'endDate', 'managerId', 'updatedAt'],
       include: [
         {
           model: Milestone,
           as: 'milestones',
-          attributes: ['id', 'status', 'endDate'],
+          // pm_milestones has plannedEndDate / actualEndDate (migration 024) — no `endDate`
+          attributes: ['id', 'status', 'plannedEndDate'],
           required: false,
         },
         {
@@ -63,7 +71,7 @@ const getDashboardStats = async (req, res, next) => {
         milestones: {
           total:     ms.length,
           completed: ms.filter(m => m.status === 'completed').length,
-          overdue:   ms.filter(m => m.endDate && new Date(m.endDate) < today && m.status !== 'completed').length,
+          overdue:   ms.filter(m => m.plannedEndDate && new Date(m.plannedEndDate) < today && m.status !== 'completed').length,
         },
       };
     });
@@ -74,8 +82,8 @@ const getDashboardStats = async (req, res, next) => {
       Milestone.count({ where: { status: 'completed' } }),
       Milestone.count({
         where: {
-          endDate: { [Op.lt]: new Date() },
-          status:  { [Op.ne]: 'completed' },
+          plannedEndDate: { [Op.lt]: new Date() },
+          status:         { [Op.ne]: 'completed' },
         },
       }),
     ]);
