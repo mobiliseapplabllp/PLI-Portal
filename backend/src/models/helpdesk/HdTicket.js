@@ -170,17 +170,33 @@ const HdTicket = sequelize.define('HdTicket', {
     allowNull: true,
     field:     'allocation_total_hours',
   },
+  // Team = reporting manager (users.id). A user is in the team when they ARE the
+  // manager or their users.managerId points at them. See services/helpdesk/team.service.
+  teamManagerId: {
+    type:      DataTypes.STRING(36),
+    allowNull: true,
+    field:     'team_manager_id',
+    comment:   'Team owning the ticket = reporting manager (users.id)',
+  },
+  // Legacy helpdesk group — read-only since migration 043 (teams replaced groups).
   groupId: {
     type:      DataTypes.INTEGER,
     allowNull: true,
     field:     'group_id',
     references: { model: 'hd_groups', key: 'id' },
   },
+  // Legacy INT reference to hd_projects; new tickets reference PM projects via pmProjectId.
   projectId: {
     type:      DataTypes.INTEGER,
     allowNull: true,
     field:     'project_id',
     references: { model: 'hd_projects', key: 'id' },
+  },
+  pmProjectId: {
+    type:      DataTypes.STRING(36),
+    allowNull: true,
+    field:     'pm_project_id',
+    comment:   'PM project (pm_projects.id UUID)',
   },
   dueDate: {
     type:      DataTypes.DATE,

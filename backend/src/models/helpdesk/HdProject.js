@@ -9,6 +9,8 @@ const HdProject = sequelize.define('HdProject', {
   groupId:     { type: DataTypes.INTEGER, allowNull: true, field: 'group_id' },
   publicToken: { type: DataTypes.STRING(64), allowNull: false, unique: true, field: 'public_token' },
   managerId:   { type: DataTypes.STRING(36), allowNull: true, field: 'manager_id' },
+  // Link from a legacy helpdesk project to its PM project (pm_projects.id UUID). Migration 043.
+  pmProjectId: { type: DataTypes.STRING(36), allowNull: true, field: 'pm_project_id' },
 }, {
   tableName: 'hd_projects',
   underscored: true,

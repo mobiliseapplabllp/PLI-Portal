@@ -13,6 +13,7 @@ import {
   HiOutlineClipboard,
 } from 'react-icons/hi';
 import { updateProjectApi, addMemberApi, updateMemberApi, removeMemberApi } from '../../api/pm/projects.api';
+import { cancelAllocationExceptionApi } from '../../api/pm/allocation.api';
 // Member roles are now fetched from /pm/config/member-roles (admin-configurable)
 import {
   getProjectDocumentsApi, uploadProjectDocumentApi,
@@ -22,9 +23,13 @@ import { getTodayLogApi } from '../../api/pm/dailyLogs.api';
 import { getUsersApi } from '../../api/users.api';
 import { getPmStatusesApi, getMemberRolesApi } from '../../api/pm/config.api';
 import api from '../../api/axios';
+import { projectProgress } from '../../utils/pmProgress';
 import ResourceAvailabilityCard from '../../components/pm/ResourceAvailabilityCard';
 import AllocationApprovalPanel from '../../components/pm/AllocationApprovalPanel';
 import AllocationTypeInput, { formatAllocation } from '../../components/pm/AllocationTypeInput';
+import ExceptionRequestModal from '../../components/pm/ExceptionRequestModal';
+import AllocationDrawer from '../../components/pm/AllocationDrawer';
+import AllocationGrid from '../../components/pm/AllocationGrid';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
@@ -150,15 +155,226 @@ const fmtRangeDate = (iso) => {
   catch { return String(iso).slice(0, 10); }
 };
 
-/** Red panel rendered under a member form after the server returned HTTP 409 */
-function ConflictPanel({ conflict, capacity, onUseRemaining, compact = false }) {
+// ── Allocation segments (time-phased periods per member) ─────────────────────
+const isoDay = (d) => (d ? String(d).slice(0, 10) : null);
+const todayIso = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+
+/**
+ * A member's segments, normalised to { _id, fromDate, toDate, hoursPerDay, … }
+ * and sorted by fromDate. Older servers return no `segments` — synthesise one
+ * from the mirrored member-level fields so every reader keeps working.
+ */
+const memberSegments = (m) => {
+  if (!m) return [];
+  let segs = Array.isArray(m.segments) ? m.segments : null;
+  if (!segs) {
+    if (m.hoursPerDay == null && m.allocationTotalHours == null) return [];
+    segs = [{
+      _id: null,
+      fromDate: m.allocationFrom, toDate: m.allocationTo,
+      allocationMode: m.allocationMode, hoursPerDay: m.hoursPerDay, allocationTotalHours: m.allocationTotalHours,
+      hoursConfirmed: m.hoursConfirmed, exceptionStatus: m.exceptionStatus, exceptionApprovalId: m.exceptionApprovalId,
+      exceptionApproval: m.exceptionApproval, isEstimated: m.isEstimated,
+    }];
+  }
+  return segs
+    .map(s => ({ ...s, _id: s._id ?? s.id ?? s.segmentId ?? null, fromDate: isoDay(s.fromDate ?? s.allocationFrom), toDate: isoDay(s.toDate ?? s.allocationTo) }))
+    .sort((a, b) => String(a.fromDate || '').localeCompare(String(b.fromDate || '')));
+};
+
+/** The segment whose exception state matters most for a row: pending > approved > none. */
+const worstExceptionSegment = (m) => {
+  const segs = memberSegments(m);
+  return segs.find(s => s.exceptionStatus === 'pending')
+      || segs.find(s => s.exceptionStatus === 'approved')
+      || null;
+};
+const memberHasPendingException = (m) =>
+  m?.exceptionStatus === 'pending' || memberSegments(m).some(s => s.exceptionStatus === 'pending');
+const memberHasEstimate = (m) =>
+  m?.hoursConfirmed === false || m?.isEstimated || memberSegments(m).some(s => s.hoursConfirmed === false || s.isEstimated);
+
+/** "N h/day now · until dd Mon" / "N h/day from dd Mon · until dd Mon" / "Ended dd Mon" / "No allocation". */
+const segmentSummary = (m) => {
+  const segs = memberSegments(m);
+  if (segs.length === 0) return 'No allocation';
+  const t = todayIso();
+  const active = segs.find(s => (!s.fromDate || s.fromDate <= t) && (!s.toDate || s.toDate >= t));
+  if (active) return `${fmtH(active.hoursPerDay)} h/day now · until ${active.toDate ? fmtRangeDate(active.toDate) : 'open'}`;
+  const next = segs.find(s => s.fromDate && s.fromDate > t);
+  if (next) return `${fmtH(next.hoursPerDay)} h/day from ${fmtRangeDate(next.fromDate)} · until ${next.toDate ? fmtRangeDate(next.toDate) : 'open'}`;
+  const last = segs[segs.length - 1];
+  return `Ended ${last.toDate ? fmtRangeDate(last.toDate) : '—'}`;
+};
+
+const SEG_BAR_CLS = {
+  pending:   'bg-amber-200 text-amber-900 border-amber-300',
+  approved:  'bg-purple-200 text-purple-900 border-purple-300',
+  estimated: 'bg-emerald-100 text-emerald-800 border-emerald-300 border-dashed',
+  normal:    'bg-emerald-500 text-white border-emerald-600',
+};
+const segTone = (s) => (s.exceptionStatus === 'pending' ? 'pending'
+  : s.exceptionStatus === 'approved' ? 'approved'
+  : (s.hoursConfirmed === false || s.isEstimated) ? 'estimated' : 'normal');
+
+/**
+ * Compact horizontal strip of a member's segments across the project window
+ * (widened to the min/max of the segments). Bars are labelled "N h/day" and
+ * coloured by exception state / estimate; a thin line marks today.
+ */
+function SegmentTimeline({ member, project, compact = false }) {
+  const segs = memberSegments(member).filter(s => s.fromDate && s.toDate);
+  if (segs.length === 0) return <div className={`${compact ? 'h-3' : 'h-4'} rounded bg-gray-100`} title="No allocation" />;
+  const dates = segs.flatMap(s => [s.fromDate, s.toDate]).concat([isoDay(project?.startDate), isoDay(project?.endDate)]).filter(Boolean).sort();
+  const start = new Date(dates[0]).getTime();
+  const end   = Math.max(new Date(dates[dates.length - 1]).getTime(), start + 86400000);
+  const span  = end - start;
+  const pctOf = (iso) => Math.min(100, Math.max(0, ((new Date(iso).getTime() - start) / span) * 100));
+  const t = todayIso();
+  const todayPct = t >= dates[0] && t <= dates[dates.length - 1] ? pctOf(t) : null;
+  const h = compact ? 'h-3' : 'h-4';
+  return (
+    <div className="space-y-0.5">
+      <div className={`relative ${h} rounded bg-gray-100 overflow-hidden`} aria-label="Allocation periods">
+        {segs.map((s, i) => {
+          const left  = pctOf(s.fromDate);
+          const right = pctOf(new Date(new Date(s.toDate).getTime() + 86400000).toISOString().slice(0, 10));
+          const width = Math.max(1.5, right - left);
+          const tone  = segTone(s);
+          return (
+            <div
+              key={s._id ?? i}
+              className={`absolute top-0 bottom-0 rounded-sm border flex items-center justify-center overflow-hidden text-[9px] font-semibold leading-none ${SEG_BAR_CLS[tone]}`}
+              style={{ left: `${left}%`, width: `${width}%` }}
+              title={`${fmtRangeDate(s.fromDate)} – ${fmtRangeDate(s.toDate)} · ${fmtH(s.hoursPerDay)} h/day${tone === 'pending' ? ' · pending exception' : tone === 'approved' ? ' · approved exception' : tone === 'estimated' ? ' · estimated' : ''}`}
+            >
+              {width >= 12 && <span className="truncate px-0.5">{fmtH(s.hoursPerDay)} h/day</span>}
+            </div>
+          );
+        })}
+        {todayPct != null && (
+          <div className="absolute top-0 bottom-0 w-px bg-red-500/80" style={{ left: `${todayPct}%` }} title={`Today · ${fmtRangeDate(t)}`} />
+        )}
+      </div>
+      {!compact && (
+        <div className="flex justify-between text-[9px] text-gray-400 tabular-nums">
+          <span>{fmtRangeDate(dates[0])}</span>
+          <span>{fmtRangeDate(dates[dates.length - 1])}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Chip for a member row's allocation-exception state, read from the 'worst' segment (pending > approved). */
+function ExceptionChip({ member, compact = false }) {
+  const seg = worstExceptionSegment(member);
+  const st = seg?.exceptionStatus ?? member?.exceptionStatus;
+  if (st !== 'pending' && st !== 'approved') return null;
+  const approverName =
+    seg?.exceptionApproval?.approver?.name
+    ?? seg?.exceptionApproval?.approvedBy?.name
+    ?? member.exceptionApproval?.approver?.name
+    ?? member.exceptionApproval?.approvedBy?.name
+    ?? member.exceptionApprover?.name
+    ?? null;
+  const cls = st === 'pending'
+    ? 'bg-amber-100 text-amber-800 border-amber-200'
+    : 'bg-purple-100 text-purple-800 border-purple-200';
+  const label = st === 'pending'
+    ? 'Pending exception'
+    : `Exception approved${approverName ? ` (by ${approverName})` : ''}`;
+  return (
+    <span
+      className={`inline-flex items-center px-1.5 py-0.5 rounded-full border font-medium whitespace-nowrap ${compact ? 'text-[10px]' : 'text-xs'} ${cls}`}
+      title={st === 'pending' ? 'Awaiting approver decision — not counted against capacity and not editable until decided' : 'Approved over-capacity allocation'}
+    >
+      {st === 'pending' ? '⏳ ' : '✔ '}{label}
+    </span>
+  );
+}
+
+/**
+ * Normalise the 409 `conflict.suggestions` block (may be absent on older
+ * servers). Falls back to `remaining` for the reduce option.
+ */
+const conflictSuggestions = (conflict) => {
+  const s = conflict?.suggestions || {};
+  const remaining = conflict?.remaining != null ? Number(conflict.remaining) : null;
+  const reduceTo = s.reduceTo != null ? Number(s.reduceTo) : (remaining != null && remaining > 0 ? remaining : null);
+  return {
+    reduceTo:      reduceTo != null && reduceTo > 0 ? reduceTo : null,
+    nextFreeDate:  s.nextFreeDate ? String(s.nextFreeDate).slice(0, 10) : null,
+    shortenTo:     s.shortenTo    ? String(s.shortenTo).slice(0, 10)    : null,
+    overloadHours: s.overloadHours != null ? Number(s.overloadHours) : null,
+  };
+};
+
+/**
+ * Suggestion buttons shared by the ConflictPanel and the preview modal's
+ * "Resolve" popover. `onApply(patch)` receives a form patch such as
+ * { allocationMode:'per_day', hoursPerDay } / { allocationFrom } / { allocationTo }.
+ */
+function SuggestionButtons({ suggestions, onApply, onRequestException, canRequestException = true, tone = 'red' }) {
+  const { reduceTo, nextFreeDate, shortenTo } = suggestions || {};
+  const btn = tone === 'red'
+    ? 'px-2.5 py-1 bg-white border border-red-300 text-red-700 rounded text-xs font-medium hover:bg-red-100 transition-colors'
+    : 'px-2.5 py-1 bg-white border border-gray-300 text-gray-700 rounded text-xs font-medium hover:bg-gray-100 transition-colors';
+  const hasAny = reduceTo != null || nextFreeDate || shortenTo || (onRequestException && canRequestException);
+  if (!hasAny) return null;
+  return (
+    <div className="flex flex-wrap gap-1.5 mt-2">
+      {reduceTo != null && onApply && (
+        <button type="button" className={btn} onClick={() => onApply({ allocationMode: 'per_day', hoursPerDay: reduceTo, allocationTotalHours: null })}>
+          Use {fmtH(reduceTo)} hrs/day
+        </button>
+      )}
+      {nextFreeDate && onApply && (
+        <button type="button" className={btn} onClick={() => onApply({ allocationFrom: nextFreeDate })}>
+          Start on {fmtRangeDate(nextFreeDate)}
+        </button>
+      )}
+      {shortenTo && onApply && (
+        <button type="button" className={btn} onClick={() => onApply({ allocationTo: shortenTo })}>
+          End on {fmtRangeDate(shortenTo)}
+        </button>
+      )}
+      {onRequestException && canRequestException && (
+        <button
+          type="button"
+          onClick={onRequestException}
+          className="px-2.5 py-1 bg-amber-600 border border-amber-600 text-white rounded text-xs font-medium hover:bg-amber-700 transition-colors"
+        >
+          Request exception…
+        </button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Red panel rendered under a member form after the server returned HTTP 409.
+ *   onApply(patch)        — apply a suggestion to the form (see SuggestionButtons)
+ *   onRequestException()  — open the ExceptionRequestModal for this form
+ *   onUseRemaining(h)     — legacy: still honoured when onApply is not given
+ */
+function ConflictPanel({ conflict, capacity, onUseRemaining, onApply, onRequestException, compact = false }) {
   if (!conflict) return null;
   const cap = Number(conflict.capacity) > 0 ? Number(conflict.capacity) : capacity;
   const ranges = Array.isArray(conflict.ranges) ? conflict.ranges : [];
-  const remaining = conflict.remaining != null ? Number(conflict.remaining) : null;
+  const sugg = conflictSuggestions(conflict);
+  const apply = onApply || (onUseRemaining ? (patch) => { if (patch.hoursPerDay != null) onUseRemaining(patch.hoursPerDay); } : null);
   return (
     <div className={`bg-red-50 border border-red-200 rounded-lg text-red-700 ${compact ? 'px-2.5 py-2 mt-2 text-xs' : 'px-3 py-2.5 mb-3 text-sm'}`} role="alert">
-      <p className="font-semibold">Over capacity on {conflict.overDays ?? ranges.reduce((s, r) => s + (r.days || 0), 0)} day{(conflict.overDays ?? 0) === 1 ? '' : 's'}</p>
+      <p className="font-semibold">
+        Over capacity on {conflict.overDays ?? ranges.reduce((s, r) => s + (r.days || 0), 0)} day{(conflict.overDays ?? 0) === 1 ? '' : 's'}
+        {sugg.overloadHours != null && sugg.overloadHours > 0 && (
+          <span className="font-normal text-red-600"> · peak {fmtH(conflict.peak)}h / {fmtH(cap)}h (+{fmtH(sugg.overloadHours)}h)</span>
+        )}
+      </p>
       {ranges.length > 0 && (
         <ul className="mt-1 space-y-0.5 text-xs text-red-600">
           {ranges.map((r, i) => (
@@ -166,15 +382,12 @@ function ConflictPanel({ conflict, capacity, onUseRemaining, compact = false }) 
           ))}
         </ul>
       )}
-      {remaining != null && remaining > 0 && onUseRemaining && (
-        <button
-          type="button"
-          onClick={() => onUseRemaining(remaining)}
-          className="mt-2 px-2.5 py-1 bg-white border border-red-300 text-red-700 rounded text-xs font-medium hover:bg-red-100 transition-colors"
-        >
-          Use {fmtH(remaining)} hrs/day
-        </button>
-      )}
+      <SuggestionButtons
+        suggestions={sugg}
+        onApply={apply}
+        onRequestException={onRequestException}
+        canRequestException={conflict.canRequestException !== false}
+      />
     </div>
   );
 }
@@ -195,14 +408,24 @@ export default function ProjectDetail() {
   const [memberForm,    setMemberForm]    = useState({ userId: '', role: '', allocationMode: 'per_day', hoursPerDay: null, allocationTotalHours: null, allocationFrom: null, allocationTo: null });
   const [memberConflict, setMemberConflict] = useState(null);      // 409 conflict for the add form
   const [memberDerived,  setMemberDerived]  = useState({ hoursPerDay: null, totalHours: null, workingDays: null }); // from AllocationTypeInput (total ÷ working days)
-  const [editingMemberId, setEditingMemberId] = useState(null);
-  const [editMemberForm,  setEditMemberForm]  = useState({ role: '', allocationMode: 'per_day', hoursPerDay: null, allocationTotalHours: null, allocationFrom: null, allocationTo: null });
-  const [editMemberConflict, setEditMemberConflict] = useState(null); // 409 conflict for the inline edit form
+  // Allocation drawer: { memberId, focusSegmentId? } | null — the member row is
+  // re-read from the project on every render so the drawer sees fresh segments.
+  const [drawer, setDrawer] = useState(null);
+  const [teamMode, setTeamMode] = useState(() => {
+    try { return localStorage.getItem('pm_team_mode') === 'grid' ? 'grid' : 'list'; } catch { return 'list'; }
+  });
+  const handleTeamModeToggle = (v) => {
+    setTeamMode(v);
+    try { localStorage.setItem('pm_team_mode', v); } catch {}
+  };
   const [capacity, setCapacity] = useState(8);                     // working hours/day, from availability responses
   const [statusUpdating,setStatusUpdating]= useState(false);
   const [showAllocationPreview, setShowAllocationPreview] = useState(false);
   const [allocationPreview,     setAllocationPreview]     = useState([]);
   const [previewLoading,        setPreviewLoading]        = useState(false);
+  const [previewResolveUserId,  setPreviewResolveUserId]  = useState(null); // which preview row has its "Resolve" popover open
+  // Exception request modal: { member:{ userId, userName, memberId?, segmentId?, ...allocation }, conflict, source:'add'|'drawer'|'preview' } | null
+  const [exceptionModal,        setExceptionModal]        = useState(null);
   const [todayLog,      setTodayLog]      = useState(null);
   const [teamView, setTeamView] = useState(() => {
     try { return localStorage.getItem('pm_team_view') || 'list'; } catch { return 'list'; }
@@ -317,13 +540,10 @@ export default function ProjectDetail() {
   useEffect(() => {
     if (!showAllocationPreview) return;
     setPreviewLoading(true);
-    const params = new URLSearchParams();
-    const firstWithDates = (project?.members || []).find(m => m.allocationFrom && m.allocationTo);
-    if (firstWithDates) {
-      params.set('fromDate', firstWithDates.allocationFrom.slice(0, 10));
-      params.set('toDate', firstWithDates.allocationTo.slice(0, 10));
-    }
-    api.get(`/pm/projects/${id}/allocation-preview?${params}`)
+    // No window is sent: the server assesses each member over their own allocation
+    // dates (then the project dates, then the next 30 days). Borrowing one member's
+    // dates for everyone hid real overloads when that member's dates were bad.
+    api.get(`/pm/projects/${id}/allocation-preview`)
       .then(res => setAllocationPreview(res.data?.data ?? []))
       .catch(() => toast.error('Failed to load allocation preview'))
       .finally(() => setPreviewLoading(false));
@@ -332,7 +552,14 @@ export default function ProjectDetail() {
   // Reset allocation preview when navigating to a different project
   useEffect(() => {
     setShowAllocationPreview(false);
+    setExceptionModal(null);
+    setDrawer(null);
   }, [id]);
+
+  // Close any "Resolve" popover whenever the preview modal closes
+  useEffect(() => {
+    if (!showAllocationPreview) setPreviewResolveUserId(null);
+  }, [showAllocationPreview]);
 
   // Batch-fetch cross-project availability for all team members when Team tab is active
   useEffect(() => {
@@ -452,58 +679,177 @@ export default function ProjectDetail() {
     try { await removeMemberApi(id, memberId); toast.success('Member removed'); dispatch(fetchProjectById(id)); bumpUtil(); }
     catch { toast.error('Failed to remove member'); }
   };
+  // Withdraw a pending exception request — the member row reverts (or disappears if it was new).
+  const handleCancelException = async (m) => {
+    // The pending request belongs to ONE segment; fall back to the mirrored member-level id.
+    const seg = memberSegments(m).find(s => s.exceptionStatus === 'pending') || null;
+    const approvalId = seg?.exceptionApprovalId ?? seg?.exceptionApproval?._id ?? seg?.exceptionApproval?.id
+      ?? m.exceptionApprovalId ?? m.exceptionApproval?._id ?? m.exceptionApproval?.id;
+    if (!approvalId) { toast.error('No pending request found for this member'); return; }
+    if (!window.confirm('Withdraw the pending exception request? The allocation goes back to its previous values.')) return;
+    try {
+      await cancelAllocationExceptionApi(approvalId);
+      toast.success('Exception request withdrawn');
+      dispatch(fetchProjectById(id)); bumpUtil();
+    } catch (err) {
+      toast.error(err.response?.data?.message || err.response?.data?.error?.message || 'Failed to withdraw request');
+    }
+  };
 
-  const openEditMember = (m) => {
-    setEditMemberConflict(null);
-    setEditingMemberId(m._id || m.id);
-    setEditMemberForm({
-      role:           m.role           || '',
-      allocationMode: m.allocationMode === 'total' ? 'total' : 'per_day',
-      hoursPerDay:    m.hoursPerDay != null && m.hoursPerDay !== '' ? Number(m.hoursPerDay) : null,
-      allocationTotalHours: m.allocationTotalHours != null && m.allocationTotalHours !== '' ? Number(m.allocationTotalHours) : null,
-      allocationFrom: m.allocationFrom ? m.allocationFrom.slice(0, 10) : null,
-      allocationTo:   m.allocationTo   ? m.allocationTo.slice(0, 10)   : null,
+  // ── Allocation drawer (replaces the old inline edit forms) ─────────────────
+  /** Open the drawer for a project member row (from a card/row click, the grid or the preview modal). */
+  const openDrawer = (m, focusSegmentId = null) => {
+    const memberId = m?._id ?? m?.id ?? m?.memberId;
+    if (!memberId) return;
+    setDrawer({ memberId: String(memberId), focusSegmentId: focusSegmentId ?? null });
+  };
+  const closeDrawer = useCallback(() => setDrawer(null), []);
+  const drawerMember = drawer
+    ? (project?.members || []).find(m => String(m._id ?? m.id) === drawer.memberId) || null
+    : null;
+  /** Any segment write inside the drawer / grid → refresh the project + the utilisation chips. */
+  const handleAllocationChanged = useCallback(() => {
+    dispatch(fetchProjectById(id));
+    setUtilTick(t => t + 1); // bumpUtil
+  }, [dispatch, id]);
+  /** Role edited from the drawer header — the member row keeps role/responsibilities only. */
+  const handleDrawerRoleChange = async (role) => {
+    if (!drawerMember) return;
+    try {
+      await updateMemberApi(id, drawerMember._id ?? drawerMember.id, { role: role || null });
+      toast.success('Role updated');
+      handleAllocationChanged();
+    } catch (err) {
+      toast.error(err.response?.data?.message || err.response?.data?.error?.message || 'Failed to update role');
+    }
+  };
+  /** Grid → drawer. The grid row carries memberId/userId; resolve it to the project member row. */
+  const openDrawerFromGrid = (row) => {
+    const rowId = row?.memberId ?? row?._id ?? row?.id;
+    const m = (project?.members || []).find(pm =>
+      (rowId && String(pm._id ?? pm.id) === String(rowId)) || (row?.userId && String(pm.userId) === String(row.userId)));
+    if (m) openDrawer(m);
+  };
+
+  // ── Allocation exceptions ───────────────────────────────────────────────────
+  const userNameById = (uid) => {
+    const u = allUsers.find(x => String(x._id ?? x.id) === String(uid));
+    return u?.name || (project?.members || []).find(m => String(m.userId) === String(uid))?.user?.name || 'Team member';
+  };
+
+  /** Open the modal for the ADD form (new member, no memberId yet). */
+  const requestExceptionFromAdd = (conflict) => {
+    if (!memberForm.userId) return toast.error('Select a user first');
+    const mode = memberForm.allocationMode === 'total' ? 'total' : 'per_day';
+    setExceptionModal({
+      source: 'add',
+      conflict: conflict || memberConflict || null,
+      member: {
+        userId:   memberForm.userId,
+        userName: userNameById(memberForm.userId),
+        role:     memberForm.role || undefined,
+        allocationMode: mode,
+        // For 'total' mode show the derived hrs/day; the POST sends allocationTotalHours
+        hoursPerDay: mode === 'per_day' ? memberForm.hoursPerDay : memberDerived.hoursPerDay,
+        allocationTotalHours: mode === 'total' ? memberForm.allocationTotalHours : null,
+        allocationFrom: memberForm.allocationFrom || null,
+        allocationTo:   memberForm.allocationTo   || null,
+      },
     });
   };
-  const closeEditMember = () => {
-    setEditMemberConflict(null);
-    setEditingMemberId(null);
-  };
-  const setEditMemberField = (patch) => {
-    setEditMemberConflict(null); // any input change clears the conflict line
-    setEditMemberForm(f => ({ ...f, ...patch }));
+
+  /**
+   * Open the modal for an EXISTING member row on ONE segment (period).
+   *   segment — { _id|segmentId, fromDate, toDate, allocationMode, hoursPerDay, allocationTotalHours }
+   *             (the drawer passes an unsaved draft too — its values win over the saved row).
+   *   Without a segment the member's mirrored summary is used (older rows).
+   */
+  const requestExceptionForMember = (m, conflict, segment = null, source = 'preview') => {
+    const seg = segment || memberSegments(m)[0] || null;
+    const f = {
+      role:           m.role || '',
+      allocationMode: (seg?.allocationMode ?? m.allocationMode) === 'total' ? 'total' : 'per_day',
+      hoursPerDay:    seg?.hoursPerDay ?? m.hoursPerDay,
+      allocationTotalHours: seg?.allocationTotalHours ?? m.allocationTotalHours,
+      allocationFrom: isoDay(seg?.fromDate ?? seg?.allocationFrom ?? m.allocationFrom),
+      allocationTo:   isoDay(seg?.toDate   ?? seg?.allocationTo   ?? m.allocationTo),
+    };
+    const mode = f.allocationMode;
+    const segmentId = seg?._id ?? seg?.segmentId ?? seg?.id ?? null;
+    setExceptionModal({
+      source,
+      conflict: conflict || null,
+      member: {
+        userId:   m.userId,
+        userName: m.user?.name || m.name || userNameById(m.userId),
+        memberId: m._id ?? m.id ?? undefined,
+        segmentId: segmentId || undefined,
+        role:     f.role || undefined,
+        allocationMode: mode,
+        hoursPerDay: f.hoursPerDay,
+        allocationTotalHours: mode === 'total' ? f.allocationTotalHours : null,
+        allocationFrom: f.allocationFrom || null,
+        allocationTo:   f.allocationTo   || null,
+      },
+    });
   };
 
-  const handleUpdateMember = async (memberId) => {
-    try {
-      const mode = editMemberForm.allocationMode === 'total' ? 'total' : 'per_day';
-      await updateMemberApi(id, memberId, {
-        // Include role so it can be changed after a member is added
-        ...(editMemberForm.role ? { role: editMemberForm.role } : {}),
-        allocationMode: mode,
-        // Explicit null/'' check — 0.5 is a valid hoursPerDay and must not be coerced to null
-        hoursPerDay:    mode === 'per_day' && editMemberForm.hoursPerDay != null && editMemberForm.hoursPerDay !== ''
-          ? Number(editMemberForm.hoursPerDay)
-          : null,
-        allocationTotalHours: mode === 'total' && editMemberForm.allocationTotalHours != null && editMemberForm.allocationTotalHours !== ''
-          ? Number(editMemberForm.allocationTotalHours)
-          : null,
-        allocationFrom: editMemberForm.allocationFrom || null,
-        allocationTo:   editMemberForm.allocationTo   || null,
-      });
-      toast.success('Member updated');
-      setEditMemberConflict(null);
-      setEditingMemberId(null);
-      dispatch(fetchProjectById(id));
-      bumpUtil();
-    } catch (err) {
-      if (err.response?.status === 409) {
-        toast.error(err.response.data?.message || 'Allocation exceeds capacity');
-        setEditMemberConflict(err.response.data?.conflict || null);
-        return; // keep the inline form open
-      }
-      toast.error(err.response?.data?.message || 'Failed to update allocation');
+  /** Server accepted the request → the segment now carries exceptionStatus 'pending'. */
+  const handleExceptionRequested = () => {
+    const src = exceptionModal?.source;
+    setExceptionModal(null);
+    if (src === 'add') {
+      setMemberForm({ userId: '', role: '', allocationMode: 'per_day', hoursPerDay: null, allocationTotalHours: null, allocationFrom: null, allocationTo: null });
+      setMemberConflict(null);
+      setAddingMember(false);
     }
+    if (src === 'preview') { setPreviewResolveUserId(null); setShowAllocationPreview(false); }
+    // 'drawer' → the drawer loads its segments only on open, so close it; the row
+    // now shows the pending chip and re-opening reloads the periods.
+    if (src === 'drawer') setDrawer(null);
+    dispatch(fetchProjectById(id));
+    bumpUtil();
+  };
+
+  /**
+   * Suggestion set for a preview row. Prefers the server's `suggestions`
+   * (if the preview endpoint carries them) and otherwise derives a best-effort
+   * set from the row's conflict ranges.
+   */
+  const previewSuggestionsFor = (member, cap) => {
+    if (member.suggestions) return conflictSuggestions({ suggestions: member.suggestions, remaining: member.remaining });
+    const peak  = Number(member.peakHours) || 0;
+    const mine  = Number(member.hoursPerDay) || 0;
+    const ranges = (member.conflicts || []).slice().sort((a, b) => new Date(a.from) - new Date(b.from));
+    const shiftDay = (iso, delta) => {
+      const d = new Date(String(iso).slice(0, 10)); d.setDate(d.getDate() + delta);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    };
+    const remaining = Math.max(0, Math.floor((cap - (peak - mine)) * 2) / 2);
+    const first = ranges[0]; const last = ranges[ranges.length - 1];
+    // Works for a member line (allocationFrom/To) and a segment line (fromDate/toDate)
+    const from = isoDay(member.allocationFrom ?? member.fromDate);
+    const to   = isoDay(member.allocationTo   ?? member.toDate);
+    const shortenTo    = first && from && shiftDay(first.from, -1) >= from ? shiftDay(first.from, -1) : null;
+    const nextFreeDate = last && to && shiftDay(last.to, 1) <= to ? shiftDay(last.to, 1) : (last ? shiftDay(last.to, 1) : null);
+    return {
+      reduceTo: remaining > 0 && remaining < mine ? remaining : null,
+      nextFreeDate,
+      shortenTo,
+      overloadHours: Math.max(0, peak - cap) || null,
+    };
+  };
+
+  /**
+   * "Resolve" in the preview modal → open the allocation drawer for that member
+   * on the conflicting segment (there is no inline form any more; the change is
+   * applied inside the drawer).
+   */
+  const resolvePreviewInDrawer = (memberRow, segmentId = null) => {
+    setShowAllocationPreview(false);
+    setPreviewResolveUserId(null);
+    setActiveTab('team');
+    openDrawer(memberRow, segmentId);
   };
 
   // ── Edit project ────────────────────────────────────────────────────────────
@@ -665,7 +1011,7 @@ export default function ProjectDetail() {
   const total      = topMs.length || milestones.length;
   const completedMs= milestones.filter(m => m.status === 'completed').length;
   const delayedMs  = milestones.filter(m => m.status === 'delayed' || (m.plannedEndDate && m.plannedEndDate < today && m.status !== 'completed')).length;
-  const pct        = total > 0 ? Math.round((completedMs / total) * 100) : 0;
+  const pct        = projectProgress(milestones);   // weighted; subs roll up server-side
 
   const TABS = [
     { id: 'overview',       label: 'Overview',                   icon: HiOutlineChartBar },
@@ -863,17 +1209,30 @@ export default function ProjectDetail() {
               )}
             </div>
             <div className="flex items-center gap-2">
-              {/* Card / List view toggle */}
-              <div className="flex items-center rounded-md border border-gray-200 overflow-hidden">
-                <button onClick={() => handleTeamViewToggle('list')} title="List view"
-                  className={`px-2.5 py-1.5 text-sm transition ${teamView === 'list' ? 'bg-gray-100 text-gray-900' : 'text-gray-400 hover:text-gray-600'}`}>
-                  ☰
+              {/* List (members) | Grid (person × month) */}
+              <div className="flex items-center rounded-md border border-gray-200 overflow-hidden text-xs font-medium" role="tablist" aria-label="Team view">
+                <button onClick={() => handleTeamModeToggle('list')} role="tab" aria-selected={teamMode === 'list'}
+                  className={`px-3 py-1.5 transition ${teamMode === 'list' ? 'bg-emerald-600 text-white' : 'text-gray-500 hover:text-gray-700'}`}>
+                  List
                 </button>
-                <button onClick={() => handleTeamViewToggle('card')} title="Card view"
-                  className={`px-2.5 py-1.5 text-sm transition ${teamView === 'card' ? 'bg-gray-100 text-gray-900' : 'text-gray-400 hover:text-gray-600'}`}>
-                  ⊞
+                <button onClick={() => handleTeamModeToggle('grid')} role="tab" aria-selected={teamMode === 'grid'}
+                  className={`px-3 py-1.5 transition ${teamMode === 'grid' ? 'bg-emerald-600 text-white' : 'text-gray-500 hover:text-gray-700'}`}>
+                  Grid
                 </button>
               </div>
+              {/* Card / List layout toggle (list mode only) */}
+              {teamMode === 'list' && (
+                <div className="flex items-center rounded-md border border-gray-200 overflow-hidden">
+                  <button onClick={() => handleTeamViewToggle('list')} title="List view"
+                    className={`px-2.5 py-1.5 text-sm transition ${teamView === 'list' ? 'bg-gray-100 text-gray-900' : 'text-gray-400 hover:text-gray-600'}`}>
+                    ☰
+                  </button>
+                  <button onClick={() => handleTeamViewToggle('card')} title="Card view"
+                    className={`px-2.5 py-1.5 text-sm transition ${teamView === 'card' ? 'bg-gray-100 text-gray-900' : 'text-gray-400 hover:text-gray-600'}`}>
+                    ⊞
+                  </button>
+                </div>
+              )}
               <button
                 onClick={() => setShowAllocationPreview(true)}
                 className="text-sm text-emerald-600 hover:text-emerald-700 flex items-center gap-1.5 font-medium"
@@ -959,7 +1318,8 @@ export default function ProjectDetail() {
               <ConflictPanel
                 conflict={memberConflict}
                 capacity={capacity}
-                onUseRemaining={(h) => { setMemberForm(f => ({ ...f, allocationMode: 'per_day', hoursPerDay: h, allocationTotalHours: null })); setMemberConflict(null); }}
+                onApply={(patch) => { setMemberForm(f => ({ ...f, ...patch })); setMemberConflict(null); }}
+                onRequestException={() => requestExceptionFromAdd(memberConflict)}
               />
               {/* Availability card — shows when a person is selected */}
               {memberForm.userId && (
@@ -976,10 +1336,20 @@ export default function ProjectDetail() {
                       if (suggestion.type === 'shift_dates' && suggestion.suggestedFromDate) {
                         setMemberField({ allocationFrom: suggestion.suggestedFromDate });
                       }
-                      if (suggestion.type === 'request_approval' && suggestion.targetProjectName) {
-                        toast(`Contact the manager of "${suggestion.targetProjectName}" to release capacity first.`);
-                      }
                     }}
+                    // request_approval → open the exception modal (C8). The card's numbers
+                    // become a synthetic `conflict` so the modal can show peak vs capacity.
+                    onRequestException={(ctx) => requestExceptionFromAdd({
+                      ...(memberConflict || {}),
+                      capacity:  ctx.capacity,
+                      peak:      ctx.projectedPeak,
+                      remaining: ctx.freeHours,
+                      suggestions: {
+                        ...(memberConflict?.suggestions || {}),
+                        overloadHours: Math.max(0, (Number(ctx.projectedPeak) || 0) - (Number(ctx.capacity) || 0)),
+                        ...(ctx.nextFreeDate && !memberConflict?.suggestions?.nextFreeDate ? { nextFreeDate: ctx.nextFreeDate } : {}),
+                      },
+                    })}
                   />
                 </div>
               )}
@@ -1047,14 +1417,34 @@ export default function ProjectDetail() {
 
           {members.length === 0 ? (
             <div className="p-8 text-center text-gray-400 text-sm">No team members assigned</div>
+          ) : teamMode === 'grid' ? (
+            /* ── Person × month grid ── */
+            <div className="p-5">
+              <AllocationGrid
+                projectId={id}
+                project={project}
+                capacity={capacity}
+                canManage={canManage}
+                onOpenMember={(memberRow) => openDrawerFromGrid(memberRow)}
+              />
+            </div>
           ) : teamView === 'card' ? (
             /* ── Card view ── */
             <div className="p-5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
               {members.map(m => {
                 const mid = m._id || m.id;
-                const isEditing = editingMemberId === mid;
+                const isPendingException = memberHasPendingException(m); // read-only until decided
+                const hasAllocation = memberSegments(m).length > 0;
                 return (
-                  <div key={mid} className="bg-white border border-gray-200 rounded-xl p-4 hover:shadow-md transition">
+                  <div
+                    key={mid}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => openDrawer(m)}
+                    onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDrawer(m); } }}
+                    title="Open allocation"
+                    className={`bg-white border rounded-xl p-4 hover:shadow-md transition cursor-pointer focus:outline-none focus:ring-2 focus:ring-emerald-500 ${isPendingException ? 'border-amber-200 bg-amber-50/30' : 'border-gray-200'}`}
+                  >
                     {/* Header: avatar + name + role */}
                     <div className="flex items-start justify-between mb-3">
                       <div className="flex items-center gap-3">
@@ -1064,57 +1454,48 @@ export default function ProjectDetail() {
                         <div>
                           <p className="font-medium text-gray-900 text-sm">{m.user?.name || 'Unknown'}</p>
                           <p className="text-xs text-gray-500">{m.role || m.user?.role?.replace(/_/g, ' ')}</p>
+                          <ExceptionChip member={m} compact />
                         </div>
                       </div>
-                      {canManage && (
-                        <div className="flex gap-1.5 flex-shrink-0">
+                      {canManage && !isPendingException && (
+                        <div className="flex gap-2 flex-shrink-0" onClick={e => e.stopPropagation()}>
                           <button
-                            onClick={() => isEditing ? closeEditMember() : openEditMember(m)}
-                            className="text-xs text-blue-500 hover:text-blue-700 transition-colors"
-                            title="Edit allocation"
+                            type="button"
+                            onClick={() => openDrawer(m)}
+                            className="text-xs text-blue-600 hover:text-blue-800 transition-colors"
+                            title="Manage allocation periods"
                           >
-                            {isEditing ? 'Cancel' : '✏'}
+                            Manage
                           </button>
-                          <button onClick={() => handleRemoveMember(mid)} className="text-xs text-red-500 hover:text-red-700 transition-colors" title="Remove">✕</button>
+                          <button type="button" onClick={() => handleRemoveMember(mid)} className="text-xs text-red-500 hover:text-red-700 transition-colors" title="Remove">✕</button>
                         </div>
                       )}
-                    </div>
-
-                    {/* Allocation bar */}
-                    <div className="mb-3">
-                      {(m.hoursPerDay != null || m.allocationTotalHours != null) ? (
-                        <>
-                          <div className="flex items-center justify-between text-xs text-gray-500 mb-1">
-                            <span>Allocation</span>
-                            <span className="flex items-center gap-1.5">
-                              <span className="font-medium text-gray-700">{formatAllocation(m, capacity)}</span>
-                              {(m.hoursConfirmed === false || m.isEstimated) && (
-                                <>
-                                  <span className="px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 text-[10px] font-medium">estimated</span>
-                                  {canManage && (
-                                    <button onClick={() => handleConfirmHours(mid)} className="text-[10px] text-blue-600 hover:text-blue-800 underline" title="Confirm these hours">Confirm</button>
-                                  )}
-                                </>
-                              )}
-                            </span>
-                          </div>
-                          <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                            <div className={`h-full rounded-full transition-all ${(Number(m.hoursPerDay) || 0) / capacity > 0.8 ? 'bg-amber-500' : 'bg-emerald-500'}`}
-                              style={{ width: `${Math.min((Number(m.hoursPerDay) || 0) / capacity, 1) * 100}%` }} />
-                          </div>
-                        </>
-                      ) : (
-                        <span className="text-xs text-gray-400 italic">No allocation data</span>
+                      {canManage && isPendingException && (
+                        <span className="text-[10px] text-amber-700 flex-shrink-0 flex items-center gap-2" title="Locked while the exception request is pending" onClick={e => e.stopPropagation()}>
+                          🔒 awaiting approval
+                          <button type="button" onClick={() => handleCancelException(m)} className="underline hover:text-amber-900">Withdraw</button>
+                        </span>
                       )}
                     </div>
 
-                    {/* Duration */}
-                    {(m.allocationFrom || m.allocationTo) && (
-                      <div className="text-xs text-gray-500 flex items-center gap-1">
-                        <span>📅</span>
-                        <span>{m.allocationFrom?.slice(0, 10) || '?'} → {m.allocationTo?.slice(0, 10) || 'ongoing'}</span>
+                    {/* Allocation — segment timeline + summary */}
+                    <div className="mb-3">
+                      <div className="flex items-center justify-between text-xs text-gray-500 mb-1 gap-2">
+                        <span>Allocation</span>
+                        <span className="flex items-center gap-1.5 min-w-0">
+                          <span className={`font-medium truncate ${hasAllocation ? 'text-gray-700' : 'text-gray-400 italic'}`}>{segmentSummary(m)}</span>
+                          {hasAllocation && memberHasEstimate(m) && (
+                            <>
+                              <span className="px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 text-[10px] font-medium">estimated</span>
+                              {canManage && !isPendingException && (
+                                <button type="button" onClick={e => { e.stopPropagation(); handleConfirmHours(mid); }} className="text-[10px] text-blue-600 hover:text-blue-800 underline" title="Confirm all periods">Confirm</button>
+                              )}
+                            </>
+                          )}
+                        </span>
                       </div>
-                    )}
+                      <SegmentTimeline member={m} project={project} />
+                    </div>
 
                     {/* Designation */}
                     {m.user?.designation && (
@@ -1194,80 +1575,6 @@ export default function ProjectDetail() {
                         <MonthUtilChip cell={teamUtil[String(m.userId)]} loading={utilLoading} month={utilMonth} compact />
                       </div>
                     )}
-
-                    {/* Inline allocation edit form */}
-                    {isEditing && (
-                      <div className="mt-3 bg-blue-50 border border-blue-100 rounded-lg p-3">
-                        <p className="text-xs font-semibold text-blue-700 mb-2">Edit {m.user?.name}</p>
-                        <div className="grid grid-cols-1 gap-2">
-                          <div>
-                            <label className="text-xs text-gray-600 block mb-1">Role</label>
-                            <select
-                              value={editMemberForm.role || ''}
-                              onChange={e => setEditMemberField({ role: e.target.value })}
-                              className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"
-                            >
-                              <option value="">Select role…</option>
-                              {memberRoles.map(r => <option key={r.name} value={r.name}>{r.name}</option>)}
-                            </select>
-                          </div>
-                          <div>
-                            <AllocationTypeInput
-                              compact
-                              value={editMemberForm}
-                              onChange={next => setEditMemberField({
-                                allocationMode:       next.allocationMode,
-                                hoursPerDay:          next.hoursPerDay ?? null,
-                                allocationTotalHours: next.allocationTotalHours ?? null,
-                              })}
-                              from={editMemberForm.allocationFrom || null}
-                              to={editMemberForm.allocationTo || null}
-                              capacity={capacity}
-                              defaultMode="per_day"
-                            />
-                          </div>
-                          <div>
-                            <label className="text-xs text-gray-600 block mb-1">From Date</label>
-                            <input
-                              type="date"
-                              value={editMemberForm.allocationFrom || ''}
-                              onChange={e => setEditMemberField({ allocationFrom: e.target.value || null })}
-                              className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"
-                            />
-                          </div>
-                          <div>
-                            <label className="text-xs text-gray-600 block mb-1">To Date</label>
-                            <input
-                              type="date"
-                              value={editMemberForm.allocationTo || ''}
-                              onChange={e => setEditMemberField({ allocationTo: e.target.value || null })}
-                              className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"
-                            />
-                          </div>
-                        </div>
-                        {/* 409 conflict — compact inline version */}
-                        <ConflictPanel
-                          compact
-                          conflict={editMemberConflict}
-                          capacity={capacity}
-                          onUseRemaining={(h) => { setEditMemberForm(f => ({ ...f, allocationMode: 'per_day', hoursPerDay: h, allocationTotalHours: null })); setEditMemberConflict(null); }}
-                        />
-                        <div className="flex gap-2 mt-2">
-                          <button
-                            onClick={() => handleUpdateMember(mid)}
-                            className="px-3 py-1.5 bg-emerald-600 text-white rounded text-xs font-medium hover:bg-emerald-700"
-                          >
-                            Save
-                          </button>
-                          <button
-                            onClick={closeEditMember}
-                            className="px-3 py-1.5 text-gray-500 hover:bg-gray-100 rounded text-xs"
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      </div>
-                    )}
                   </div>
                 );
               })}
@@ -1277,43 +1584,44 @@ export default function ProjectDetail() {
             <div className="divide-y divide-gray-50">
               {members.map((m, idx) => {
                 const mid = m._id || m.id;
-                const isEditing = editingMemberId === mid;
+                const isPendingException = memberHasPendingException(m); // read-only until decided
+                const hasAllocation = memberSegments(m).length > 0;
                 return (
-                  <div key={mid} className={`px-5 py-3 ${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}`}>
+                  <div
+                    key={mid}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => openDrawer(m)}
+                    onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDrawer(m); } }}
+                    title="Open allocation"
+                    className={`px-5 py-3 cursor-pointer hover:bg-emerald-50/40 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-emerald-500 ${isPendingException ? 'bg-amber-50/40' : idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}`}
+                  >
                     <div className="flex items-center gap-4">
                       <div className="w-9 h-9 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center text-sm font-bold flex-shrink-0">
                         {m.user?.name?.charAt(0).toUpperCase() || '?'}
                       </div>
                       <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium text-gray-900">{m.user?.name}</p>
+                        <p className="text-sm font-medium text-gray-900 flex items-center gap-2 flex-wrap">
+                          {m.user?.name}
+                          <ExceptionChip member={m} compact />
+                        </p>
                         <p className="text-xs text-gray-500">{m.user?.email} · {m.user?.role?.replace(/_/g, ' ')}</p>
                         {m.role && <p className="text-xs text-emerald-700 mt-0.5">{m.role}</p>}
                       </div>
-                      <div className="text-right flex-shrink-0 min-w-[120px]">
-                        {(m.hoursPerDay != null || m.allocationTotalHours != null) ? (
-                          <>
-                            <span className="text-sm font-semibold text-emerald-700">{formatAllocation(m, capacity)}</span>
-                            {(m.hoursConfirmed === false || m.isEstimated) && (
-                              <div className="flex items-center justify-end gap-1 mt-0.5">
-                                <span className="px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 text-[10px] font-medium">estimated</span>
-                                {canManage && (
-                                  <button onClick={() => handleConfirmHours(mid)} className="text-[10px] text-blue-600 hover:text-blue-800 underline" title="Confirm these hours">Confirm</button>
-                                )}
-                              </div>
-                            )}
-                            <div className="mt-1 h-1.5 bg-gray-100 rounded-full overflow-hidden w-24 ml-auto">
-                              <div className={`h-full rounded-full ${(Number(m.hoursPerDay) || 0) / capacity > 0.8 ? 'bg-amber-500' : 'bg-emerald-500'}`}
-                                style={{ width: `${Math.min((Number(m.hoursPerDay) || 0) / capacity, 1) * 100}%` }} />
-                            </div>
-                          </>
-                        ) : (
-                          <span className="text-xs text-gray-400 italic">No data</span>
-                        )}
-                        {m.allocationFrom && m.allocationTo && (
-                          <div className="text-xs text-gray-400 mt-0.5">
-                            {m.allocationFrom.slice(0, 10)} – {m.allocationTo.slice(0, 10)}
-                          </div>
-                        )}
+                      {/* Segment timeline + summary */}
+                      <div className="flex-shrink-0 w-56 text-right">
+                        <div className="flex items-center justify-end gap-1.5 mb-1 min-w-0">
+                          <span className={`text-xs font-semibold truncate ${hasAllocation ? 'text-emerald-700' : 'text-gray-400 italic font-normal'}`}>{segmentSummary(m)}</span>
+                          {hasAllocation && memberHasEstimate(m) && (
+                            <>
+                              <span className="px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 text-[10px] font-medium">estimated</span>
+                              {canManage && !isPendingException && (
+                                <button type="button" onClick={e => { e.stopPropagation(); handleConfirmHours(mid); }} className="text-[10px] text-blue-600 hover:text-blue-800 underline" title="Confirm all periods">Confirm</button>
+                              )}
+                            </>
+                          )}
+                        </div>
+                        <SegmentTimeline member={m} project={project} compact />
                         {m.allocationStatus && m.allocationStatus !== 'active' && (
                           <div className={`mt-1 inline-block px-1.5 py-0.5 rounded-full text-xs font-medium ${
                             m.allocationStatus === 'pending' ? 'bg-amber-100 text-amber-700' :
@@ -1361,99 +1669,48 @@ export default function ProjectDetail() {
                         <p className="text-xs text-gray-400 mb-1">{monthLabel(utilMonth)}</p>
                         <MonthUtilChip cell={teamUtil[String(m.userId)]} loading={utilLoading} month={utilMonth} compact />
                       </div>
-                      {canManage && (
-                        <div className="flex gap-2 flex-shrink-0">
+                      {canManage && !isPendingException && (
+                        <div className="flex gap-2 flex-shrink-0" onClick={e => e.stopPropagation()}>
                           <button
-                            onClick={() => isEditing ? closeEditMember() : openEditMember(m)}
-                            className="text-xs text-blue-500 hover:text-blue-700 transition-colors"
-                            title="Edit allocation"
+                            type="button"
+                            onClick={() => openDrawer(m)}
+                            className="text-xs text-blue-600 hover:text-blue-800 transition-colors whitespace-nowrap"
+                            title="Manage allocation periods"
                           >
-                            {isEditing ? 'Cancel' : '✏ Edit'}
+                            Manage allocation
                           </button>
-                          <button onClick={() => handleRemoveMember(mid)} className="text-xs text-red-500 hover:text-red-700 transition-colors">Remove</button>
+                          <button type="button" onClick={() => handleRemoveMember(mid)} className="text-xs text-red-500 hover:text-red-700 transition-colors">Remove</button>
                         </div>
                       )}
+                      {canManage && isPendingException && (
+                        <span className="text-[10px] text-amber-700 flex-shrink-0 whitespace-nowrap flex items-center gap-2" title="Locked while the exception request is pending" onClick={e => e.stopPropagation()}>
+                          🔒 awaiting approval
+                          <button type="button" onClick={() => handleCancelException(m)} className="underline hover:text-amber-900">Withdraw</button>
+                        </span>
+                      )}
                     </div>
-
-                    {/* Inline allocation edit form */}
-                    {isEditing && (
-                      <div className="mt-3 ml-13 pl-13 bg-blue-50 border border-blue-100 rounded-lg p-3">
-                        <p className="text-xs font-semibold text-blue-700 mb-2">Edit {m.user?.name}</p>
-                        <div className="grid grid-cols-[1fr_1.6fr_1fr_1fr] gap-2">
-                          <div>
-                            <label className="text-xs text-gray-600 block mb-1">Role</label>
-                            <select
-                              value={editMemberForm.role || ''}
-                              onChange={e => setEditMemberField({ role: e.target.value })}
-                              className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"
-                            >
-                              <option value="">Select role…</option>
-                              {memberRoles.map(r => <option key={r.name} value={r.name}>{r.name}</option>)}
-                            </select>
-                          </div>
-                          <div>
-                            <AllocationTypeInput
-                              compact
-                              value={editMemberForm}
-                              onChange={next => setEditMemberField({
-                                allocationMode:       next.allocationMode,
-                                hoursPerDay:          next.hoursPerDay ?? null,
-                                allocationTotalHours: next.allocationTotalHours ?? null,
-                              })}
-                              from={editMemberForm.allocationFrom || null}
-                              to={editMemberForm.allocationTo || null}
-                              capacity={capacity}
-                              defaultMode="per_day"
-                            />
-                          </div>
-                          <div>
-                            <label className="text-xs text-gray-600 block mb-1">From Date</label>
-                            <input
-                              type="date"
-                              value={editMemberForm.allocationFrom || ''}
-                              onChange={e => setEditMemberField({ allocationFrom: e.target.value || null })}
-                              className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"
-                            />
-                          </div>
-                          <div>
-                            <label className="text-xs text-gray-600 block mb-1">To Date</label>
-                            <input
-                              type="date"
-                              value={editMemberForm.allocationTo || ''}
-                              onChange={e => setEditMemberField({ allocationTo: e.target.value || null })}
-                              className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"
-                            />
-                          </div>
-                        </div>
-                        {/* 409 conflict — compact inline version */}
-                        <ConflictPanel
-                          compact
-                          conflict={editMemberConflict}
-                          capacity={capacity}
-                          onUseRemaining={(h) => { setEditMemberForm(f => ({ ...f, allocationMode: 'per_day', hoursPerDay: h, allocationTotalHours: null })); setEditMemberConflict(null); }}
-                        />
-                        <div className="flex gap-2 mt-2">
-                          <button
-                            onClick={() => handleUpdateMember(mid)}
-                            className="px-3 py-1.5 bg-emerald-600 text-white rounded text-xs font-medium hover:bg-emerald-700"
-                          >
-                            Save
-                          </button>
-                          <button
-                            onClick={closeEditMember}
-                            className="px-3 py-1.5 text-gray-500 hover:bg-gray-100 rounded text-xs"
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      </div>
-                    )}
                   </div>
                 );
               })}
             </div>
           )}
         </div>
+
+        {/* ═══ ALLOCATION DRAWER (segments / periods of one member) ═══════════ */}
+        <AllocationDrawer
+          open={!!drawer && !!drawerMember}
+          onClose={closeDrawer}
+          projectId={id}
+          project={project}
+          member={drawerMember}
+          capacity={capacity}
+          canManage={canManage}
+          memberRoles={memberRoles}
+          focusSegmentId={drawer?.focusSegmentId ?? null}
+          onRoleChange={handleDrawerRoleChange}
+          onRequestException={(segment, conflict) => drawerMember && requestExceptionForMember(drawerMember, conflict, segment, 'drawer')}
+          onChanged={handleAllocationChanged}
+        />
         </>
       )}
 
@@ -1538,7 +1795,14 @@ export default function ProjectDetail() {
                               <div className="flex-1 min-w-0">
                                 <p className="text-sm text-gray-800">{s.name}</p>
                                 <div className="flex flex-wrap items-center gap-3 mt-0.5 text-xs text-gray-400">
-                                  {s.weightPercentage != null && <span>{s.weightPercentage}%</span>}
+                                  {s.weightPercentage != null && (
+                                    <span title="Equal share of the milestone, set automatically">
+                                      {m.weightPercentage != null
+                                        ? `${Math.round(Number(m.weightPercentage) * Number(s.weightPercentage)) / 100}% of project · `
+                                        : ''}
+                                      {Number(s.weightPercentage)}% of milestone
+                                    </span>
+                                  )}
                                   {s.plannedStartDate && <span>{fmtDate(s.plannedStartDate)}</span>}
                                   {s.plannedEndDate && <span className={sDelayed ? 'text-red-500' : ''}>→ {fmtDate(s.plannedEndDate)}</span>}
                                   {(s.actualStartDate || s.actualEndDate) && (
@@ -2116,6 +2380,27 @@ export default function ProjectDetail() {
                     .sort((a, b) => new Date(b) - new Date(a))[0];
                   const memberName  = member.name  ?? member.user?.name;
                   const memberEmail = member.email ?? member.user?.email;
+                  // The project member row (has _id / exceptionStatus) behind this preview line
+                  const memberRow   = (project?.members || []).find(pm => String(pm.userId) === String(member.userId)) || null;
+                  const hasConflict = isOverloaded || (member.conflicts || []).length > 0;
+                  const canResolve  = canManage && hasConflict && memberRow && !memberHasPendingException(memberRow);
+                  const resolveOpen = previewResolveUserId != null && String(previewResolveUserId) === String(member.userId);
+                  const rowSugg     = canResolve ? previewSuggestionsFor(member, cap) : null;
+                  // Synthetic conflict block for the exception modal (mirrors the 409 shape)
+                  const toConflict = (line, sugg) => ({
+                    capacity: cap, peak: Number(line.peakHours) || peak,
+                    overDays: (line.conflicts || []).reduce((s, c) => s + (Number(c.days) || 0), 0),
+                    ranges: (line.conflicts || []).map(c => ({ from: c.from, to: c.to, peak: c.peak, days: c.days })),
+                    remaining: sugg?.reduceTo ?? null,
+                    suggestions: sugg,
+                    canRequestException: true,
+                  });
+                  const rowConflict = canResolve ? toConflict(member, rowSugg) : null;
+                  // Per-segment preview lines (newer servers). Each: { segmentId, fromDate, toDate,
+                  // hoursPerDay, peakHours, isOverAllocated, overOnItsOwn, suggestions, conflicts }
+                  const segLines = Array.isArray(member.segments) ? member.segments : [];
+                  const segRowOf = (sl) => memberSegments(memberRow).find(s => String(s._id) === String(sl.segmentId)) || { _id: sl.segmentId, ...sl };
+                  const conflictedSegs = segLines.filter(sl => sl.isOverAllocated || (sl.conflicts || []).length > 0);
 
                   return (
                     <div key={member.userId} className={`rounded-lg border p-4 ${borderCls}`}>
@@ -2126,11 +2411,14 @@ export default function ProjectDetail() {
                             {memberName?.charAt(0).toUpperCase() || '?'}
                           </div>
                           <div>
-                            <p className="text-sm font-semibold text-gray-900">{memberName}</p>
+                            <p className="text-sm font-semibold text-gray-900 flex items-center gap-2 flex-wrap">
+                              {memberName}
+                              {memberRow && <ExceptionChip member={memberRow} compact />}
+                            </p>
                             <p className="text-xs text-gray-500">{memberEmail}</p>
                           </div>
                         </div>
-                        <div className="text-right flex-shrink-0">
+                        <div className="text-right flex-shrink-0 flex items-center gap-2">
                           {isUnset ? (
                             <span className="inline-block px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-700">⚠ Allocation not set</span>
                           ) : isOverloaded ? (
@@ -2140,8 +2428,68 @@ export default function ProjectDetail() {
                           ) : (
                             <span className="inline-block px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-700">✅ {fmtH(peak)}h / {fmtH(cap)}h</span>
                           )}
+                          {canResolve && (
+                            <button
+                              type="button"
+                              onClick={() => setPreviewResolveUserId(resolveOpen ? null : member.userId)}
+                              className={`px-2.5 py-1 rounded text-xs font-medium border transition-colors ${resolveOpen ? 'bg-red-600 text-white border-red-600' : 'bg-white text-red-700 border-red-300 hover:bg-red-100'}`}
+                              aria-expanded={resolveOpen}
+                            >
+                              {resolveOpen ? 'Close' : 'Resolve'}
+                            </button>
+                          )}
                         </div>
                       </div>
+
+                      {/* Resolve popover — one block per conflicting period; every option opens the drawer on that period */}
+                      {canResolve && resolveOpen && (
+                        <div className="mb-3 bg-white border border-red-200 rounded-lg px-3 py-2.5 text-xs text-gray-700">
+                          <p className="font-semibold text-red-700">
+                            Resolve for {memberName}
+                            {rowSugg?.overloadHours != null && rowSugg.overloadHours > 0 && (
+                              <span className="font-normal text-red-600"> · +{fmtH(rowSugg.overloadHours)}h over on the busiest day</span>
+                            )}
+                          </p>
+                          <p className="text-gray-500 mt-0.5">Pick an option to open this member's allocation on that period — apply the change there, or request an exception.</p>
+                          {conflictedSegs.length > 0 ? (
+                            <div className="mt-2 space-y-2">
+                              {conflictedSegs.map((sl, i) => {
+                                const sugg = previewSuggestionsFor({ ...sl, remaining: sl.remaining }, cap);
+                                return (
+                                  <div key={sl.segmentId ?? i} className="border-t border-red-100 pt-2">
+                                    <p className="font-medium text-gray-800">
+                                      {fmtRangeDate(sl.fromDate)} – {fmtRangeDate(sl.toDate)} · {fmtH(sl.hoursPerDay)} h/day
+                                      <span className="font-normal text-red-600"> · peak {fmtH(sl.peakHours)}h / {fmtH(cap)}h</span>
+                                    </p>
+                                    <SuggestionButtons
+                                      suggestions={sugg}
+                                      onApply={() => resolvePreviewInDrawer(memberRow, sl.segmentId)}
+                                      onRequestException={() => { setPreviewResolveUserId(null); requestExceptionForMember(memberRow, toConflict(sl, sugg), segRowOf(sl)); }}
+                                    />
+                                    <button type="button" onClick={() => resolvePreviewInDrawer(memberRow, sl.segmentId)} className="mt-1.5 text-[11px] text-blue-600 hover:underline">
+                                      Open this period in the allocation panel →
+                                    </button>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            <>
+                              <SuggestionButtons
+                                suggestions={rowSugg}
+                                onApply={() => resolvePreviewInDrawer(memberRow, null)}
+                                onRequestException={() => { setPreviewResolveUserId(null); requestExceptionForMember(memberRow, rowConflict); }}
+                              />
+                              {!rowSugg?.reduceTo && !rowSugg?.nextFreeDate && !rowSugg?.shortenTo && (
+                                <p className="text-gray-400 mt-1.5">No automatic adjustment fits — edit the allocation in the panel or request an exception.</p>
+                              )}
+                              <button type="button" onClick={() => resolvePreviewInDrawer(memberRow, null)} className="mt-1.5 text-[11px] text-blue-600 hover:underline">
+                                Open allocation panel →
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      )}
 
                       {/* Allocation bar */}
                       {!isUnset && (
@@ -2174,8 +2522,66 @@ export default function ProjectDetail() {
                             {formatAllocation(member, cap)}
                           </span>
                           {member.allocationFrom && member.allocationTo && (
-                            <span className="text-xs text-gray-400">{member.allocationFrom.slice(0,10)} → {member.allocationTo.slice(0,10)}</span>
+                            <span className={`text-xs ${member.invalidDates ? 'text-red-500 font-medium' : 'text-gray-400'}`}>
+                              {member.allocationFrom.slice(0,10)} → {member.allocationTo.slice(0,10)}
+                              {member.invalidDates && ' · end is before start'}
+                            </span>
                           )}
+                        </div>
+                      )}
+                      {member.overOnItsOwn && (
+                        <p className="text-xs text-red-500 mb-2">⚠ This allocation alone exceeds the {fmtH(cap)}h day — reduce it or request an exception.</p>
+                      )}
+
+                      {/* Per-period lines on this project */}
+                      {segLines.length > 0 && (
+                        <div className="ml-4 mb-2 space-y-1">
+                          {segLines.map((sl, i) => {
+                            const sPeak = Number(sl.peakHours) || 0;
+                            const sOver = sl.isOverAllocated === true || sPeak > cap;
+                            const sHigh = !sOver && sPeak / cap > 0.8;
+                            const sSugg = sOver ? previewSuggestionsFor({ ...sl, remaining: sl.remaining }, cap) : null;
+                            const segRow = segRowOf(sl);
+                            const tone = segTone(segRow);
+                            return (
+                              <div key={sl.segmentId ?? i} className={`rounded border px-2 py-1.5 text-xs ${sOver ? 'border-red-200 bg-red-50/60' : 'border-gray-100 bg-gray-50/60'}`}>
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className="text-gray-700 tabular-nums">{fmtRangeDate(sl.fromDate)} – {fmtRangeDate(sl.toDate)}</span>
+                                  <span className="font-semibold text-gray-800">{fmtH(sl.hoursPerDay)} h/day</span>
+                                  {tone === 'pending' && <span className="px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-800 text-[10px] font-medium">pending exception</span>}
+                                  {tone === 'approved' && <span className="px-1.5 py-0.5 rounded-full bg-purple-100 text-purple-800 text-[10px] font-medium">exception approved</span>}
+                                  {tone === 'estimated' && <span className="px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 text-[10px] font-medium">estimated</span>}
+                                  <span className={`ml-auto font-medium tabular-nums ${sOver ? 'text-red-600' : sHigh ? 'text-amber-600' : 'text-emerald-600'}`}>
+                                    peak {fmtH(sPeak)}h / {fmtH(cap)}h
+                                  </span>
+                                </div>
+                                {sl.overOnItsOwn && (
+                                  <p className="text-red-500 mt-0.5">⚠ This period alone exceeds the {fmtH(cap)}h day.</p>
+                                )}
+                                {(sl.conflicts || []).length > 0 && (
+                                  <ul className="mt-0.5 text-red-500 space-y-0.5">
+                                    {(sl.conflicts || []).slice(0, 3).map((c, j) => (
+                                      <li key={j}>
+                                        {fmtRangeDate(c.from)} – {fmtRangeDate(c.to)} ({c.days}d) · {fmtH(c.peak)}h / {fmtH(cap)}h
+                                        {(c.projects || []).length > 0 && (
+                                          <span className="text-red-400"> ({c.projects.map(p => `${p.projectName} ${fmtH(p.hoursPerDay)}h`).join(' + ')})</span>
+                                        )}
+                                      </li>
+                                    ))}
+                                    {sl.conflicts.length > 3 && <li className="text-red-400">…and {sl.conflicts.length - 3} more ranges</li>}
+                                  </ul>
+                                )}
+                                {sSugg && (sSugg.reduceTo != null || sSugg.nextFreeDate || sSugg.shortenTo) && (
+                                  <p className="text-gray-500 mt-0.5">
+                                    Suggested:
+                                    {sSugg.reduceTo != null && <> use {fmtH(sSugg.reduceTo)} h/day</>}
+                                    {sSugg.nextFreeDate && <>{sSugg.reduceTo != null ? ' ·' : ''} start on {fmtRangeDate(sSugg.nextFreeDate)}</>}
+                                    {sSugg.shortenTo && <>{(sSugg.reduceTo != null || sSugg.nextFreeDate) ? ' ·' : ''} end on {fmtRangeDate(sSugg.shortenTo)}</>}
+                                  </p>
+                                )}
+                              </div>
+                            );
+                          })}
                         </div>
                       )}
 
@@ -2203,11 +2609,18 @@ export default function ProjectDetail() {
                       {/* Free-up date */}
                       {freeDate && !isUnset && (
                         <div className="mt-2.5 pt-2 border-t border-gray-100 flex items-center gap-1.5">
-                          <span className="text-xs text-gray-400">🗓 Fully free from:</span>
-                          <span className="text-xs font-semibold text-emerald-600">{freeDate.slice(0,10)}</span>
-                          <span className="text-xs text-gray-400">
-                            (in {Math.max(0, Math.ceil((new Date(freeDate) - new Date()) / 86400000))} days)
-                          </span>
+                          {(() => {
+                            const daysAway = Math.ceil((new Date(freeDate) - new Date()) / 86400000);
+                            return daysAway <= 0 ? (
+                              <span className="text-xs text-emerald-600 font-semibold">🗓 Free now</span>
+                            ) : (
+                              <>
+                                <span className="text-xs text-gray-400">🗓 Fully free from:</span>
+                                <span className="text-xs font-semibold text-emerald-600">{freeDate.slice(0,10)}</span>
+                                <span className="text-xs text-gray-400">(in {daysAway} day{daysAway === 1 ? '' : 's'})</span>
+                              </>
+                            );
+                          })()}
                         </div>
                       )}
 
@@ -2232,7 +2645,14 @@ export default function ProjectDetail() {
                       {/* No allocation set - prompt */}
                       {isUnset && (
                         <p className="text-xs text-amber-700 mt-1">
-                          Click <strong>✏ Edit</strong> on this member in the Team tab to set hours / day and dates.
+                          {memberRow ? (
+                            <>
+                              <button type="button" onClick={() => resolvePreviewInDrawer(memberRow, null)} className="font-semibold underline hover:text-amber-900">Manage allocation</button>
+                              {' '}to add a period with hours / day and dates.
+                            </>
+                          ) : (
+                            <>Open <strong>Manage allocation</strong> on this member in the Team tab to add a period with hours / day and dates.</>
+                          )}
                         </p>
                       )}
                     </div>
@@ -2245,12 +2665,15 @@ export default function ProjectDetail() {
               <p className="text-xs text-gray-400">
                 {(() => {
                   const conflicted = allocationPreview.filter(m => m.isOverAllocated || (m.conflicts || []).length > 0).length;
+                  const invalid    = allocationPreview.filter(m => m.invalidDates).length;
+                  const estimated  = allocationPreview.filter(m => m.isEstimated && m.hoursPerDay != null).length;
                   const unset      = allocationPreview.filter(m => m.hoursPerDay == null).length;
-                  return conflicted > 0
-                    ? `🔴 ${conflicted} member(s) have over-allocation conflicts`
-                    : unset > 0
-                    ? `⚠ ${unset} member(s) have no allocation set`
-                    : '✅ All allocations look good';
+                  const parts = [];
+                  if (conflicted) parts.push(`🔴 ${conflicted} over-allocated`);
+                  if (invalid)    parts.push(`⛔ ${invalid} with invalid dates`);
+                  if (estimated)  parts.push(`⚠ ${estimated} unconfirmed estimate${estimated === 1 ? '' : 's'}`);
+                  if (unset)      parts.push(`⚠ ${unset} with no allocation`);
+                  return parts.length ? parts.join(' · ') : '✅ All allocations look good';
                 })()}
               </p>
               <button onClick={() => setShowAllocationPreview(false)} className="px-4 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50">Close</button>
@@ -2258,6 +2681,16 @@ export default function ProjectDetail() {
           </div>
         </div>
       )}
+
+      {/* ═══ ALLOCATION EXCEPTION REQUEST MODAL ═══════════════════════════ */}
+      <ExceptionRequestModal
+        open={!!exceptionModal}
+        onClose={() => setExceptionModal(null)}
+        projectId={id}
+        member={exceptionModal?.member || null}
+        conflict={exceptionModal?.conflict || null}
+        onRequested={handleExceptionRequested}
+      />
 
       {/* ═══ EDIT PROJECT MODAL ══════════════════════════════════════════════ */}
       {showEdit && (

@@ -23,6 +23,10 @@ const ProjectMember = sequelize.define(
     allocationFrom:   { type: DataTypes.DATEONLY, allowNull: true },
     allocationTo:     { type: DataTypes.DATEONLY, allowNull: true },
     allocationStatus: { type: DataTypes.ENUM('active','pending','approved','rejected'), defaultValue: 'active', allowNull: false },
+    // Over-capacity exception (migration 044). 'pending' rows never count towards
+    // capacity elsewhere; 'approved' rows count with their (over-cap) hours.
+    exceptionStatus:     { type: DataTypes.ENUM('none','pending','approved','rejected'), allowNull: false, defaultValue: 'none' },
+    exceptionApprovalId: { type: DataTypes.CHAR(36), allowNull: true },
   },
   {
     tableName: 'pm_project_members',

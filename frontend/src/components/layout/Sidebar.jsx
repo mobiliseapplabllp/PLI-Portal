@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { useSelector } from 'react-redux';
 import {
@@ -36,6 +36,9 @@ import {
   HiOutlineSpeakerphone,
 } from 'react-icons/hi';
 import { ROLE_CONFIG } from '../../utils/constants';
+import { listAllocationExceptionsApi } from '../../api/pm/allocation.api';
+
+const allocExceptionsItem = { to: '/pm/allocation-exceptions', label: 'Allocation exceptions', icon: HiOutlineInbox, badgeKey: 'allocExceptions' };
 
 // ── KPI Nav Items ─────────────────────────────────────────────────────────────
 const kpiNavItems = {
@@ -167,7 +170,6 @@ const opsBaseChildren = [
 const opsFullChildren = [
   ...opsBaseChildren,
   { to: '/helpdesk/reports', label: 'Reports', icon: HiOutlineChartBar },
-  { to: '/helpdesk/groups',  label: 'Groups',  icon: HiOutlineUserGroup },
 ];
 
 const surveyMgrChildren = [
@@ -225,6 +227,7 @@ const pmNavItems = {
         { to: '/pm/projects',        label: 'All Projects',    icon: HiOutlineFolderOpen },
         { to: '/pm/projects/create', label: 'Create Project',  icon: HiOutlinePlus },
         { to: '/pm/utilisation',     label: 'Resource Utilisation', icon: HiOutlineChartBar },
+        allocExceptionsItem,
       ],
     },
     {
@@ -263,6 +266,7 @@ const pmNavItems = {
         { to: '/pm/projects',        label: 'All Projects',   icon: HiOutlineFolderOpen },
         { to: '/pm/projects/create', label: 'Create Project', icon: HiOutlinePlus },
         { to: '/pm/utilisation',     label: 'Resource Utilisation', icon: HiOutlineChartBar },
+        allocExceptionsItem,
       ],
     },
     {
@@ -345,6 +349,7 @@ const pmNavItems = {
       children: [
         { to: '/pm/projects',    label: 'All Projects',         icon: HiOutlineFolderOpen },
         { to: '/pm/utilisation', label: 'Resource Utilisation', icon: HiOutlineChartBar },
+        allocExceptionsItem,
       ],
     },
     {
@@ -363,6 +368,7 @@ const pmNavItems = {
       children: [
         { to: '/pm/projects',    label: 'All Projects',         icon: HiOutlineFolderOpen },
         { to: '/pm/utilisation', label: 'Resource Utilisation', icon: HiOutlineChartBar },
+        allocExceptionsItem,
       ],
     },
     {
@@ -382,6 +388,7 @@ const pmNavItems = {
         { to: '/pm/projects',        label: 'All Projects',   icon: HiOutlineFolderOpen },
         { to: '/pm/projects/create', label: 'Create Project', icon: HiOutlinePlus },
         { to: '/pm/utilisation',     label: 'Resource Utilisation', icon: HiOutlineChartBar },
+        allocExceptionsItem,
       ],
     },
     {
@@ -427,7 +434,6 @@ const hdBaseItems = [
 const hdWithGroups = [
   ...hdBaseItems,
   { to: '/helpdesk/reports', label: 'Reports', icon: HiOutlineChartBar },
-  { to: '/helpdesk/groups',  label: 'Groups',  icon: HiOutlineUserGroup },
 ];
 
 const hdWithSettings = [
@@ -451,6 +457,23 @@ export default function Sidebar({ collapsed, onToggle, onNavClick }) {
   const { activeModule } = useSelector((state) => state.app);
   const location = useLocation();
   const [openMenus, setOpenMenus] = useState({});
+  const [badges, setBadges] = useState({});
+
+  // Pending-exception count, fetched once; fails silently. Approver roles get every
+  // pending request, other PM roles get their own pending requests (server decides).
+  const isAdmin = ['admin', 'manager', 'senior_manager', 'md', 'director'].includes(user?.role);
+  useEffect(() => {
+    if (!isAdmin) return;
+    let alive = true;
+    listAllocationExceptionsApi({ status: 'pending' })
+      .then((r) => {
+        if (!alive) return;
+        const d = r.data?.data;
+        setBadges((b) => ({ ...b, allocExceptions: Array.isArray(d) ? d.length : 0 }));
+      })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [isAdmin]);
 
   if (!user) return null;
 
@@ -542,6 +565,11 @@ export default function Sidebar({ collapsed, onToggle, onNavClick }) {
                       >
                         <child.icon className="w-4 h-4 flex-shrink-0" />
                         <span className="whitespace-nowrap">{child.label}</span>
+                        {child.badgeKey && badges[child.badgeKey] > 0 && (
+                          <span className="ml-auto inline-flex items-center justify-center min-w-[1.25rem] h-5 px-1.5 rounded-full bg-amber-100 text-amber-700 text-[11px] font-semibold tabular-nums">
+                            {badges[child.badgeKey]}
+                          </span>
+                        )}
                       </NavLink>
                     ))}
                   </div>

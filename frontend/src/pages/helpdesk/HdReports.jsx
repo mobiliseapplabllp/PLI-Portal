@@ -2,7 +2,7 @@
  * HdReports.jsx
  * Helpdesk Reports page.
  * Uses the existing /helpdesk/dashboard/* API endpoints to build
- * report views: summary KPIs, by-status, by-priority, by-group,
+ * report views: summary KPIs, by-status, by-priority, by-team,
  * monthly trend, agent stats, and project stats.
  */
 import { useEffect, useState } from 'react';
@@ -15,7 +15,7 @@ import {
   getDashboardStatsApi,
   getByStatusApi,
   getByPriorityApi,
-  getByGroupApi,
+  getByTeamApi,
   getMonthlyTrendApi,
   getAgentStatsApi,
   getProjectStatsApi,
@@ -34,7 +34,8 @@ import {
 // ---------------------------------------------------------------------------
 const STATUS_COLORS  = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#64748b'];
 const PRIORITY_COLORS = { Critical: '#dc2626', High: '#ea580c', Medium: '#d97706', Low: '#16a34a' };
-const GROUP_COLOR    = '#6366f1';
+const TEAM_COLOR     = '#6366f1';
+const TEAM_PENDING_COLOR = '#f59e0b';
 const AREA_CREATED   = '#6366f1';
 const AREA_CLOSED    = '#10b981';
 
@@ -84,7 +85,7 @@ export default function HdReports() {
   const [stats,    setStats]    = useState(null);
   const [byStatus, setByStatus] = useState([]);
   const [byPri,    setByPri]    = useState([]);
-  const [byGroup,  setByGroup]  = useState([]);
+  const [byTeam,   setByTeam]   = useState([]);
   const [trend,    setTrend]    = useState([]);
   const [agents,   setAgents]   = useState([]);
   const [projects, setProjects] = useState([]);
@@ -95,11 +96,11 @@ export default function HdReports() {
     setLoading(true);
     setError('');
     try {
-      const [sR, stR, prR, grR, trR, agR, pjR] = await Promise.allSettled([
+      const [sR, stR, prR, tmR, trR, agR, pjR] = await Promise.allSettled([
         getDashboardStatsApi(),
         getByStatusApi(),
         getByPriorityApi(),
-        getByGroupApi(),
+        getByTeamApi(),
         getMonthlyTrendApi(),
         getAgentStatsApi(),
         getProjectStatsApi(),
@@ -110,7 +111,7 @@ export default function HdReports() {
       setStats(safe(sR));
       setByStatus(normaliseArray(safe(stR)));
       setByPri(normaliseArray(safe(prR)));
-      setByGroup(normaliseArray(safe(grR)));
+      setByTeam(normaliseTeams(safe(tmR)));
       setTrend(normaliseArray(safe(trR)));
       setAgents(normaliseArray(safe(agR)));
       setProjects(normaliseArray(safe(pjR)));
@@ -134,8 +135,8 @@ export default function HdReports() {
       ['By Priority', 'Count'],
       ...byPri.map(r => [r.label || r.priority || r.name, r.count ?? r.value ?? 0]),
       [],
-      ['By Group', 'Total', 'Open'],
-      ...byGroup.map(r => [r.label || r.group || r.name, r.total ?? r.count ?? 0, r.open ?? 0]),
+      ['By Team', 'Total', 'Pending'],
+      ...byTeam.map(r => [r.label, r.count ?? 0, r.pending ?? 0]),
     ];
 
     const csv = rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
@@ -279,16 +280,18 @@ export default function HdReports() {
         </Section>
       )}
 
-      {/* By Group */}
-      {byGroup.length > 0 && (
-        <Section title="Tickets by Group">
-          <ResponsiveContainer width="100%" height={Math.max(200, byGroup.length * 36)}>
-            <BarChart data={byGroup} layout="vertical" margin={{ top: 5, right: 30, left: 0, bottom: 5 }}>
+      {/* By Team */}
+      {byTeam.length > 0 && (
+        <Section title="Tickets by Team">
+          <ResponsiveContainer width="100%" height={Math.max(200, byTeam.length * 36)}>
+            <BarChart data={byTeam} layout="vertical" margin={{ top: 5, right: 30, left: 0, bottom: 5 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
               <XAxis type="number" allowDecimals={false} tick={{ fontSize: 12 }} />
-              <YAxis type="category" dataKey="label" width={120} tick={{ fontSize: 12 }} />
+              <YAxis type="category" dataKey="label" width={140} tick={{ fontSize: 12 }} />
               <Tooltip />
-              <Bar dataKey="count" name="Total" fill={GROUP_COLOR} radius={[0, 6, 6, 0]} />
+              <Legend />
+              <Bar dataKey="count"   name="Total"   fill={TEAM_COLOR}         radius={[0, 6, 6, 0]} />
+              <Bar dataKey="pending" name="Pending" fill={TEAM_PENDING_COLOR} radius={[0, 6, 6, 0]} />
             </BarChart>
           </ResponsiveContainer>
         </Section>
@@ -372,6 +375,20 @@ export default function HdReports() {
 }
 
 // ---------------------------------------------------------------------------
+// Normalise /by-team rows { teamManagerId, teamName, total, pending }
+// into { label, count, pending } for the chart / CSV export.
+// ---------------------------------------------------------------------------
+function normaliseTeams(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw.map(r => ({
+    teamManagerId: r.teamManagerId ?? null,
+    label:   r.teamName ?? r.label ?? '—',
+    count:   Number(r.total ?? r.count ?? 0),
+    pending: Number(r.pending ?? 0),
+  }));
+}
+
+// ---------------------------------------------------------------------------
 // Normalise various API response shapes into { label, count } arrays
 // ---------------------------------------------------------------------------
 function normaliseArray(raw) {
@@ -381,7 +398,7 @@ function normaliseArray(raw) {
     if (item.label !== undefined) return item;
     // Pick the first string-ish key as label
     const keys = Object.keys(item);
-    const labelKey = keys.find(k => ['status','priority','group','agent','project','name','month','label'].includes(k)) || keys[0];
+    const labelKey = keys.find(k => ['status','priority','agent','project','name','month','label'].includes(k)) || keys[0];
     const countKey = keys.find(k => ['count','total','value','tickets'].includes(k)) || keys.find(k => k !== labelKey) || 'count';
     return { ...item, label: item[labelKey] ?? '—', count: Number(item[countKey] ?? 0) };
   });

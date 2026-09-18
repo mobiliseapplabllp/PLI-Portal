@@ -11,7 +11,8 @@ const dashCtrl    = require('../../controllers/helpdesk/hdDashboard.controller')
 router.get('/stats',            dashCtrl.getStats);
 router.get('/by-status',        dashCtrl.getByStatus);
 router.get('/by-priority',      dashCtrl.getByPriority);
-router.get('/by-group',         dashCtrl.getByGroup);
+router.get('/by-group',         dashCtrl.getByGroup);   // legacy — kept for compatibility
+router.get('/by-team',          dashCtrl.getByTeam);
 router.get('/monthly-trend',    dashCtrl.getMonthlyTrend);
 router.get('/agent-stats',      dashCtrl.getAgentStats);
 router.get('/raised-by-team',   dashCtrl.getRaisedByTeam);

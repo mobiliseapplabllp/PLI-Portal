@@ -14,19 +14,22 @@ import {
   clearCurrentTicket,
   updateTicket,
   deleteTicket,
-  fetchGroups,
   fetchHdOptions,
   selectCurrentTicket,
   selectCurrentTicketLoading,
   selectSubmitting,
-  selectGroups,
   selectHdOptions,
 } from '../../store/helpdeskSlice';
 import {
   getConversationsApi,
   addConversationApi,
 } from '../../api/helpdesk/conversations.api';
-import { getTicketHistoryApi } from '../../api/helpdesk/tickets.api';
+// updateTicketApi is called directly (not via the thunk) wherever an allocation is
+// sent: the thunk collapses errors to a message string and the HTTP 409 `conflict`
+// body would be lost.
+import { getTicketHistoryApi, updateTicketApi } from '../../api/helpdesk/tickets.api';
+import TicketConflictPanel from '../../components/helpdesk/TicketConflictPanel';
+import TicketExceptionModal from '../../components/helpdesk/TicketExceptionModal';
 import {
   getHdDocumentsApi,
   uploadHdDocumentApi,
@@ -38,8 +41,10 @@ import {
   getApprovalStatusApi,
 } from '../../api/helpdesk/approvals.api';
 import { getUsersApi } from '../../api/users.api';
+import { listTeamsApi, getTeamMembersApi } from '../../api/helpdesk/teams.api';
 import api from '../../api/axios';
 import AllocationTypeInput, { formatAllocation } from '../../components/pm/AllocationTypeInput';
+import SearchSelect from '../../components/common/SearchSelect';
 import {
   HiOutlineArrowLeft,
   HiOutlinePencil,
@@ -59,7 +64,6 @@ import {
   HiOutlineX,
   HiOutlineCheck,
   HiOutlineExclamation,
-  HiOutlineSearch,
   HiOutlinePlus,
   HiOutlineLink,
   HiOutlineDownload,
@@ -145,6 +149,61 @@ function fmtLabel(s) {
   return String(s).replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 }
 
+// ── Team = reporting manager + direct reports (GET /helpdesk/teams) ──────────
+const ticketTeamManagerId = (ticket) =>
+  ticket?.teamManager?._id ?? ticket?.teamManager?.id ?? ticket?.teamManagerId ?? '';
+
+/**
+ * Loads the team list once and returns SearchSelect options.
+ * `current` = { _id, name } of the ticket's existing team manager; it is appended
+ * when the API list does not contain it (e.g. a manager with no reports).
+ */
+function useTeamOptions(current) {
+  const [teams, setTeams]     = useState([]);
+  const [loading, setLoading] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    setLoading(true);
+    listTeamsApi()
+      .then(res => { if (alive) setTeams(res.data?.data || []); })
+      .catch(() => { if (alive) setTeams([]); })
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, []);
+  const options = teams.map(t => ({
+    value: t._id ?? t.id,
+    label: t.name,
+    sub:   [t.email, t.memberCount != null ? `${t.memberCount} members` : null].filter(Boolean).join(' · '),
+  }));
+  const curId = current?._id ?? current?.id;
+  if (curId && !options.some(o => String(o.value) === String(curId))) {
+    options.push({ value: curId, label: current.name || 'Current team', sub: '' });
+  }
+  return { options, loading };
+}
+
+/** Loads GET /helpdesk/teams/:managerId/members and returns SearchSelect options + raw members. */
+function useTeamMembers(managerId) {
+  const [members, setMembers] = useState([]);
+  const [loading, setLoading] = useState(false);
+  useEffect(() => {
+    if (!managerId) { setMembers([]); return undefined; }
+    let alive = true;
+    setLoading(true);
+    getTeamMembersApi(managerId)
+      .then(res => { if (alive) setMembers(res.data?.data?.members || []); })
+      .catch(() => { if (alive) setMembers([]); })
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, [managerId]);
+  const options = members.map(m => ({
+    value: m._id ?? m.id,
+    label: m.isManager ? `${m.name} (manager)` : m.name,
+    sub:   [m.email, m.designation].filter(Boolean).join(' · '),
+  }));
+  return { members, options, loading };
+}
+
 function Avatar({ name, size = 'md' }) {
   const letter = (name || 'U').charAt(0).toUpperCase();
   const cls = size === 'sm'
@@ -169,7 +228,6 @@ export default function TicketDetail() {
   const ticket     = useSelector(selectCurrentTicket);
   const loading    = useSelector(selectCurrentTicketLoading);
   const submitting = useSelector(selectSubmitting);
-  const groups     = useSelector(selectGroups);
   const hdOptions  = useSelector(selectHdOptions);
   const user       = useSelector(s => s.auth.user);
 
@@ -225,6 +283,11 @@ export default function TicketDetail() {
   const [showEditModal, setShowEditModal]         = useState(false);
   const [showAssignModal, setShowAssignModal]     = useState(false);
   const [assignEditMode, setAssignEditMode]       = useState(false); // true = "Edit allocation" path (pre-selects current assignee)
+  // HTTP 409 `conflict` bodies — the save was REFUSED, the modal shows the fixes inline
+  const [assignConflict, setAssignConflict]       = useState(null);
+  const [editConflict,   setEditConflict]         = useState(null);
+  const [assignSaving,   setAssignSaving]         = useState(false);
+  const [editSaving,     setEditSaving]           = useState(false);
   const [showNoteModal, setShowNoteModal]         = useState(false);
   const [showReminderModal, setShowReminderModal] = useState(false);
   const [showCloseModal, setShowCloseModal]       = useState(false);
@@ -237,7 +300,6 @@ export default function TicketDetail() {
   useEffect(() => {
     dispatch(clearCurrentTicket());
     dispatch(fetchTicketById(id));
-    dispatch(fetchGroups());
     // Load configurable options if not already in store
     if (!hdOptions || Object.keys(hdOptions).length === 0) {
       dispatch(fetchHdOptions());
@@ -323,8 +385,8 @@ export default function TicketDetail() {
           description: ticket.description,
           priority:    ticket.priority,
           category:    ticket.category,
-          requestType: ticket.requestType,
-          groupId:     ticket.group?._id || ticket.group?.id || ticket.groupId,
+          requestType:   ticket.requestType,
+          teamManagerId: ticketTeamManagerId(ticket) || undefined,
         },
       },
     });
@@ -555,6 +617,23 @@ export default function TicketDetail() {
                 ) : (
                   <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-600 border border-slate-200">Internal</span>
                 )}
+                {/* Allocation exception state (server: exceptionStatus) */}
+                {ticket.exceptionStatus === 'pending' && (
+                  <span
+                    className="px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800 border border-amber-200"
+                    title="Awaiting approver decision — the over-capacity allocation is not counted until it is decided"
+                  >
+                    ⏳ Exception pending
+                  </span>
+                )}
+                {ticket.exceptionStatus === 'approved' && (
+                  <span
+                    className="px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800 border border-purple-200"
+                    title="Approved over-capacity allocation"
+                  >
+                    ✔ Exception approved
+                  </span>
+                )}
               </div>
               <h1 className="text-lg font-medium">{ticket.title}</h1>
             </div>
@@ -726,8 +805,6 @@ export default function TicketDetail() {
             ticket={ticket}
             user={user}
             canManage={canManage}
-            allUsers={allUsers}
-            groups={groups}
             submitting={submitting}
             onPickUp={handlePickUp}
             onAssign={() => { setAssignEditMode(false); setShowAssignModal(true); }}
@@ -763,40 +840,60 @@ export default function TicketDetail() {
       {showEditModal && (
         <EditModal
           ticket={ticket}
-          groups={groups}
-          allUsers={allUsers}
-          submitting={submitting}
-          onClose={() => setShowEditModal(false)}
+          submitting={editSaving}
+          conflict={editConflict}
+          onClearConflict={() => setEditConflict(null)}
+          onClose={() => { setEditConflict(null); setShowEditModal(false); }}
+          onRequested={() => { setEditConflict(null); setShowEditModal(false); dispatch(fetchTicketById(id)); }}
           onSave={async (data) => {
+            setEditConflict(null);
+            setEditSaving(true);
             try {
-              await dispatch(updateTicket({ id, data })).unwrap();
+              await updateTicketApi(id, data);
               // Reload full ticket so associations (assignee name, group, etc.) are fresh
               dispatch(fetchTicketById(id));
               toast.success('Ticket updated');
               setShowEditModal(false);
-            } catch (err) { toast.error(typeof err === 'string' ? err : err?.response?.data?.message || err?.message || 'Failed to update ticket'); }
+            } catch (err) {
+              // 409 = over capacity — nothing was saved; the modal shows the conflict box
+              const body = err?.response?.data;
+              if (err?.response?.status === 409 && body?.conflict) setEditConflict(body.conflict);
+              else toast.error(body?.message || body?.error?.message || err?.message || 'Failed to update ticket');
+            } finally { setEditSaving(false); }
           }}
         />
       )}
       {showAssignModal && (
         <AssignModal
           ticket={ticket}
-          groups={groups}
-          allUsers={allUsers}
-          submitting={submitting}
+          submitting={assignSaving}
           editMode={assignEditMode}
-          onClose={() => setShowAssignModal(false)}
-          onAssign={async ({ assigneeId, assigneeName: name, groupId, allocationMode, allocationHoursPerDay, allocationTotalHours, allocationFrom, allocationTo }) => {
+          conflict={assignConflict}
+          onClearConflict={() => setAssignConflict(null)}
+          onClose={() => { setAssignConflict(null); setShowAssignModal(false); }}
+          onRequested={() => {
+            setAssignConflict(null);
+            setShowAssignModal(false);
+            dispatch(fetchTicketById(id));
+          }}
+          onAssign={async ({ assigneeId, assigneeName: name, teamManagerId, allocationMode, allocationHoursPerDay, allocationTotalHours, allocationFrom, allocationTo }) => {
+            setAssignConflict(null);
+            setAssignSaving(true);
             try {
-              await dispatch(updateTicket({ id, data: {
-                assigneeId, assigneeName: name, groupId,
+              await updateTicketApi(id, {
+                assigneeId, assigneeName: name, teamManagerId,
                 allocationMode, allocationHoursPerDay, allocationTotalHours, allocationFrom, allocationTo,
-              } })).unwrap();
+              });
               // Reload full ticket so assigneeUser.name (and all JOINs) are fresh in the sidebar
               dispatch(fetchTicketById(id));
               toast.success('Ticket assigned');
               setShowAssignModal(false);
-            } catch (err) { toast.error(typeof err === 'string' ? err : err?.response?.data?.message || err?.message || 'Failed to assign ticket'); }
+            } catch (err) {
+              // 409 = the agent would be over capacity — the assignment was refused
+              const body = err?.response?.data;
+              if (err?.response?.status === 409 && body?.conflict) setAssignConflict(body.conflict);
+              else toast.error(body?.message || body?.error?.message || err?.message || 'Failed to assign ticket');
+            } finally { setAssignSaving(false); }
           }}
         />
       )}
@@ -1077,8 +1174,8 @@ function DetailsTab({ ticket }) {
     ['Category',     ticket.category || '—'],
     ['Due Date',     ticket.dueDate ? fmtDate(ticket.dueDate) : '—'],
     ['Site',         ticket.site || '—'],
-    ['Group',        ticket.group?.name || ticket.groupName || '—'],
-    ['Project',      ticket.project?.name || ticket.projectName || '—'],
+    ['Team',         ticket.teamManager?.name || ticket.group?.name || ticket.groupName || '—'],
+    ['Project',      ticket.pmProject?.name || ticket.project?.name || ticket.projectName || '—'],
     ['Raised by Team', ticket.raisedByTeam || ticket.team || '—'],
     ['SLA Status',   ticket.slaBreached === true
       ? <span className="text-red-600 font-semibold">Breached</span>
@@ -1207,9 +1304,10 @@ function SubTasksTab({ ticket, canManage, submitting, onToggle, onAdd }) {
 // ---------------------------------------------------------------------------
 
 const HISTORY_FIELD_LABELS = {
-  assigneeId:   'Assignee',
-  groupId:      'Group',
-  projectId:    'Project',
+  assigneeId:    'Assignee',
+  teamManagerId: 'Team manager',
+  groupId:       'Group',          // legacy history rows only
+  projectId:     'Project',
   status:       'Status',
   priority:     'Priority',
   title:        'Subject',
@@ -1574,7 +1672,7 @@ function PropertiesPanel({ ticket }) {
 // AssignmentPanel  (right sidebar, panel 2)
 // ---------------------------------------------------------------------------
 
-function AssignmentPanel({ ticket, user, canManage, allUsers, groups, submitting, onPickUp, onAssign, onEditAllocation, onRemoveAssignee, onUpdateAssigneeWeight }) {
+function AssignmentPanel({ ticket, user, canManage, submitting, onPickUp, onAssign, onEditAllocation, onRemoveAssignee, onUpdateAssigneeWeight }) {
   const assigneeName   = ticket.assigneeUser?.name || ticket.assignee?.name  || ticket.assigneeName  || null;
   const multiAssignees = ticket.assignees || [];
   const [editingWeightId, setEditingWeightId] = useState(null);
@@ -1876,7 +1974,14 @@ function ApprovalsPanel({
 // EditModal
 // ---------------------------------------------------------------------------
 
-function EditModal({ ticket, groups, allUsers, submitting, onClose, onSave }) {
+function EditModal({ ticket, submitting, conflict = null, onClearConflict, onClose, onSave, onRequested }) {
+  const [showException, setShowException] = useState(false);
+  /**
+   * Allocation overrides applied from a 409 suggestion. The edit form has no
+   * allocation inputs of its own, so a suggestion is carried here and merged
+   * into the next save (and into the exception request).
+   */
+  const [allocPatch, setAllocPatch] = useState(null);
   // ── Pull configurable options from Redux ─────────────────────────────────
   const hdOpts = useSelector(selectHdOptions);
   const editOptRequestType = (hdOpts?.request_type || []).map(o => o.name);
@@ -1903,22 +2008,16 @@ function EditModal({ ticket, groups, allUsers, submitting, onClose, onSave }) {
     impact:        ticket.impact       || '',
     urgency:       ticket.urgency      || '',
     dueDate:       toDTLocal(ticket.dueDate),
-    groupId:       ticket.group?._id    || ticket.group?.id    || ticket.groupId    || '',
+    teamManagerId: ticketTeamManagerId(ticket),
     assigneeId:    ticket.assigneeUser?._id || ticket.assignee?._id || ticket.assignee?.id || ticket.assigneeId || '',
     site:          ticket.site         || '',
     raisedByTeam:  ticket.raisedByTeam || ticket.team       || '',
     resolution:    ticket.resolution   || '',
   });
 
-  const [groupUsers, setGroupUsers] = useState([]);
-
-  // Load group members when group changes
-  useEffect(() => {
-    if (!form.groupId) { setGroupUsers([]); return; }
-    getUsersApi({ groupId: form.groupId, isActive: true, limit: 200 })
-      .then(res => setGroupUsers(res.data?.data?.users || res.data?.data || allUsers))
-      .catch(() => setGroupUsers(allUsers));
-  }, [form.groupId, allUsers]);
+  // Team / Manager → Assign to (members of that team only)
+  const { options: teamOptions, loading: teamsLoading }     = useTeamOptions(ticket.teamManager);
+  const { options: memberOptions, loading: membersLoading } = useTeamMembers(form.teamManagerId);
 
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -1935,7 +2034,7 @@ function EditModal({ ticket, groups, allUsers, submitting, onClose, onSave }) {
       impact:       ticket.impact       || '',
       urgency:      ticket.urgency      || '',
       dueDate:      toDTLocal(ticket.dueDate),
-      groupId:      ticket.group?._id    || ticket.group?.id    || ticket.groupId    || '',
+      teamManagerId: ticketTeamManagerId(ticket),
       assigneeId:   ticket.assigneeUser?._id || ticket.assignee?._id || ticket.assignee?.id || ticket.assigneeId || '',
       site:         ticket.site         || '',
       raisedByTeam: ticket.raisedByTeam || ticket.team || '',
@@ -1947,13 +2046,16 @@ function EditModal({ ticket, groups, allUsers, submitting, onClose, onSave }) {
     for (const field of Object.keys(original)) {
       if (String(form[field] ?? '') !== String(original[field] ?? '')) {
         // Fields that must be sent as null when cleared (not empty string)
-        if (field === 'dueDate' || field === 'groupId' || field === 'assigneeId') {
+        if (field === 'dueDate' || field === 'teamManagerId' || field === 'assigneeId') {
           payload[field] = form[field] || null;
         } else {
           payload[field] = form[field];
         }
       }
     }
+
+    // Allocation fixes picked from a 409 conflict box travel with the save
+    if (allocPatch) Object.assign(payload, allocPatch);
 
     // Nothing changed — close without making an API call
     if (Object.keys(payload).length === 0) {
@@ -1962,6 +2064,23 @@ function EditModal({ ticket, groups, allUsers, submitting, onClose, onSave }) {
     }
 
     onSave(payload);
+  };
+
+  /** Apply a 409 suggestion — kept as an override until the next save. */
+  const applySuggestion = (patch) => {
+    setAllocPatch(prev => ({ ...(prev || {}), ...patch }));
+    onClearConflict?.();
+  };
+
+  // What the exception would be requested for: the ticket's allocation + any fix applied here
+  const exceptionAllocation = {
+    assigneeId:            form.assigneeId || undefined,
+    assigneeName:          ticket.assigneeUser?.name || ticket.assignee?.name || ticket.assigneeName,
+    allocationMode:        allocPatch?.allocationMode ?? ticket.allocationMode ?? 'per_day',
+    allocationHoursPerDay: allocPatch?.allocationHoursPerDay ?? (ticket.allocationHoursPerDay != null ? Number(ticket.allocationHoursPerDay) : null),
+    allocationTotalHours:  allocPatch?.allocationTotalHours  ?? (ticket.allocationTotalHours  != null ? Number(ticket.allocationTotalHours)  : null),
+    allocationFrom:        allocPatch?.allocationFrom ?? ticket.allocationFrom,
+    allocationTo:          allocPatch?.allocationTo   ?? ticket.allocationTo,
   };
 
   const set = (key) => (e) => setForm(f => ({ ...f, [key]: e.target.value }));
@@ -2096,32 +2215,30 @@ function EditModal({ ticket, groups, allUsers, submitting, onClose, onSave }) {
               />
             </div>
 
-            {/* Row: Group, Assignee */}
+            {/* Row: Team / Manager, Assign to */}
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">Group</label>
-                <select
-                  value={form.groupId}
-                  onChange={(e) => {
-                    setForm(f => ({ ...f, groupId: e.target.value, assigneeId: '' }));
-                  }}
-                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                >
-                  <option value="">— Select Group —</option>
-                  {(groups || []).map(g => <option key={g._id || g.id} value={g._id || g.id}>{g.name}</option>)}
-                </select>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">Team / Manager</label>
+                <SearchSelect
+                  size="md"
+                  options={teamOptions}
+                  loading={teamsLoading}
+                  value={form.teamManagerId}
+                  placeholder="— Select team —"
+                  onChange={(v) => setForm(f => ({ ...f, teamManagerId: v || '', assigneeId: '' }))}
+                />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">Assignee</label>
-                <select
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">Assign to</label>
+                <SearchSelect
+                  size="md"
+                  options={memberOptions}
+                  loading={membersLoading}
                   value={form.assigneeId}
-                  onChange={set('assigneeId')}
-                  disabled={!form.groupId}
-                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  <option value="">— Unassigned —</option>
-                  {groupUsers.map(u => <option key={u._id || u.id} value={u._id || u.id}>{u.name}</option>)}
-                </select>
+                  disabled={!form.teamManagerId}
+                  placeholder={form.teamManagerId ? '— Unassigned —' : 'Select a team first'}
+                  onChange={(v) => setForm(f => ({ ...f, assigneeId: v || '' }))}
+                />
               </div>
             </div>
 
@@ -2138,14 +2255,11 @@ function EditModal({ ticket, groups, allUsers, submitting, onClose, onSave }) {
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">Raised by Team</label>
-                <input
-                  type="text"
-                  value={form.raisedByTeam}
-                  onChange={set('raisedByTeam')}
-                  placeholder="Team that raised this"
-                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">Requester team</label>
+                <div className="w-full px-3 py-2 border border-gray-100 bg-gray-50 rounded-lg text-sm text-gray-700">
+                  {form.raisedByTeam || '—'}
+                </div>
+                <p className="text-[11px] text-gray-400 mt-1">From the requester's department in the employee master</p>
               </div>
             </div>
 
@@ -2160,6 +2274,23 @@ function EditModal({ ticket, groups, allUsers, submitting, onClose, onSave }) {
                 className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
               />
             </div>
+
+            {/* Server refused the change (HTTP 409) — the agent would be over capacity */}
+            <TicketConflictPanel
+              compact
+              conflict={conflict}
+              capacity={8}
+              onApply={applySuggestion}
+              onRequestException={() => setShowException(true)}
+            />
+            {allocPatch && !conflict && (
+              <p className="text-[11px] text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-2.5 py-1.5">
+                Allocation fix applied — save to send it:
+                {allocPatch.allocationHoursPerDay != null ? ` ${allocPatch.allocationHoursPerDay} h/day` : ''}
+                {allocPatch.allocationFrom ? ` · from ${allocPatch.allocationFrom}` : ''}
+                {allocPatch.allocationTo ? ` · until ${allocPatch.allocationTo}` : ''}
+              </p>
+            )}
           </div>
 
           {/* Footer */}
@@ -2181,6 +2312,18 @@ function EditModal({ ticket, groups, allUsers, submitting, onClose, onSave }) {
           </div>
         </form>
       </div>
+
+      {conflict && showException && (
+        <TicketExceptionModal
+          open
+          ticketId={ticket?._id ?? ticket?.id}
+          ticket={ticket}
+          conflict={conflict}
+          allocation={exceptionAllocation}
+          onClose={() => setShowException(false)}
+          onRequested={(result) => { setShowException(false); onRequested?.(result); }}
+        />
+      )}
     </div>
   );
 }
@@ -2189,17 +2332,27 @@ function EditModal({ ticket, groups, allUsers, submitting, onClose, onSave }) {
 // AssignModal
 // ---------------------------------------------------------------------------
 
-function AssignModal({ ticket, groups, allUsers, submitting, editMode = false, onClose, onAssign }) {
+function AssignModal({ ticket, submitting, editMode = false, conflict = null, onClearConflict, onClose, onAssign, onRequested }) {
+  const [showException, setShowException] = useState(false);
   const currentAssigneeId = ticket?.assigneeId || ticket?.assigneeUser?._id || ticket?.assigneeUser?.id || null;
-  const [selectedGroupId, setSelectedGroupId] = useState(ticket?.group?._id || ticket?.group?.id || ticket?.groupId || '');
-  const [selectedUser, setSelectedUser]       = useState(() => {
-    // "Edit allocation" path: pre-select the current assignee
-    if (!editMode || !currentAssigneeId) return null;
-    return (allUsers || []).find(u => String(u._id || u.id) === String(currentAssigneeId))
-      || (ticket?.assigneeUser ? { ...ticket.assigneeUser, _id: currentAssigneeId } : null);
-  });
-  const [groupUsers, setGroupUsers]           = useState([]);
-  const [search, setSearch]                   = useState('');
+  // Team / Manager — pre-selected with the ticket's current team
+  const [teamManagerId, setTeamManagerId] = useState(ticketTeamManagerId(ticket));
+  // "Edit allocation" path: pre-select the current assignee (only meaningful when a team is set)
+  const [selectedUserId, setSelectedUserId] = useState(() => (editMode && currentAssigneeId ? String(currentAssigneeId) : ''));
+
+  const { options: teamOptions, loading: teamsLoading }              = useTeamOptions(ticket?.teamManager);
+  const { members, options: memberOptions, loading: membersLoading } = useTeamMembers(teamManagerId);
+
+  const selectedUser = (() => {
+    if (!selectedUserId) return null;
+    const m = members.find(u => String(u._id ?? u.id) === selectedUserId);
+    if (m) return m;
+    // Members not loaded yet (or legacy assignee outside the team): fall back to the ticket's assignee record
+    if (editMode && String(currentAssigneeId) === selectedUserId && ticket?.assigneeUser) {
+      return { ...ticket.assigneeUser, _id: currentAssigneeId };
+    }
+    return null;
+  })();
 
   // ── Phase 3: effort allocation (pre-filled from ticket when present) ──────
   // Mode: the ticket's own mode; a legacy ticket with only a per-day figure opens in per_day; otherwise "Total hours".
@@ -2221,16 +2374,10 @@ function AssignModal({ ticket, groups, allUsers, submitting, editMode = false, o
   const [availability, setAvailability] = useState(null);   // GET /pm/users/:id/availability
   const [availLoading, setAvailLoading] = useState(false);
 
-  useEffect(() => {
-    if (!selectedGroupId) { setGroupUsers(allUsers); return; }
-    getUsersApi({ groupId: selectedGroupId, isActive: true, limit: 200 })
-      .then(res => setGroupUsers(res.data?.data?.users || res.data?.data || allUsers))
-      .catch(() => setGroupUsers(allUsers));
-  }, [selectedGroupId, allUsers]);
-
   // Capacity feedback for the selected agent over the chosen window
+  const selectedUid = selectedUser ? (selectedUser._id || selectedUser.id) : null;
   useEffect(() => {
-    const uid = selectedUser ? (selectedUser._id || selectedUser.id) : null;
+    const uid = selectedUid;
     if (!uid || !allocFrom || !allocTo || allocFrom > allocTo) { setAvailability(null); return; }
     let alive = true;
     setAvailLoading(true);
@@ -2239,11 +2386,7 @@ function AssignModal({ ticket, groups, allUsers, submitting, editMode = false, o
       .catch(() => { if (alive) setAvailability(null); })
       .finally(() => { if (alive) setAvailLoading(false); });
     return () => { alive = false; };
-  }, [selectedUser, allocFrom, allocTo]);
-
-  const filtered = groupUsers.filter(u =>
-    !search.trim() || (u.name || '').toLowerCase().includes(search.toLowerCase())
-  );
+  }, [selectedUid, allocFrom, allocTo]);
 
   const isTotal      = alloc.allocationMode === 'total';
   const rawNum       = Number(isTotal ? alloc.allocationTotalHours : alloc.hoursPerDay);
@@ -2257,13 +2400,27 @@ function AssignModal({ ticket, groups, allUsers, submitting, editMode = false, o
   const wouldExceed  = availability && hoursValid && hoursNum != null && capacity > 0 && (peakHours + hoursNum > capacity);
   const round1       = (n) => Math.round(n * 10) / 10;
 
+  /** Apply a 409 suggestion to this modal's allocation form. */
+  const applySuggestion = (patch) => {
+    if (patch.allocationFrom) setAllocFrom(patch.allocationFrom);
+    if (patch.allocationTo)   setAllocTo(patch.allocationTo);
+    if (patch.allocationHoursPerDay != null) {
+      setAlloc({
+        allocationMode:       'per_day',
+        hoursPerDay:          Number(patch.allocationHoursPerDay),
+        allocationTotalHours: null,
+      });
+    }
+    onClearConflict?.();
+  };
+
   const handleConfirm = () => {
-    if (!selectedUser || !hoursValid || !datesValid) return;
+    if (!selectedUser || !teamManagerId || !hoursValid || !datesValid) return;
     const uid = selectedUser._id || selectedUser.id;
     onAssign({
       assigneeId:            uid,
       assigneeName:          selectedUser.name,
-      groupId:               selectedGroupId || null,
+      teamManagerId,
       allocationMode:        isTotal ? 'total' : 'per_day',
       allocationHoursPerDay: hoursNum ?? null,
       allocationTotalHours:  isTotal ? rawNum : null,
@@ -2283,60 +2440,42 @@ function AssignModal({ ticket, groups, allUsers, submitting, editMode = false, o
         </div>
 
         <div className="p-5 space-y-4">
-          {/* Group filter */}
+          {/* Team / Manager */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Filter by Group</label>
-            <select
-              value={selectedGroupId}
-              onChange={e => { setSelectedGroupId(e.target.value); setSelectedUser(null); }}
-              className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-            >
-              <option value="">All Groups</option>
-              {(groups || []).map(g => <option key={g._id || g.id} value={g._id || g.id}>{g.name}</option>)}
-            </select>
-          </div>
-
-          {/* Search */}
-          <div className="relative">
-            <HiOutlineSearch className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-            <input
-              type="text"
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              placeholder="Search agents..."
-              className="w-full pl-9 pr-4 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">Team / Manager</label>
+            <SearchSelect
+              size="md"
+              options={teamOptions}
+              loading={teamsLoading}
+              value={teamManagerId}
+              placeholder="— Select team —"
+              onChange={(v) => { setTeamManagerId(v || ''); setSelectedUserId(''); }}
             />
           </div>
 
-          {/* Agent list */}
-          <div className="space-y-1.5 max-h-52 overflow-y-auto">
-            {filtered.length === 0 ? (
-              <p className="text-sm text-gray-400 text-center py-4">No agents found</p>
-            ) : (
-              filtered.map(u => {
-                const uid = u._id || u.id;
-                const selId = selectedUser ? (selectedUser._id || selectedUser.id) : null;
-                const isSelected = uid && uid === selId;
-                return (
-                  <button
-                    key={uid}
-                    type="button"
-                    onClick={() => setSelectedUser(u)}
-                    className={`w-full text-left flex items-center gap-3 px-3 py-2.5 rounded-xl border transition-colors ${
-                      isSelected
-                        ? 'border-blue-500 bg-blue-50'
-                        : 'border-transparent hover:bg-gray-50'
-                    }`}
-                  >
-                    <Avatar name={u.name} size="sm" />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-gray-800 truncate">{u.name}</p>
-                      <p className="text-xs text-gray-400 capitalize">{fmtLabel(u.role)}</p>
-                    </div>
-                    {isSelected && <HiOutlineCheck className="w-4 h-4 text-blue-600 flex-shrink-0" />}
-                  </button>
-                );
-              })
+          {/* Assign to — members of the chosen team (manager listed first) */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">Assign to</label>
+            <SearchSelect
+              size="md"
+              options={memberOptions}
+              loading={membersLoading}
+              value={selectedUserId}
+              disabled={!teamManagerId}
+              placeholder={teamManagerId ? '— Select agent —' : 'Select a team first'}
+              emptyText="No members in this team"
+              onChange={(v) => setSelectedUserId(v ? String(v) : '')}
+            />
+            {selectedUser && (
+              <div className="flex items-center gap-2 mt-2">
+                <Avatar name={selectedUser.name} size="sm" />
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-gray-800 truncate">{selectedUser.name}</p>
+                  {(selectedUser.designation || selectedUser.role) && (
+                    <p className="text-xs text-gray-400 truncate">{selectedUser.designation || fmtLabel(selectedUser.role)}</p>
+                  )}
+                </div>
+              </div>
             )}
           </div>
 
@@ -2398,12 +2537,12 @@ function AssignModal({ ticket, groups, allUsers, submitting, editMode = false, o
                     <p className="text-[11px] text-gray-500">
                       {round1(freeHours)}h free on their busiest day ({round1(peakHours)}h / {round1(capacity)}h committed)
                     </p>
-                    {wouldExceed && (
-                      <div className="mt-1.5 flex items-start gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-2 text-[11px] text-amber-800">
+                    {wouldExceed && !conflict && (
+                      <div className="mt-1.5 flex items-start gap-1.5 rounded-lg border border-red-200 bg-red-50 px-2.5 py-2 text-[11px] text-red-700">
                         <HiOutlineExclamation className="w-3.5 h-3.5 flex-shrink-0 mt-px" />
                         <span>
                           Adding {round1(hoursNum)}h/day{isTotal ? ` (${round1(rawNum)}h total)` : ''} would put them at {round1(peakHours + hoursNum)}h / {round1(capacity)}h on{' '}
-                          {availability.overDays ? `${availability.overDays}` : 'some'} days — assignment is still allowed
+                          {availability.overDays ? `${availability.overDays}` : 'some'} days — this will be refused unless an exception is approved
                         </span>
                       </div>
                     )}
@@ -2411,8 +2550,37 @@ function AssignModal({ ticket, groups, allUsers, submitting, editMode = false, o
                 ) : null}
               </div>
             )}
+
+            {/* Server refused the assignment (HTTP 409) — nothing was saved */}
+            <TicketConflictPanel
+              compact
+              conflict={conflict}
+              capacity={capacity > 0 ? capacity : 8}
+              onApply={applySuggestion}
+              onRequestException={() => setShowException(true)}
+            />
           </div>
         </div>
+
+        {conflict && showException && (
+          <TicketExceptionModal
+            open
+            ticketId={ticket?._id ?? ticket?.id}
+            ticket={ticket}
+            conflict={conflict}
+            allocation={{
+              assigneeId:            selectedUser ? (selectedUser._id || selectedUser.id) : undefined,
+              assigneeName:          selectedUser?.name,
+              allocationMode:        isTotal ? 'total' : 'per_day',
+              allocationHoursPerDay: hoursNum ?? null,
+              allocationTotalHours:  isTotal ? rawNum : null,
+              allocationFrom:        allocFrom,
+              allocationTo:          allocTo,
+            }}
+            onClose={() => setShowException(false)}
+            onRequested={(result) => { setShowException(false); onRequested?.(result); }}
+          />
+        )}
 
         <div className="flex justify-end gap-3 px-5 py-4 border-t border-gray-200">
           <button onClick={onClose} className="px-4 py-2 border border-gray-200 rounded-lg text-sm text-gray-600 hover:bg-gray-50 transition-colors">
@@ -2420,7 +2588,7 @@ function AssignModal({ ticket, groups, allUsers, submitting, editMode = false, o
           </button>
           <button
             onClick={handleConfirm}
-            disabled={!selectedUser || !hoursValid || !datesValid || submitting}
+            disabled={!selectedUser || !teamManagerId || !hoursValid || !datesValid || submitting}
             className="px-5 py-2 bg-blue-600 text-white rounded-lg text-sm font-semibold hover:bg-blue-700 disabled:opacity-50 transition-colors"
           >
             {submitting ? 'Assigning...' : 'Assign'}

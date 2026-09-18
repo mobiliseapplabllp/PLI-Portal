@@ -7,8 +7,10 @@ export const updateTicketApi      = (id, data)   => api.put(`/helpdesk/tickets/$
 export const deleteTicketApi      = (id)         => api.delete(`/helpdesk/tickets/${id}`);
 export const bulkAssignTicketsApi = (data)       => api.post('/helpdesk/tickets/bulk-assign', data);
 
+/** @deprecated Legacy read-only group names — teams come from GET /helpdesk/teams. */
 export const getGroupsApi         = ()           => api.get('/helpdesk/groups');
-export const getHdProjectsApi     = (groupId)    => api.get('/helpdesk/projects', { params: groupId ? { groupId } : undefined });
+/** Legacy helpdesk projects (GET /helpdesk/projects); the ?groupId filter was removed server-side. */
+export const getHdProjectsApi     = ()           => api.get('/helpdesk/projects');
 export const getSolutionsApi      = (params)     => api.get('/helpdesk/solutions', { params });
 export const getAnnouncementsApi  = ()           => api.get('/helpdesk/announcements');
 export const getDashboardStatsApi = ()           => api.get('/helpdesk/dashboard/stats');
@@ -23,25 +25,8 @@ export const getAllHdOptionsApi    = ()           => api.get('/helpdesk/options/
 export const createHdOptionApi    = (data)       => api.post('/helpdesk/options', data);
 export const deleteHdOptionApi    = (id)         => api.delete(`/helpdesk/options/${id}`);
 
-/**
- * Fetch all users with their current helpdesk group assignment.
- */
-export const getUserGroupsApi = () => api.get('/helpdesk/user-groups');
-
-/**
- * Assign a single user to a helpdesk group (or null to unassign).
- * @param {string} userId
- * @param {number|null} groupId
- */
-export const assignUserGroupApi = (userId, groupId) =>
-  api.put(`/helpdesk/user-groups/${userId}`, { groupId });
-
-/**
- * Bulk-assign multiple users to helpdesk groups.
- * @param {{ userId: string, groupId: number|null }[]} assignments
- */
-export const bulkAssignUserGroupsApi = (assignments) =>
-  api.put('/helpdesk/user-groups/bulk', { assignments });
+// NOTE: user↔group mapping endpoints (GET/PUT /helpdesk/user-groups) were removed —
+// the PUT routes now return 410 Gone. Team membership comes from users.managerId.
 
 // Helpdesk ticket documents
 export const getHdDocumentsApi       = (ticketId)        => api.get(`/helpdesk/tickets/${ticketId}/documents`);

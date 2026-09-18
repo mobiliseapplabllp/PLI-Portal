@@ -8,6 +8,7 @@ import {
   HiOutlineChartBar,
 } from 'react-icons/hi';
 import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import { projectProgress } from '../../utils/pmProgress';
 
 const STATUS_COLORS = {
   // New status names
@@ -185,8 +186,7 @@ export default function PMDashboard() {
             <div className="divide-y divide-gray-50">
               {active.slice(0, 6).map(p => {
                 const milestones = p.milestones || [];
-                const done = milestones.filter(m => m.status === 'completed').length;
-                const pct = milestones.length > 0 ? Math.round((done / milestones.length) * 100) : 0;
+                const pct = projectProgress(milestones);
                 return (
                   <div
                     key={p._id || p.id}
@@ -272,7 +272,7 @@ export default function PMDashboard() {
               <tbody className="divide-y divide-gray-50">
                 {projects.map(p => {
                   const ms = p.milestones || [];
-                  const pct = ms.length > 0 ? Math.round((ms.filter(m => m.status === 'completed').length / ms.length) * 100) : 0;
+                  const pct = projectProgress(ms);
                   return (
                     <tr
                       key={p._id || p.id}

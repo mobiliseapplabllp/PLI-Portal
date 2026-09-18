@@ -8,3 +8,4 @@ export * from './announcements.api';
 export * from './hdDashboard.api';
 export * from './tasks.api';
 export * from './attachments.api';
+export * from './teams.api';

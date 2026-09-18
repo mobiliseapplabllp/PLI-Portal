@@ -33,6 +33,8 @@ const PmStatusReport             = require('./pm/PmStatusReport');
 const PmRaidItem                 = require('./pm/PmRaidItem');
 const PmMilestoneDateLog         = require('./pm/PmMilestoneDateLog');
 const PmAllocationApproval       = require('./pm/PmAllocationApproval');
+const AllocationSegment          = require('./pm/AllocationSegment');
+const PmAllocationHistory        = require('./pm/PmAllocationHistory');
 const PmFinancialDetail          = require('./pm/PmFinancialDetail');
 const PmClosure                  = require('./pm/PmClosure');
 
@@ -149,6 +151,22 @@ PmAllocationApproval.belongsTo(Project,      { foreignKey: 'projectId',     as: 
 PmAllocationApproval.belongsTo(User,         { foreignKey: 'userId',        as: 'user',      constraints: false });
 PmAllocationApproval.belongsTo(User,         { foreignKey: 'requestedById', as: 'requestedBy', constraints: false });
 PmAllocationApproval.belongsTo(User,         { foreignKey: 'approvedById',  as: 'approvedBy', constraints: false });
+// Allocation exception (migration 044): member ↔ its exception request. No FK constraints —
+// the approval row outlives the member on decline (member deleted / snapshot restored).
+ProjectMember.belongsTo(PmAllocationApproval,   { foreignKey: 'exceptionApprovalId', as: 'exceptionApproval', constraints: false });
+PmAllocationApproval.belongsTo(ProjectMember,   { foreignKey: 'memberId',            as: 'member',            constraints: false });
+
+// Allocation segments (migration 045): a member owns N periods. The only real FK is
+// memberId → pm_project_members (ON DELETE CASCADE in the DDL); the rest are plain indexed ids.
+ProjectMember.hasMany(AllocationSegment,        { foreignKey: 'memberId',            as: 'segments',          onDelete: 'CASCADE' });
+AllocationSegment.belongsTo(ProjectMember,      { foreignKey: 'memberId',            as: 'member' });
+AllocationSegment.belongsTo(Project,            { foreignKey: 'projectId',           as: 'project',           constraints: false });
+AllocationSegment.belongsTo(User,               { foreignKey: 'userId',              as: 'user',              constraints: false });
+AllocationSegment.belongsTo(PmAllocationApproval, { foreignKey: 'exceptionApprovalId', as: 'exceptionApproval', constraints: false });
+PmAllocationApproval.belongsTo(AllocationSegment, { foreignKey: 'segmentId',         as: 'segment',           constraints: false });
+// Allocation history: who changed what
+PmAllocationHistory.belongsTo(User,             { foreignKey: 'byId',                as: 'by',                constraints: false });
+PmAllocationHistory.belongsTo(AllocationSegment, { foreignKey: 'segmentId',          as: 'segment',           constraints: false });
 
 PmClosure.belongsTo(Project, { foreignKey: 'projectId',   as: 'project',   constraints: false });
 PmClosure.belongsTo(User,    { foreignKey: 'signedOffById',as: 'signedOffBy', constraints: false });
@@ -217,7 +235,7 @@ module.exports = {
   Project, ProjectMember, Milestone, Task, DailyStatusLog, ProjectNotificationRecipient, PmSettings, PmHoliday, PmDocument,
   PmProjectType, PmStatus, PmMilestoneTemplate, PmMemberRole,
   PmStatusReport, PmRaidItem, PmFinancialDetail, PmClosure,
-  PmMilestoneDateLog, PmAllocationApproval,
+  PmMilestoneDateLog, PmAllocationApproval, AllocationSegment, PmAllocationHistory,
   // CSAT
   ClientOrganisation, ClientEmployee, Survey, SurveyQuestion,
   SurveyDispatch, SurveyRecipient, SurveyResponse,

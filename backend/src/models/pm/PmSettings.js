@@ -22,6 +22,25 @@ const PmSettings = sequelize.define(
     workingHoursPerDay: { type: DataTypes.DECIMAL(3, 1), allowNull: false, defaultValue: 8.0 },
     // Ordinals (1–5) of the Saturdays in a month that are working days, e.g. [2,4]
     workingSaturdays: { type: DataTypes.JSON, allowNull: true, defaultValue: [2, 4] },
+    // Roles allowed to approve allocation exceptions (migration 044). Getter
+    // normalises NULL / legacy string JSON to a non-empty array.
+    exceptionApproverRoles: {
+      type: DataTypes.JSON,
+      allowNull: true,
+      defaultValue: ['admin'],
+      get() {
+        let v = this.getDataValue('exceptionApproverRoles');
+        if (typeof v === 'string') { try { v = JSON.parse(v); } catch (_) { v = null; } }
+        return Array.isArray(v) && v.length ? v.map(String) : ['admin'];
+      },
+    },
+    // Hard cap on hours/day an exception may request; DECIMAL → number for callers
+    exceptionMaxHoursPerDay: {
+      type: DataTypes.DECIMAL(3, 1),
+      allowNull: false,
+      defaultValue: 12.0,
+      get() { const v = Number(this.getDataValue('exceptionMaxHoursPerDay')); return Number.isFinite(v) && v > 0 ? v : 12; },
+    },
   },
   { tableName: 'pm_settings' }
 );

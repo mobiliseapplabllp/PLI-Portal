@@ -39,7 +39,7 @@ import {
   getDashboardStatsApi,
   getByStatusApi,
   getByPriorityApi,
-  getByGroupApi,
+  getByTeamApi,
   getMonthlyTrendApi,
 } from '../../api/helpdesk/hdDashboard.api';
 import { getTicketsApi } from '../../api/helpdesk/tickets.api';
@@ -359,7 +359,7 @@ function DashboardTab() {
   const [stats, setStats]           = useState(null);
   const [byStatus, setByStatus]     = useState([]);
   const [byPriority, setByPriority] = useState([]);
-  const [byGroup, setByGroup]       = useState([]);
+  const [byTeam, setByTeam]         = useState([]);
   const [trend, setTrend]           = useState([]);
   const [tickets, setTickets]       = useState([]);
   const [ticketsLoading, setTicketsLoading] = useState(true);
@@ -387,11 +387,11 @@ function DashboardTab() {
     (async () => {
       setLoading(true);
       try {
-        const [sRes, stRes, prRes, grRes, trRes] = await Promise.allSettled([
+        const [sRes, stRes, prRes, tmRes, trRes] = await Promise.allSettled([
           getDashboardStatsApi(),
           getByStatusApi(),
           getByPriorityApi(),
-          getByGroupApi(),
+          getByTeamApi(),
           getMonthlyTrendApi(),
         ]);
         if (!alive) return;
@@ -405,9 +405,9 @@ function DashboardTab() {
           const raw = extractData(prRes.value);
           setByPriority(Array.isArray(raw) ? raw : Object.entries(raw || {}).map(([label, count]) => ({ label, count })));
         }
-        if (grRes.status === 'fulfilled') {
-          const raw = extractData(grRes.value);
-          setByGroup(Array.isArray(raw) ? raw : []);
+        if (tmRes.status === 'fulfilled') {
+          const raw = extractData(tmRes.value);
+          setByTeam(Array.isArray(raw) ? raw : []);
         }
         if (trRes.status === 'fulfilled') {
           const raw = extractData(trRes.value);
@@ -572,7 +572,7 @@ function DashboardTab() {
             <HiOutlineLocationMarker className="w-4 h-4" /> All Sites
           </button>
           <button className="flex items-center gap-1.5 px-2.5 py-1.5 border border-slate-200 rounded-xl text-xs text-slate-600 hover:bg-slate-50 hover:border-slate-300 transition-colors">
-            <HiOutlineUsers className="w-4 h-4" /> All Groups
+            <HiOutlineUsers className="w-4 h-4" /> All Teams
           </button>
           <button
             onClick={() => navigate('/helpdesk/tickets/new')}
@@ -810,27 +810,40 @@ function DashboardTab() {
             }
           </div>
 
-          {/* ── Row 6: Group table + Monthly trend ── */}
+          {/* ── Row 6: Team table + Monthly trend ── */}
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
             <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
               <div className="px-5 py-4 border-b border-gray-100">
-                <h3 className="font-semibold text-gray-900">Tickets by Group</h3>
+                <h3 className="font-semibold text-gray-900">Tickets by Team</h3>
               </div>
               {loading ? <Spinner /> : (
                 <table className="w-full text-sm">
                   <thead className="bg-gray-50 text-xs text-gray-500 uppercase tracking-wider">
                     <tr>
-                      <th className="px-5 py-3 text-left">Group</th>
+                      <th className="px-5 py-3 text-left">Team</th>
                       <th className="px-5 py-3 text-right">Tickets</th>
+                      <th className="px-5 py-3 text-right">Pending</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-50">
-                    {byGroup.length === 0
-                      ? <tr><td colSpan={2} className="px-5 py-6 text-center text-gray-400 text-sm">No group data</td></tr>
-                      : byGroup.map((g, i) => (
-                          <tr key={i} className="hover:bg-gray-50">
-                            <td className="px-5 py-3 text-gray-800">{g.group?.name ?? g.label ?? g.name ?? '—'}</td>
-                            <td className="px-5 py-3 text-right font-semibold text-gray-900">{g.count ?? 0}</td>
+                    {byTeam.length === 0
+                      ? <tr><td colSpan={3} className="px-5 py-6 text-center text-gray-400 text-sm">No team data</td></tr>
+                      : byTeam.map((t, i) => (
+                          <tr key={t.teamManagerId ?? `legacy-${i}`} className="hover:bg-gray-50">
+                            <td className="px-5 py-3 text-gray-800">
+                              {t.teamManagerId ? (
+                                <button
+                                  onClick={() => navigate(`/helpdesk/tickets?teamManagerId=${encodeURIComponent(t.teamManagerId)}`)}
+                                  className="text-blue-600 hover:underline font-medium"
+                                >
+                                  {t.teamName ?? '—'}
+                                </button>
+                              ) : (
+                                <span className="text-gray-500">{t.teamName ?? '—'}</span>
+                              )}
+                            </td>
+                            <td className="px-5 py-3 text-right font-semibold text-gray-900">{t.total ?? 0}</td>
+                            <td className="px-5 py-3 text-right font-medium text-amber-600">{t.pending ?? 0}</td>
                           </tr>
                         ))
                     }
@@ -1206,7 +1219,7 @@ function AvailabilityTab() {
             <tr>
               <th className="px-5 py-3 text-left">Member</th>
               <th className="px-5 py-3 text-left">Role</th>
-              <th className="px-5 py-3 text-left">Group / Department</th>
+              <th className="px-5 py-3 text-left">Department</th>
               <th className="px-5 py-3 text-left">Availability</th>
             </tr>
           </thead>
@@ -1243,12 +1256,12 @@ function AvailabilityTab() {
                     </span>
                   </td>
                   <td className="px-5 py-3 text-gray-600 text-sm">
-                    {typeof u.group?.name === 'string' && u.group.name
-                      ? u.group.name
+                    {typeof u.department?.name === 'string' && u.department.name
+                      ? u.department.name
                       : typeof u.department === 'string' && u.department
                       ? u.department
-                      : typeof u.group_name === 'string' && u.group_name
-                      ? u.group_name
+                      : typeof u.departmentName === 'string' && u.departmentName
+                      ? u.departmentName
                       : '—'}
                   </td>
                   <td className="px-5 py-3">

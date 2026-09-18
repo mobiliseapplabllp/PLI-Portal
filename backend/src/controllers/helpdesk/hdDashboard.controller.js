@@ -106,6 +106,55 @@ const getByGroup = async (req, res, next) => {
 };
 
 /**
+ * GET /helpdesk/dashboard/by-team
+ * Ticket counts per TEAM (team_manager_id → manager name). Tickets that never
+ * got a team (team_manager_id NULL) are reported under their legacy group as
+ * 'Group: <name>', plus one 'Unassigned' row for tickets with neither.
+ * Rows: { teamManagerId, teamName, total, pending }
+ * @type {import('express').RequestHandler}
+ */
+const getByTeam = async (req, res, next) => {
+  try {
+    const PENDING = `SUM(CASE WHEN t.status NOT IN ('closed','resolved') THEN 1 ELSE 0 END)`;
+    const [[teamRows], [groupRows], [[unassigned]]] = await Promise.all([
+      sequelize.query(`
+        SELECT t.team_manager_id AS teamManagerId, u.name AS teamName,
+               COUNT(t.id) AS total, ${PENDING} AS pending
+        FROM hd_tickets t
+        JOIN users u ON u.id = t.team_manager_id
+        WHERE t.team_manager_id IS NOT NULL
+        GROUP BY t.team_manager_id, u.name
+        ORDER BY total DESC
+      `),
+      sequelize.query(`
+        SELECT CONCAT('Group: ', g.name) AS teamName,
+               COUNT(t.id) AS total, ${PENDING} AS pending
+        FROM hd_tickets t
+        JOIN hd_groups g ON g.id = t.group_id
+        WHERE t.team_manager_id IS NULL AND t.group_id IS NOT NULL
+        GROUP BY g.id, g.name
+        ORDER BY total DESC
+      `),
+      sequelize.query(`
+        SELECT COUNT(t.id) AS total, COALESCE(${PENDING}, 0) AS pending
+        FROM hd_tickets t
+        WHERE t.team_manager_id IS NULL AND t.group_id IS NULL
+      `),
+    ]);
+
+    const num = (r) => ({ ...r, total: Number(r.total) || 0, pending: Number(r.pending) || 0 });
+    const rows = [
+      ...teamRows.map(num),
+      ...groupRows.map((r) => num({ teamManagerId: null, ...r })),
+      num({ teamManagerId: null, teamName: 'Unassigned', ...unassigned }),
+    ];
+    return sendSuccess(res, rows, 'By-team fetched');
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
  * GET /helpdesk/dashboard/monthly-trend
  * Count tickets by month for the last 6 months.
  * @type {import('express').RequestHandler}
@@ -187,13 +236,21 @@ const getProjectStats = async (req, res, next) => {
   try {
     const [rows] = await sequelize.query(`
       SELECT
-        p.name AS projectName,
-        COUNT(t.id) AS total,
-        SUM(CASE WHEN t.status NOT IN ('closed','resolved') THEN 1 ELSE 0 END) AS pending
-      FROM hd_tickets t
-      JOIN hd_projects p ON p.id = t.project_id
-      WHERE t.project_id IS NOT NULL
-      GROUP BY p.id, p.name
+        projectName,
+        COUNT(*) AS total,
+        SUM(CASE WHEN status NOT IN ('closed','resolved') THEN 1 ELSE 0 END) AS pending
+      FROM (
+        -- New tickets reference PM projects; legacy tickets reference hd_projects.
+        -- A legacy hd project that is linked to a PM project counts under the PM name.
+        SELECT t.status,
+               COALESCE(pm.name, pm2.name, hp.name) AS projectName
+          FROM hd_tickets t
+          LEFT JOIN pm_projects pm  ON pm.id  = t.pm_project_id
+          LEFT JOIN hd_projects hp  ON hp.id  = t.project_id
+          LEFT JOIN pm_projects pm2 ON pm2.id = hp.pm_project_id
+         WHERE t.pm_project_id IS NOT NULL OR t.project_id IS NOT NULL
+      ) x
+      GROUP BY projectName
       ORDER BY total DESC
       LIMIT 20
     `);
@@ -305,6 +362,7 @@ module.exports = {
   getByStatus,
   getByPriority,
   getByGroup,
+  getByTeam,
   getMonthlyTrend,
   getAgentStats,
   getRaisedByTeam,

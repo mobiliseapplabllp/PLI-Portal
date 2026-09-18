@@ -51,12 +51,14 @@ const getWidgetConfig = async (req, res, next) => {
 
     const project = await HdProject.findOne({
       where:      { publicToken: token },
-      attributes: ['id', 'name'],
+      attributes: ['id', 'name', 'pmProjectId'],
+      include:    [{ association: 'pmProject', attributes: ['id', 'name'], required: false }],
     });
 
     if (!project) return sendError(res, 'Invalid widget token', 404);
 
-    return sendSuccess(res, { id: project.id, name: project.name }, 'Widget config');
+    // Name comes from the common PM project when the token row is linked to one.
+    return sendSuccess(res, { id: project.id, name: project.pmProject?.name || project.name }, 'Widget config');
   } catch (err) {
     next(err);
   }
@@ -100,7 +102,8 @@ const submitWidgetTicket = async (req, res, next) => {
           category:     category.trim(),
           priority:     TICKET_PRIORITY.MEDIUM,
           status:       TICKET_STATUS.OPEN,
-          projectId:    project.id,
+          projectId:    project.id,                       // token row (widget lookups key on it)
+          pmProjectId:  project.pmProjectId || null,      // the common PM project, for lists/reports
           widgetSource: true,
           widgetName:   name.trim(),
           widgetEmail:  email.trim().toLowerCase(),

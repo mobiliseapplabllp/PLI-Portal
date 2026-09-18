@@ -24,9 +24,13 @@ import {
   deleteTicketApi,
   bulkUploadTicketsApi,
 } from '../../api/helpdesk/tickets.api';
-import { getGroupsApi } from '../../api/helpdesk/groups.api';
+import { listTeamsApi, getTeamMembersApi } from '../../api/helpdesk/teams.api';
 import { getUsersApi } from '../../api/users.api';
+import api from '../../api/axios';
 import AllocationTypeInput from '../../components/pm/AllocationTypeInput';
+import TicketExceptionModal from '../../components/helpdesk/TicketExceptionModal';
+import SearchSelect from '../../components/common/SearchSelect';
+import { listPmProjectsForTicketsApi } from '../../api/helpdesk/teams.api';
 import { getHdProjectsApi } from '../../api/helpdesk/hdProjects.api';
 import { downloadHdImportTemplateApi } from '../../api/helpdesk/hdTemplate.api';
 import toast from 'react-hot-toast';
@@ -75,6 +79,12 @@ const PRIORITY_COLORS = {
 // Helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * Was this bulk-assign row skipped because the agent would be over capacity?
+ * The server's reason is 'Assignee would be over capacity'.
+ */
+const isCapacitySkip = (d) => /over capacity/i.test(String(d?.reason || ''));
+
 /** Convert snake_case / kebab-case to Title Case */
 const fmtLabel = (s) =>
   (s || '').replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
@@ -100,6 +110,11 @@ const unwrapList = (res) => {
   return [];
 };
 
+/** Team = reporting manager + direct reports. Display name with legacy group fallback. */
+const teamName = (t) => t.teamManager?.name || t.group?.name || t.groupName || '';
+/** Project name: PM project first, then the legacy helpdesk project. */
+const projectName = (t) => t.pmProject?.name || t.project?.name || t.projectName || '';
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -124,17 +139,25 @@ export default function TicketList() {
 
   // Filter-dropdown datasets
   const [users,    setUsers]    = useState([]);
-  const [projects, setProjects] = useState([]);
-  const [groups,   setGroups]   = useState([]);
+  const [projects, setProjects] = useState([]);   // [{ value, label, sub }] — PM projects + unlinked legacy HD projects
+  const [teams,    setTeams]    = useState([]);   // GET /helpdesk/teams → managers with direct reports
 
   // Row selection
   const [selected, setSelected] = useState([]);
 
-  // Bulk assign modal
-  const [showBulkAssign, setShowBulkAssign] = useState(false);
-  const [baGroupId,      setBaGroupId]      = useState('');
-  const [baGroupUsers,   setBaGroupUsers]   = useState([]);
-  const [baAgentId,      setBaAgentId]      = useState('');
+  // Bulk assign modal — Team / Manager → Assign to (members of that team)
+  const [showBulkAssign,   setShowBulkAssign]   = useState(false);
+  const [baTeamManagerId,  setBaTeamManagerId]  = useState('');
+  const [baMembers,        setBaMembers]        = useState([]);
+  const [baMembersLoading, setBaMembersLoading] = useState(false);
+  const [baAgentId,        setBaAgentId]        = useState('');
+  const [baResult,         setBaResult]         = useState(null); // { updated, skippedDetails:[{ticketId, reason, label}], allocation }
+  // Skipped-for-capacity row the user asked to raise an exception for:
+  // { ticketId, label, conflict } — the conflict block is FETCHED before the
+  // modal opens (bulk-assign answers 200 with skip reasons and carries none), so
+  // the modal's tiles show real numbers and its exception-cap guard stays live.
+  const [baException,      setBaException]      = useState(null);
+  const [baExcLoadingId,   setBaExcLoadingId]   = useState(null);   // ticketId being prepared
   // Phase 3 — effort allocation applied to every ticket in the batch
   const [baAlloc,        setBaAlloc]        = useState({ allocationMode: 'total', hoursPerDay: '', allocationTotalHours: '10' }); // bulk modal defaults to Total hours
   const [baDerived,      setBaDerived]      = useState({ hoursPerDay: null, totalHours: null, workingDays: null });
@@ -181,7 +204,7 @@ export default function TicketList() {
     !!filters.priority   ||
     !!filters.assigneeId ||
     !!filters.projectId  ||
-    !!filters.groupId;
+    !!filters.teamManagerId;
 
   // -------------------------------------------------------------------------
   // Load tickets
@@ -197,19 +220,80 @@ export default function TicketList() {
   useEffect(() => { load(); }, [load]);
 
   // Load filter-dropdown data once on mount.
-  // getUsersApi requires admin/manager/senior_manager — skip for employee role to avoid 403.
+  // Employee filter: with no Team selected, every active employee (roles that may list
+  // users only — the KPI users endpoint is admin/manager-only); with a Team selected,
+  // that team's members (helpdesk endpoint, available to every role).
   const canListUsers = ['admin', 'manager', 'senior_manager', 'hr_admin'].includes(user?.role);
   useEffect(() => {
     if (canListUsers) {
-      getUsersApi().then(unwrapList).then(setUsers).catch(() => setUsers([]));
+      getUsersApi({ isActive: true, pageSize: 500, limit: 500 })
+        .then((res) => {
+          const d = res?.data?.data;
+          const list = Array.isArray(d) ? d : (Array.isArray(d?.users) ? d.users : []);
+          setUsers(list);
+        })
+        .catch(() => setUsers([]));
     }
-    getHdProjectsApi().then(unwrapList).then(setProjects).catch(() => setProjects([]));
+    // Project filter: PM projects (the reference new tickets use) + legacy HD projects not yet linked to PM.
+    // ?projectId= on the backend matches either pm_project_id or the legacy project_id.
+    Promise.all([
+      listPmProjectsForTicketsApi({ includeClosed: 1 }).then(unwrapList).catch(() => []),
+      getHdProjectsApi().then(unwrapList).catch(() => []),
+    ]).then(([pm, hd]) => {
+      const pmOpts = pm.map((p) => ({
+        value: p._id ?? p.id,
+        label: p.name,
+        sub:   [p.clientName, p.managerName, p.isClosed ? p.status : ''].filter(Boolean).join(' · '),
+      }));
+      const hdOpts = hd
+        .filter((p) => !(p.pmProjectId ?? p.pm_project_id))
+        .map((p) => ({ value: p._id ?? p.id, label: p.name, sub: 'Legacy helpdesk project' }));
+      setProjects([...pmOpts, ...hdOpts]);
+    });
   }, [canListUsers]);
 
-  // Load groups on mount for the group filter dropdown
+  // Load teams on mount for the Team filter + bulk assign modal
   useEffect(() => {
-    getGroupsApi().then(unwrapList).then(setGroups).catch(() => setGroups([]));
+    listTeamsApi().then(unwrapList).then(setTeams).catch(() => setTeams([]));
   }, []);
+
+  const teamOptions = teams.map((t) => ({
+    value: t._id ?? t.id,
+    label: t.name,
+    sub:   [t.email, t.memberCount != null ? `${t.memberCount} members` : null].filter(Boolean).join(' · '),
+  }));
+
+  // Employee filter options follow the Team filter: team chosen → its members; else all employees.
+  const [teamFilterMembers, setTeamFilterMembers] = useState(null); // null = no team selected
+  useEffect(() => {
+    const tm = filters.teamManagerId;
+    if (!tm) { setTeamFilterMembers(null); return; }
+    let cancelled = false;
+    getTeamMembersApi(tm)
+      .then((res) => {
+        const members = res?.data?.data?.members || [];
+        if (cancelled) return;
+        setTeamFilterMembers(members);
+        // Drop an employee selection that is not in the newly chosen team.
+        const cur = filters.assigneeId;
+        if (cur && cur !== 'unassigned' && !members.some((m) => String(m._id ?? m.id) === String(cur))) {
+          dispatch(setTicketsFilter({ assigneeId: '' }));
+        }
+      })
+      .catch(() => { if (!cancelled) setTeamFilterMembers([]); });
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filters.teamManagerId]);
+
+  const employeeOptions = [
+    { value: 'unassigned', label: 'Unassigned' },
+    ...(teamFilterMembers ?? users).map((u) => ({
+      value: u._id ?? u.id,
+      label: `${u.name || u.full_name || ''}${u.isManager ? ' (manager)' : ''}`,
+      sub:   [u.email, u.designation || u.role].filter(Boolean).join(' · '),
+    })),
+  ];
+  const showEmployeeFilter = canListUsers || !!filters.teamManagerId;
 
   // URL deep-linking: pre-populate filters from query params on first render
   useEffect(() => {
@@ -217,11 +301,15 @@ export default function TicketList() {
     const priority   = searchParams.get('priority');
     const assigneeId = searchParams.get('assigneeId');
     const search     = searchParams.get('search');
+    const teamManagerId = searchParams.get('teamManagerId');
+    const projectId  = searchParams.get('projectId');
     const toApply = {};
     if (status)     toApply.status     = status;
     if (priority)   toApply.priority   = priority;
     if (assigneeId) toApply.assigneeId = assigneeId;
     if (search)     toApply.search     = search;
+    if (teamManagerId) toApply.teamManagerId = teamManagerId;
+    if (projectId)  toApply.projectId  = projectId;
     if (Object.keys(toApply).length) {
       dispatch(setTicketsFilter(toApply));
       if (search) setSearchInput(search);
@@ -275,9 +363,9 @@ export default function TicketList() {
       search:     '',
       status:     '',
       priority:   '',
-      assigneeId: '',
-      projectId:  '',
-      groupId:    '',
+      assigneeId:    '',
+      projectId:     '',
+      teamManagerId: '',
     }));
   };
 
@@ -336,7 +424,8 @@ export default function TicketList() {
         { label: 'Requester',       fn: (t) => t.requester?.name || t.requesterName || t.widgetName || '' },
         { label: 'Requester Email', fn: (t) => t.widget_email || t.requester_email || '' },
         { label: 'Site',            fn: (t) => t.site || '' },
-        { label: 'Group',           fn: (t) => t.group?.name || t.groupName || '' },
+        { label: 'Team',            fn: (t) => teamName(t) },
+        { label: 'Project',         fn: (t) => projectName(t) },
         { label: 'Assignee',        fn: (t) => t.assigneeUser?.name || t.assignee?.name || t.assigneeName || '' },
         { label: 'Due Date',        fn: (t) => fmtDate(t.due_date || t.dueDate) },
         { label: 'Resolution',      fn: (t) => t.resolution || '' },
@@ -503,10 +592,18 @@ export default function TicketList() {
   // -------------------------------------------------------------------------
   const isoDay = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
-  const openBulkAssign = () => {
-    setBaGroupId('');
-    setBaGroupUsers([]);
+  const closeBulkAssign = () => {
+    setShowBulkAssign(false);
+    setBaTeamManagerId('');
+    setBaMembers([]);
     setBaAgentId('');
+  };
+
+  const openBulkAssign = () => {
+    setBaTeamManagerId('');
+    setBaMembers([]);
+    setBaAgentId('');
+    setBaResult(null);
     // Allocation defaults: 10 total hours, today → today + 7
     const today = new Date();
     const week  = new Date(); week.setDate(week.getDate() + 7);
@@ -523,25 +620,36 @@ export default function TicketList() {
   const baHoursNum   = baIsTotal ? baDerived.hoursPerDay : baRaw;   // derived per-day sent as allocationHoursPerDay
   const baDatesValid = !!baFrom && !!baTo && baFrom <= baTo;
 
-  const onBaGroupChange = (gId) => {
-    setBaGroupId(gId);
+  const onBaTeamChange = (managerId) => {
+    setBaTeamManagerId(managerId || '');
     setBaAgentId('');
-    if (!gId) { setBaGroupUsers([]); return; }
-    getUsersApi({ groupId: gId })
-      .then(unwrapList)
-      .then(setBaGroupUsers)
-      .catch(() => setBaGroupUsers([]));
+    if (!managerId) { setBaMembers([]); return; }
+    setBaMembersLoading(true);
+    getTeamMembersApi(managerId)
+      .then((res) => setBaMembers(res?.data?.data?.members || []))
+      .catch(() => setBaMembers([]))
+      .finally(() => setBaMembersLoading(false));
   };
 
+  const baMemberOptions = baMembers.map((m) => ({
+    value: m._id ?? m.id,
+    label: m.isManager ? `${m.name} (manager)` : m.name,
+    sub:   [m.email, m.designation].filter(Boolean).join(' · '),
+  }));
+
   const handleBulkAssignConfirm = async () => {
-    if (!baAgentId || !baHoursValid || !baDatesValid) return;
+    if (!baTeamManagerId || !baAgentId || !baHoursValid || !baDatesValid) return;
     setOpError(null);
     setBulkAssigning(true);
+    // Remember REQ numbers so skipped tickets can be named after the list reloads
+    const labelById = Object.fromEntries(
+      tickets.map((t) => [String(t._id ?? t.id), t.req_number || t.reqNumber || t.ticket_id || `#${t._id ?? t.id}`]),
+    );
     try {
-      await bulkAssignApi({
-        ticketIds:  selected,
-        assigneeId: baAgentId,           // UUID string — do NOT coerce to Number
-        ...(baGroupId ? { groupId: Number(baGroupId) } : {}),
+      const res = await bulkAssignApi({
+        ticketIds:     selected,
+        assigneeId:    baAgentId,          // UUID string — do NOT coerce to Number
+        teamManagerId: baTeamManagerId,    // team = manager + direct reports; assignee must belong to it
         // Phase 3 — same allocation on every ticket in the batch
         allocationMode:        baIsTotal ? 'total' : 'per_day',
         allocationHoursPerDay: baHoursNum ?? null,
@@ -549,13 +657,103 @@ export default function TicketList() {
         allocationFrom:        baFrom,
         allocationTo:          baTo,
       });
+      const data    = res?.data?.data ?? res?.data ?? {};
+      const details = Array.isArray(data.skippedDetails) ? data.skippedDetails : [];
+      const skippedIds = Array.isArray(data.skipped) ? data.skipped : [];
+      setBaResult({
+        updated: Number(data.updated ?? 0),
+        skippedDetails: details.length
+          ? details.map((d) => ({ ...d, label: labelById[String(d.ticketId)] || `#${d.ticketId}` }))
+          : skippedIds.map((tid) => ({ ticketId: tid, reason: 'Skipped', label: labelById[String(tid)] || `#${tid}` })),
+        // Window + hours used for this batch — carried so an exception can be
+        // requested for a ticket the server skipped for capacity
+        allocation: {
+          assigneeId:            baAgentId,
+          assigneeName:          baMembers.find((m) => String(m._id ?? m.id) === String(baAgentId))?.name || 'Agent',
+          allocationMode:        baIsTotal ? 'total' : 'per_day',
+          allocationHoursPerDay: baHoursNum ?? null,
+          allocationTotalHours:  baIsTotal ? baRaw : null,
+          allocationFrom:        baFrom,
+          allocationTo:          baTo,
+        },
+      });
       setSelected([]);
-      setShowBulkAssign(false);
+      closeBulkAssign();
       load();
     } catch (e) {
-      setOpError(e.response?.data?.error?.message || e.message || 'Bulk assign failed');
+      setOpError(e.response?.data?.message || e.response?.data?.error?.message || e.message || 'Bulk assign failed');
     } finally {
       setBulkAssigning(false);
+    }
+  };
+
+  /**
+   * "Request exception…" on a row the bulk assign skipped for capacity.
+   *
+   * The bulk endpoint answers 200 with skip reasons and NO conflict payload, so
+   * the numbers have to be fetched before the modal can be opened. Source is the
+   * same one the create form uses (GET /pm/users/:id/availability — project
+   * periods AND other open tickets), asked for the batch's allocation window.
+   *
+   * On failure the modal is NOT opened with blank tiles and a dead cap guard —
+   * the user is told to open the ticket and request it there instead.
+   */
+  const openBulkException = async (d) => {
+    const alloc = baResult?.allocation;
+    if (!alloc?.assigneeId || !alloc.allocationFrom || !alloc.allocationTo) {
+      setOpError(`Cannot request an exception from here for ${d.label} — open the ticket and request it there.`);
+      return;
+    }
+    setOpError(null);
+    setBaExcLoadingId(String(d.ticketId));
+    try {
+      const [availRes, policyRes] = await Promise.all([
+        api.get(`/pm/users/${alloc.assigneeId}/availability`, {
+          params: { fromDate: alloc.allocationFrom, toDate: alloc.allocationTo },
+        }),
+        // Exception cap — only admins may read /pm/settings, so this is best
+        // effort; the availability payload is preferred when it carries it.
+        api.get('/pm/settings').catch(() => null),
+      ]);
+      const a = availRes?.data?.data ?? availRes?.data ?? null;
+      const capacity = Number(a?.capacity);
+      const peakNow  = Number(a?.peakHours);
+      if (!a || !Number.isFinite(capacity) || capacity <= 0 || !Number.isFinite(peakNow)) {
+        throw new Error('Capacity data unavailable');
+      }
+
+      const add  = Number(alloc.allocationHoursPerDay) || 0;
+      const free = Number.isFinite(Number(a.freeHours)) ? Number(a.freeHours) : Math.max(0, capacity - peakNow);
+      const peak = peakNow + add;                       // what this ticket would make it
+      const policy = policyRes?.data?.data ?? policyRes?.data ?? null;
+      const excCap = [a.exceptionMaxHoursPerDay, policy?.exceptionMaxHoursPerDay]
+        .map(Number).find((n) => Number.isFinite(n) && n > 0);
+
+      setBaException({
+        ticketId: d.ticketId,
+        label:    d.label,
+        conflict: {
+          capacity,
+          peak,
+          remaining: Math.max(0, free),
+          overDays:  Number.isFinite(Number(a.overDays)) ? Number(a.overDays) : undefined,
+          canRequestException: true,
+          suggestions: {
+            overloadHours: Math.max(0, peak - capacity),
+            reduceTo:      free > 0 ? free : null,
+            nextFreeDate:  a.nextFreeDate || null,
+          },
+          ...(excCap != null ? { exceptionMaxHoursPerDay: excCap } : {}),
+        },
+      });
+    } catch (e) {
+      setBaException(null);
+      setOpError(
+        `${e.response?.data?.message || e.response?.data?.error?.message || e.message || 'Could not read the agent’s capacity'}`
+        + ` — could not prepare the exception request for ${d.label}. Open the ticket and request the exception there.`,
+      );
+    } finally {
+      setBaExcLoadingId(null);
     }
   };
 
@@ -691,48 +889,42 @@ export default function TicketList() {
                 ))}
               </select>
 
-              {/* Group — coerce to Number so Redux state matches integer group.id */}
-              {groups.length > 0 && (
-                <select
-                  value={filters.groupId || ''}
-                  onChange={(e) => dispatch(setTicketsFilter({ groupId: e.target.value ? Number(e.target.value) : '' }))}
-                  className="px-2 py-1.5 border border-gray-300 rounded-lg text-[11px] bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                >
-                  <option value="">All Groups</option>
-                  {groups.map((g) => (
-                    <option key={g.id} value={g.id}>{g.name}</option>
-                  ))}
-                </select>
+              {/* Team — manager UUID, sent as ?teamManagerId= */}
+              {teamOptions.length > 0 && (
+                <div className="w-44" title="Filter by Team">
+                  <SearchSelect
+                    options={teamOptions}
+                    value={filters.teamManagerId || ''}
+                    placeholder="All Teams"
+                    onChange={(v) => dispatch(setTicketsFilter({ teamManagerId: v || '' }))}
+                    className="rounded-lg border-gray-300 py-1.5 text-[11px]"
+                  />
+                </div>
               )}
 
-              {/* Agent / Assignee — only shown to roles that can access the users list */}
-              {canListUsers && (
-                <select
-                  value={filters.assigneeId || ''}
-                  onChange={(e) => handleFilter('assigneeId', e.target.value)}
-                  className="px-2 py-1.5 border border-gray-300 rounded-lg text-[11px] bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                >
-                  <option value="">All Agents</option>
-                  <option value="unassigned">Unassigned</option>
-                  {users.map((u) => {
-                    const uid = u._id ?? u.id;
-                    return <option key={uid} value={uid}>{u.name || u.full_name}</option>;
-                  })}
-                </select>
+              {/* Employee / Assignee — all employees, or the selected team's members */}
+              {showEmployeeFilter && (
+                <div className="w-48" title={filters.teamManagerId ? 'Employees in the selected team' : 'All employees'}>
+                  <SearchSelect
+                    options={employeeOptions}
+                    value={filters.assigneeId || ''}
+                    placeholder={filters.teamManagerId ? 'All team members' : 'All Employees'}
+                    onChange={(v) => handleFilter('assigneeId', v || '')}
+                    className="rounded-lg border-gray-300 py-1.5 text-[11px]"
+                  />
+                </div>
               )}
 
-              {/* Project */}
-              <select
-                value={filters.projectId || ''}
-                onChange={(e) => handleFilter('projectId', e.target.value)}
-                title="Filter by Project"
-                className="px-2 py-1.5 border border-gray-300 rounded-lg text-[11px] bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                <option value="">All Projects</option>
-                {projects.map((p) => (
-                  <option key={p.id} value={p.id}>{p.name}</option>
-                ))}
-              </select>
+              {/* Project — PM project names (UUID) plus unlinked legacy HD projects */}
+              <div className="w-48" title="Filter by Project">
+                <SearchSelect
+                  options={projects}
+                  value={filters.projectId || ''}
+                  placeholder="All Projects"
+                  onChange={(v) => handleFilter('projectId', v || '')}
+                  className="rounded-lg border-gray-300 py-1.5 text-[11px]"
+                />
+              </div>
 
               {/* Clear filters */}
               {hasActiveFilters && (
@@ -831,6 +1023,53 @@ export default function TicketList() {
           <div className="flex items-center justify-between bg-red-50 border border-red-200 rounded-lg px-4 py-2 text-[11px] text-red-700 mb-3">
             <span>{opError}</span>
             <button onClick={() => setOpError(null)} className="ml-3 text-red-400 hover:text-red-600">
+              <HiX className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
+        {/* Bulk assign result — updated count + tickets skipped by the team-membership rule */}
+        {baResult && (
+          <div className={`flex items-start justify-between rounded-lg px-4 py-2 text-[11px] mb-3 border ${
+            baResult.skippedDetails.length ? 'bg-amber-50 border-amber-200 text-amber-800' : 'bg-green-50 border-green-200 text-green-800'
+          }`}>
+            <div>
+              <p className="font-medium">
+                {baResult.updated} ticket{baResult.updated === 1 ? '' : 's'} assigned
+                {baResult.skippedDetails.length ? ` · ${baResult.skippedDetails.length} skipped` : ''}
+              </p>
+              {baResult.skippedDetails.length > 0 && (
+                <ul className="mt-1 space-y-0.5">
+                  {baResult.skippedDetails.map((d, i) => (
+                    <li key={`${d.ticketId}-${i}`} className="flex items-center gap-2">
+                      <span>
+                        · <span className="font-medium">{d.label}</span>{d.reason ? ` — ${d.reason}` : ''}
+                      </span>
+                      {isCapacitySkip(d) && (
+                        <button
+                          type="button"
+                          onClick={() => openBulkException(d)}
+                          disabled={baExcLoadingId === String(d.ticketId)}
+                          className="px-2 py-0.5 bg-amber-600 text-white rounded text-[10px] font-medium hover:bg-amber-700 transition-colors disabled:opacity-50"
+                        >
+                          {baExcLoadingId === String(d.ticketId) ? 'Checking capacity…' : 'Request exception…'}
+                        </button>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {/* Every ticket refused for capacity — point at the per-ticket exception path */}
+              {baResult.updated === 0
+                && baResult.skippedDetails.length > 0
+                && baResult.skippedDetails.every(isCapacitySkip) && (
+                <p className="mt-1.5">
+                  Nothing was assigned — the agent would be over capacity for this window.
+                  Reduce the hours or shorten the window, or open a ticket and request an allocation exception for approval.
+                </p>
+              )}
+            </div>
+            <button onClick={() => setBaResult(null)} className="ml-3 opacity-60 hover:opacity-100" title="Dismiss">
               <HiX className="w-4 h-4" />
             </button>
           </div>
@@ -943,12 +1182,12 @@ export default function TicketList() {
                       <div className="max-w-[220px] truncate text-[11px] text-gray-800">
                         {t.title || t.subject}
                       </div>
-                      {(t.project?.name || t.projectName) && (
+                      {projectName(t) && (
                         <div
                           className="max-w-[220px] truncate text-[10px] text-indigo-600 font-medium leading-tight mt-0.5"
-                          title={`Project: ${t.project?.name || t.projectName}`}
+                          title={`Project: ${projectName(t)}`}
                         >
-                          📁 {t.project?.name || t.projectName}
+                          📁 {projectName(t)}
                         </div>
                       )}
                     </td>
@@ -957,9 +1196,9 @@ export default function TicketList() {
                     <td className="px-2 py-1.5 align-middle">
                       <div
                         className="text-[10px] text-gray-500 leading-tight truncate"
-                        title={t.group?.name || t.groupName || t.team || ''}
+                        title={teamName(t)}
                       >
-                        {t.group?.name || t.groupName || t.team || '—'}
+                        {teamName(t) || '—'}
                       </div>
                       <div
                         className="text-[11px] text-gray-800 font-medium leading-tight truncate mt-0.5"
@@ -1094,6 +1333,19 @@ export default function TicketList() {
         )}
       </div>
 
+      {/* Exception request for a ticket the bulk assign skipped for capacity */}
+      {baException && baResult?.allocation && baException.conflict && (
+        <TicketExceptionModal
+          open
+          ticketId={baException.ticketId}
+          ticket={{ reqNumber: baException.label }}
+          allocation={baResult.allocation}
+          conflict={baException.conflict}
+          onClose={() => setBaException(null)}
+          onRequested={() => { setBaException(null); load(); }}
+        />
+      )}
+
       {/* ------------------------------------------------------------------ */}
       {/* Bulk Assign Modal                                                    */}
       {/* ------------------------------------------------------------------ */}
@@ -1103,41 +1355,37 @@ export default function TicketList() {
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-semibold">Bulk Assign ({selected.length} tickets)</h2>
               <button
-                onClick={() => { setShowBulkAssign(false); setBaGroupId(''); setBaGroupUsers([]); setBaAgentId(''); }}
+                onClick={closeBulkAssign}
                 className="p-1 hover:bg-gray-100 rounded"
               >
                 <HiX className="w-5 h-5" />
               </button>
             </div>
             <p className="text-sm text-gray-600 mb-4">
-              Select a group, then choose an agent to assign the selected tickets to.
+              Select a team (reporting manager), then choose a member to assign the selected tickets to.
+              Tickets whose assignee is not in the team are skipped.
             </p>
             <div className="flex flex-col gap-3 mb-4">
-              <label className="text-sm font-medium text-gray-700">Group</label>
-              <select
-                value={baGroupId}
-                onChange={(e) => onBaGroupChange(e.target.value)}
-                className="px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                <option value="">-- Select Group --</option>
-                {groups.map((g) => (
-                  <option key={g.id} value={g.id}>{g.name}</option>
-                ))}
-              </select>
-              <label className="text-sm font-medium text-gray-700">Assign to Agent</label>
-              <select
+              <label className="text-sm font-medium text-gray-700">Team / Manager</label>
+              <SearchSelect
+                size="md"
+                options={teamOptions}
+                value={baTeamManagerId}
+                placeholder="— Select team —"
+                disabled={bulkAssigning}
+                onChange={(v) => onBaTeamChange(v)}
+              />
+              <label className="text-sm font-medium text-gray-700">Assign to</label>
+              <SearchSelect
+                size="md"
+                options={baMemberOptions}
+                loading={baMembersLoading}
                 value={baAgentId}
-                onChange={(e) => setBaAgentId(e.target.value)}
-                disabled={!baGroupId || bulkAssigning}
-                className="px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
-              >
-                <option value="">-- Select Agent --</option>
-                {baGroupUsers.map((u) => (
-                  <option key={u.id} value={u.id}>
-                    {u.name || u.full_name}{u.role ? ` (${u.role})` : ''}
-                  </option>
-                ))}
-              </select>
+                disabled={!baTeamManagerId || bulkAssigning}
+                placeholder={baTeamManagerId ? '— Select member —' : 'Select a team first'}
+                emptyText="No members in this team"
+                onChange={(v) => setBaAgentId(v ? String(v) : '')}
+              />
 
               {/* Phase 3 — effort allocation */}
               <label className="text-sm font-medium text-gray-700 mt-1">Effort allocation (per ticket)</label>
@@ -1186,14 +1434,14 @@ export default function TicketList() {
             {opError && <p className="text-sm text-red-600 mb-3">{opError}</p>}
             <div className="flex justify-end gap-2 pt-2">
               <button
-                onClick={() => { setShowBulkAssign(false); setBaGroupId(''); setBaGroupUsers([]); setBaAgentId(''); }}
+                onClick={closeBulkAssign}
                 className="px-4 py-2 border rounded-lg text-sm hover:bg-gray-50"
               >
                 Cancel
               </button>
               <button
                 onClick={handleBulkAssignConfirm}
-                disabled={!baAgentId || !baHoursValid || !baDatesValid || bulkAssigning}
+                disabled={!baTeamManagerId || !baAgentId || !baHoursValid || !baDatesValid || bulkAssigning}
                 className="flex items-center gap-2 px-4 py-2 bg-[#2196f3] text-white rounded-lg hover:bg-[#1976d2] disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium"
               >
                 {bulkAssigning ? 'Assigning…' : 'Assign Tickets'}

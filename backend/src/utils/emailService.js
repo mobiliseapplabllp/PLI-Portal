@@ -413,8 +413,112 @@ const sendApprovalEscalationEmail = async (adminEmail, {
   return sendEmail(adminEmail, subject, html);
 };
 
+// ── PM allocation exception emails ───────────────────────────────────────────
+
+const escapeHtml = (v) => String(v ?? '')
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+const fmtDate = (d) => {
+  if (!d) return '—';
+  const dt = d instanceof Date ? d : new Date(d);
+  return isNaN(dt.getTime()) ? String(d) : dt.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+};
+const fmtHrs = (h) => (h == null || h === '' ? '—' : `${Number(h)} hrs/day`);
+const exceptionsLink = (link) => link || `${process.env.FRONTEND_URL || 'http://localhost:5173'}/pm/allocation-exceptions`;
+
+/** A helpdesk ticket exception belongs to no project — name the TICKET instead. */
+const subjectRow = ({ isTicket, ticketRef, projectName }) => {
+  if (!isTicket) return { label: 'Project', value: projectName };
+  const value = ticketRef
+    ? `${ticketRef.reqNumber || `#${ticketRef.id}`}${ticketRef.title ? ` — ${ticketRef.title}` : ''}`
+    : projectName;
+  return { label: 'Ticket', value };
+};
+
+const allocationExceptionTable = ({ userName, projectName, isTicket, ticketRef, hoursPerDay, overloadHours, fromDate, toDate, reason }) => {
+  const subject = subjectRow({ isTicket, ticketRef, projectName });
+  return `
+      <table style="border-collapse:collapse;width:100%;max-width:480px;margin-top:8px">
+        <tr><td style="padding:4px 8px;color:#555">Person</td><td style="padding:4px 8px"><strong>${escapeHtml(userName)}</strong></td></tr>
+        <tr><td style="padding:4px 8px;color:#555">${subject.label}</td><td style="padding:4px 8px"><strong>${escapeHtml(subject.value)}</strong></td></tr>
+        <tr><td style="padding:4px 8px;color:#555">Requested</td><td style="padding:4px 8px">${escapeHtml(fmtHrs(hoursPerDay))}${overloadHours != null ? ` <span style="color:#dc2626">(+${escapeHtml(Number(overloadHours))} hrs over capacity)</span>` : ''}</td></tr>
+        <tr><td style="padding:4px 8px;color:#555">Window</td><td style="padding:4px 8px">${escapeHtml(fmtDate(fromDate))} – ${escapeHtml(fmtDate(toDate))}</td></tr>
+        <tr><td style="padding:4px 8px;color:#555;vertical-align:top">Reason</td><td style="padding:4px 8px">${escapeHtml(reason || '—')}</td></tr>
+      </table>`;
+};
+
+/**
+ * Notify approvers that a manager has requested an over-capacity allocation exception.
+ * @param {string|string[]} toList - approver email(s)
+ */
+const sendAllocationExceptionRequestedEmail = async (toList, {
+  requesterName, userName, projectName, isTicket, ticketRef,
+  hoursPerDay, overloadHours, fromDate, toDate, reason, link,
+}) => {
+  const to = Array.isArray(toList) ? toList.filter(Boolean).join(', ') : toList;
+  if (!to) return null;
+  const over = overloadHours != null ? ` (+${Number(overloadHours)} over)` : '';
+  const subject = `Allocation exception requested: ${userName} on ${projectName}, ${fmtHrs(hoursPerDay)}${over}`;
+  const html = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+      <h2 style="color: #d97706;">Allocation Exception Requested</h2>
+      <p>Hi,</p>
+      <p><strong>${escapeHtml(requesterName || 'A project manager')}</strong> has requested an allocation above capacity and needs your approval.</p>
+      ${allocationExceptionTable({ userName, projectName, isTicket, ticketRef, hoursPerDay, overloadHours, fromDate, toDate, reason })}
+      <p style="margin-top: 24px;">
+        <a href="${exceptionsLink(link)}"
+           style="background-color: #d97706; color: white; padding: 10px 24px; text-decoration: none; border-radius: 6px;">
+          Review Request
+        </a>
+      </p>
+      <hr style="margin-top: 32px; border: none; border-top: 1px solid #e5e7eb;" />
+      <p style="font-size: 12px; color: #6b7280;">This is an automated notification from the PLI Portal.</p>
+    </div>
+  `;
+  return sendEmail(to, subject, html);
+};
+
+/**
+ * Notify the requester that their allocation exception was approved or rejected.
+ */
+const sendAllocationExceptionDecidedEmail = async (to, {
+  action, approverName, responseNote, requesterName, userName, projectName, isTicket, ticketRef,
+  hoursPerDay, overloadHours, fromDate, toDate, reason, link,
+}) => {
+  if (!to) return null;
+  const approved = action === 'approve' || action === 'approved';
+  const label = approved ? 'Approved' : 'Rejected';
+  const colour = approved ? '#059669' : '#dc2626';
+  const subject = `Allocation exception ${label.toLowerCase()}: ${userName} on ${projectName}`;
+  const noteHtml = responseNote
+    ? `<p><strong>Note from ${escapeHtml(approverName || 'approver')}:</strong> ${escapeHtml(responseNote)}</p>`
+    : '';
+  const outcome = approved
+    ? 'The allocation is now active with the requested hours.'
+    : 'The member allocation has been reverted to its previous values.';
+  const html = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+      <h2 style="color: ${colour};">Allocation Exception ${label}</h2>
+      <p>Dear <strong>${escapeHtml(requesterName || 'there')}</strong>,</p>
+      <p><strong>${escapeHtml(approverName || 'An approver')}</strong> has <strong>${label.toLowerCase()}</strong> your allocation exception request. ${outcome}</p>
+      ${allocationExceptionTable({ userName, projectName, isTicket, ticketRef, hoursPerDay, overloadHours, fromDate, toDate, reason })}
+      ${noteHtml}
+      <p style="margin-top: 24px;">
+        <a href="${exceptionsLink(link)}"
+           style="background-color: ${colour}; color: white; padding: 10px 24px; text-decoration: none; border-radius: 6px;">
+          View Details
+        </a>
+      </p>
+      <hr style="margin-top: 32px; border: none; border-top: 1px solid #e5e7eb;" />
+      <p style="font-size: 12px; color: #6b7280;">This is an automated notification from the PLI Portal.</p>
+    </div>
+  `;
+  return sendEmail(to, subject, html);
+};
+
 module.exports = {
   sendEmail,
+  sendAllocationExceptionRequestedEmail,
+  sendAllocationExceptionDecidedEmail,
   sendCsatSurveyEmail,
   sendCsatReminderEmail,
   sendApprovalRequestEmail,

@@ -6,32 +6,17 @@
  */
 import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useSelector, useDispatch } from 'react-redux';
+import { useSelector } from 'react-redux';
 import toast from 'react-hot-toast';
+import PublicWidgetSettings from '../../components/helpdesk/PublicWidgetSettings';
 import {
-  fetchHdProjects,
-  selectHdProjects,
-} from '../../store/helpdeskSlice';
-import {
-  createHdProjectApi,
-  updateHdProjectApi,
-  deleteHdProjectApi,
-  regenerateTokenApi,
-} from '../../api/helpdesk/hdProjects.api';
-import {
-  getGroupsApi,
   getHdOptionsApi,
   createHdOptionApi,
   deleteHdOptionApi,
-  getUserGroupsApi,
-  assignUserGroupApi,
-  bulkAssignUserGroupsApi,
 } from '../../api/helpdesk/helpdesk.api';
 import {
   HiOutlineCog,
   HiOutlineCollection,
-  HiOutlineShieldCheck,
-  HiOutlineUsers,
   HiOutlineMail,
   HiOutlineColorSwatch,
   HiOutlineLightningBolt,
@@ -40,14 +25,9 @@ import {
   HiOutlineChartPie,
   HiOutlineChevronDown,
   HiOutlineChevronRight,
-  HiOutlineUserGroup,
-  HiOutlineClipboard,
-  HiOutlineRefresh,
   HiOutlinePlus,
   HiOutlineX,
   HiOutlineTrash,
-  HiOutlinePencil,
-  HiOutlineCheck,
   HiOutlineExternalLink,
 } from 'react-icons/hi';
 
@@ -66,14 +46,7 @@ function saveHdSetting(key, value) {
 // ─── Menu definition ──────────────────────────────────────────────────────────
 const MENU_ITEMS = [
   { id: 'instance',     label: 'Instance Configuration', icon: HiOutlineCog },
-  { id: 'projects',     label: 'Projects',               icon: HiOutlineCollection },
-  { id: 'user-master',  label: 'User Master',            icon: HiOutlineShieldCheck, adminOnly: true },
-  {
-    id: 'users-permissions', label: 'Users & Permissions', icon: HiOutlineUsers, adminOnly: true,
-    items: [
-      { id: 'groups-perm', label: 'Groups' },
-    ],
-  },
+  { id: 'widget',       label: 'Public widget',          icon: HiOutlineCollection },
   {
     id: 'mail', label: 'Mail Settings', icon: HiOutlineMail,
     items: [
@@ -95,8 +68,6 @@ const MENU_ITEMS = [
   {
     id: 'data-admin', label: 'Data Administration', icon: HiOutlineDatabase, adminOnly: true,
     items: [
-      { id: 'teams',  label: 'Raised by Team (Add/Delete)' },
-      { id: 'groups', label: 'Groups — Assignment' },
       { id: 'sites',  label: 'Sites' },
     ],
   },
@@ -154,438 +125,6 @@ function InstanceSettings() {
             <span className="text-gray-800 font-medium">{v}</span>
           </div>
         ))}
-      </div>
-    </div>
-  );
-}
-
-// ─── Section: Projects — full CRUD ────────────────────────────────────────────
-function ProjectsSettings() {
-  const dispatch  = useDispatch();
-  const hdProjects       = useSelector(selectHdProjects);
-  const hdProjectsLoading = useSelector(s => s.helpdesk.hdProjectsLoading);
-
-  const [groups,         setGroups]         = useState([]);
-  const [showCreate,     setShowCreate]     = useState(false);
-  const [form,           setForm]           = useState({ name: '', description: '', groupId: '', status: 'Active' });
-  const [creating,       setCreating]       = useState(false);
-  const [editingId,      setEditingId]      = useState(null);
-  const [editForm,       setEditForm]       = useState({});
-  const [saving,         setSaving]         = useState(false);
-  const [deletingId,     setDeletingId]     = useState(null);
-  const [regeneratingId, setRegeneratingId] = useState(null);
-  const [copiedId,       setCopiedId]       = useState(null);
-
-  useEffect(() => {
-    dispatch(fetchHdProjects());
-    getGroupsApi()
-      .then(r => setGroups(r.data?.data || r.data || []))
-      .catch(() => {});
-  }, [dispatch]);
-
-  const handleCreate = async (e) => {
-    e.preventDefault();
-    if (!form.name.trim()) { toast.error('Project name is required'); return; }
-    setCreating(true);
-    try {
-      await createHdProjectApi({
-        name:        form.name.trim(),
-        description: form.description || null,
-        groupId:     form.groupId ? Number(form.groupId) : null,
-        status:      form.status || 'Active',
-      });
-      toast.success('Project created');
-      dispatch(fetchHdProjects());
-      setShowCreate(false);
-      setForm({ name: '', description: '', groupId: '', status: 'Active' });
-    } catch (err) {
-      toast.error(err?.response?.data?.error?.message || 'Failed to create project');
-    } finally { setCreating(false); }
-  };
-
-  const startEdit = (p) => {
-    setEditingId(p._id ?? p.id);
-    setEditForm({ name: p.name, description: p.description || '', groupId: p.groupId || '', status: p.status || 'Active' });
-  };
-
-  const handleSave = async (id) => {
-    setSaving(true);
-    try {
-      await updateHdProjectApi(id, {
-        name:        editForm.name.trim(),
-        description: editForm.description || null,
-        groupId:     editForm.groupId ? Number(editForm.groupId) : null,
-        status:      editForm.status,
-      });
-      toast.success('Project updated');
-      dispatch(fetchHdProjects());
-      setEditingId(null);
-    } catch (err) {
-      toast.error(err?.response?.data?.error?.message || 'Failed to update project');
-    } finally { setSaving(false); }
-  };
-
-  const handleDelete = async (id, name) => {
-    if (!window.confirm(`Delete project "${name}"? This cannot be undone.`)) return;
-    setDeletingId(id);
-    try {
-      await deleteHdProjectApi(id);
-      toast.success('Project deleted');
-      dispatch(fetchHdProjects());
-    } catch (err) {
-      toast.error(err?.response?.data?.error?.message || 'Failed to delete project');
-    } finally { setDeletingId(null); }
-  };
-
-  const handleRegenToken = async (id) => {
-    if (!window.confirm('Regenerate token? Existing widget URLs will stop working immediately.')) return;
-    setRegeneratingId(id);
-    try {
-      await regenerateTokenApi(id);
-      toast.success('Token regenerated');
-      dispatch(fetchHdProjects());
-    } catch (err) {
-      toast.error(err?.response?.data?.error?.message || 'Failed to regenerate token');
-    } finally { setRegeneratingId(null); }
-  };
-
-  const copyToken = (token, id) => {
-    navigator.clipboard.writeText(token).then(() => {
-      setCopiedId(id);
-      toast.success('Token copied');
-      setTimeout(() => setCopiedId(null), 2000);
-    }).catch(() => toast.error('Copy failed'));
-  };
-
-  const statusBadge = (s) => {
-    const cls =
-      s === 'Active'    ? 'bg-emerald-100 text-emerald-700' :
-      s === 'On Hold'   ? 'bg-yellow-100 text-yellow-700'   :
-      s === 'Completed' ? 'bg-gray-100 text-gray-600'       :
-      'bg-gray-100 text-gray-500';
-    return <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${cls}`}>{s || 'Active'}</span>;
-  };
-
-  const groupName = (p) =>
-    p.group?.name || groups.find(g => (g._id || g.id) === p.groupId)?.name || '—';
-
-  return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-base font-semibold text-gray-800">Projects</h2>
-          <p className="text-sm text-gray-500 mt-0.5">Each project has a unique public widget token for embedding the support form.</p>
-        </div>
-        <button
-          onClick={() => setShowCreate(f => !f)}
-          className="flex items-center gap-1.5 px-3 py-1.5 bg-[#2196f3] text-white rounded-lg text-sm font-medium hover:bg-[#1976d2] transition-colors"
-        >
-          {showCreate ? <HiOutlineX className="w-4 h-4" /> : <HiOutlinePlus className="w-4 h-4" />}
-          {showCreate ? 'Cancel' : 'New Project'}
-        </button>
-      </div>
-
-      {showCreate && (
-        <form onSubmit={handleCreate} className="bg-blue-50 border border-blue-100 rounded-lg p-4">
-          <p className="text-xs font-semibold text-blue-700 mb-3 uppercase tracking-wide">New Project</p>
-          <div className="flex gap-3 flex-wrap items-end">
-            <div>
-              <label className="text-xs font-medium text-gray-600 block mb-1">Name *</label>
-              <input type="text" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-                placeholder="e.g. IT Helpdesk" autoFocus required
-                className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm w-48 focus:outline-none focus:ring-2 focus:ring-blue-500" />
-            </div>
-            <div>
-              <label className="text-xs font-medium text-gray-600 block mb-1">Team / Group</label>
-              <select value={form.groupId} onChange={e => setForm(f => ({ ...f, groupId: e.target.value }))}
-                className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm w-40 focus:outline-none focus:ring-2 focus:ring-blue-500">
-                <option value="">— No group —</option>
-                {groups.map(g => <option key={g._id || g.id} value={g._id || g.id}>{g.name}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="text-xs font-medium text-gray-600 block mb-1">Status</label>
-              <select value={form.status} onChange={e => setForm(f => ({ ...f, status: e.target.value }))}
-                className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm w-32 focus:outline-none focus:ring-2 focus:ring-blue-500">
-                <option>Active</option>
-                <option>On Hold</option>
-                <option>Completed</option>
-              </select>
-            </div>
-            <div>
-              <label className="text-xs font-medium text-gray-600 block mb-1">Description</label>
-              <input type="text" value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
-                placeholder="Brief description"
-                className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm w-48 focus:outline-none focus:ring-2 focus:ring-blue-500" />
-            </div>
-            <button type="submit" disabled={creating}
-              className="px-4 py-1.5 bg-[#2196f3] text-white rounded-lg text-sm hover:bg-[#1976d2] disabled:opacity-50 transition-colors">
-              {creating ? 'Creating…' : 'Create'}
-            </button>
-          </div>
-        </form>
-      )}
-
-      {hdProjectsLoading ? (
-        <div className="py-10 text-center text-gray-400 text-sm">Loading…</div>
-      ) : hdProjects.length === 0 ? (
-        <div className="py-10 text-center text-gray-400 text-sm bg-white rounded-lg border border-gray-200">
-          No projects yet. Create one above.
-        </div>
-      ) : (
-        <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-gray-50 text-xs text-gray-500 uppercase tracking-wider">
-              <tr>
-                <th className="px-4 py-2.5 text-left">Project</th>
-                <th className="px-4 py-2.5 text-left">Team</th>
-                <th className="px-4 py-2.5 text-left">Status</th>
-                <th className="px-4 py-2.5 text-left">Widget Token</th>
-                <th className="px-4 py-2.5 text-left">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-50">
-              {hdProjects.map(p => (
-                <tr key={p._id ?? p.id} className="hover:bg-gray-50 transition-colors">
-                  {editingId === (p._id ?? p.id) ? (
-                    <>
-                      <td className="px-4 py-2">
-                        <input value={editForm.name} onChange={e => setEditForm(f => ({ ...f, name: e.target.value }))}
-                          className="px-2 py-1 border border-blue-300 rounded text-sm w-36 focus:outline-none focus:ring-1 focus:ring-blue-500" />
-                        <input value={editForm.description} onChange={e => setEditForm(f => ({ ...f, description: e.target.value }))}
-                          placeholder="Description" className="mt-1 px-2 py-1 border border-gray-200 rounded text-xs w-36 focus:outline-none" />
-                      </td>
-                      <td className="px-4 py-2">
-                        <select value={editForm.groupId} onChange={e => setEditForm(f => ({ ...f, groupId: e.target.value }))}
-                          className="px-2 py-1 border border-gray-200 rounded text-xs w-32 focus:outline-none">
-                          <option value="">— None —</option>
-                          {groups.map(g => <option key={g._id || g.id} value={g._id || g.id}>{g.name}</option>)}
-                        </select>
-                      </td>
-                      <td className="px-4 py-2">
-                        <select value={editForm.status} onChange={e => setEditForm(f => ({ ...f, status: e.target.value }))}
-                          className="px-2 py-1 border border-gray-200 rounded text-xs w-28 focus:outline-none">
-                          <option>Active</option>
-                          <option>On Hold</option>
-                          <option>Completed</option>
-                        </select>
-                      </td>
-                      <td className="px-4 py-2 text-xs text-gray-400 italic">— unchanged —</td>
-                      <td className="px-4 py-2">
-                        <div className="flex items-center gap-2">
-                          <button onClick={() => handleSave(p._id ?? p.id)} disabled={saving}
-                            className="flex items-center gap-1 text-xs text-emerald-600 hover:text-emerald-800 font-medium disabled:opacity-50">
-                            <HiOutlineCheck className="w-3.5 h-3.5" />
-                            {saving ? 'Saving…' : 'Save'}
-                          </button>
-                          <button onClick={() => setEditingId(null)}
-                            className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700">
-                            <HiOutlineX className="w-3.5 h-3.5" /> Cancel
-                          </button>
-                        </div>
-                      </td>
-                    </>
-                  ) : (
-                    <>
-                      <td className="px-4 py-2.5">
-                        <p className="font-medium text-gray-900">{p.name}</p>
-                        {p.description && <p className="text-xs text-gray-400 mt-0.5">{p.description}</p>}
-                      </td>
-                      <td className="px-4 py-2.5 text-gray-600 text-xs">{groupName(p)}</td>
-                      <td className="px-4 py-2.5">{statusBadge(p.status)}</td>
-                      <td className="px-4 py-2.5">
-                        {p.publicToken
-                          ? <code className="text-xs bg-gray-100 px-2 py-0.5 rounded font-mono text-gray-700">{p.publicToken.slice(0, 18)}…</code>
-                          : <span className="text-xs text-gray-400">No token</span>}
-                      </td>
-                      <td className="px-4 py-2.5">
-                        <div className="flex items-center gap-3 flex-wrap">
-                          <button onClick={() => startEdit(p)}
-                            className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 font-medium">
-                            <HiOutlinePencil className="w-3.5 h-3.5" /> Edit
-                          </button>
-                          {p.publicToken && (
-                            <button onClick={() => copyToken(p.publicToken, p._id ?? p.id)}
-                              className="flex items-center gap-1 text-xs text-gray-600 hover:text-gray-800 font-medium">
-                              <HiOutlineClipboard className="w-3.5 h-3.5" />
-                              {copiedId === (p._id ?? p.id) ? 'Copied!' : 'Copy Token'}
-                            </button>
-                          )}
-                          <button onClick={() => handleRegenToken(p._id ?? p.id)} disabled={regeneratingId === (p._id ?? p.id)}
-                            className="flex items-center gap-1 text-xs text-orange-600 hover:text-orange-800 font-medium disabled:opacity-40">
-                            <HiOutlineRefresh className={`w-3.5 h-3.5 ${regeneratingId === (p._id ?? p.id) ? 'animate-spin' : ''}`} />
-                            Regen Token
-                          </button>
-                          <button onClick={() => handleDelete(p._id ?? p.id, p.name)} disabled={deletingId === (p._id ?? p.id)}
-                            className="flex items-center gap-1 text-xs text-red-500 hover:text-red-700 disabled:opacity-40">
-                            <HiOutlineTrash className="w-3.5 h-3.5" />
-                            {deletingId === (p._id ?? p.id) ? '…' : 'Delete'}
-                          </button>
-                        </div>
-                      </td>
-                    </>
-                  )}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ─── Section: User Master (User ↔ Group assignment) ──────────────────────────
-function UserMasterSettings() {
-  const [data,          setData]          = useState([]);
-  const [groups,        setGroups]        = useState([]);
-  const [loading,       setLoading]       = useState(false);
-  const [saving,        setSaving]        = useState({});
-  const [bulkGroup,     setBulkGroup]     = useState('');
-  const [bulkAssigning, setBulkAssigning] = useState(false);
-  const [search,        setSearch]        = useState('');
-
-  useEffect(() => {
-    setLoading(true);
-    Promise.all([getUserGroupsApi(), getGroupsApi()])
-      .then(([u, g]) => {
-        setData(u.data?.data || []);
-        setGroups(g.data?.data || g.data || []);
-      })
-      .catch(() => toast.error('Failed to load users'))
-      .finally(() => setLoading(false));
-  }, []);
-
-  const handleGroupChange = async (userId, groupId) => {
-    setSaving(p => ({ ...p, [userId]: true }));
-    try {
-      await assignUserGroupApi(userId, groupId ? Number(groupId) : null);
-      setData(prev => prev.map(u => (u._id || u.id) === userId ? { ...u, hdGroupId: groupId || null } : u));
-      toast.success('Group updated');
-    } catch { toast.error('Failed to update group'); }
-    finally { setSaving(p => ({ ...p, [userId]: false })); }
-  };
-
-  const handleBulkAssign = async () => {
-    if (!bulkGroup) { toast.error('Select a group first'); return; }
-    if (!window.confirm(`Assign all ${filtered.length} visible users to this group?`)) return;
-    setBulkAssigning(true);
-    try {
-      const assignments = filtered.map(u => ({ userId: u._id || u.id, groupId: Number(bulkGroup) }));
-      await bulkAssignUserGroupsApi(assignments);
-      setData(prev => prev.map(u => ({ ...u, hdGroupId: Number(bulkGroup) })));
-      toast.success('All users assigned');
-    } catch { toast.error('Bulk assign failed'); }
-    finally { setBulkAssigning(false); }
-  };
-
-  const filtered = data.filter(u =>
-    !search || u.name?.toLowerCase().includes(search.toLowerCase()) || u.email?.toLowerCase().includes(search.toLowerCase())
-  );
-
-  return (
-    <div className="space-y-4">
-      <div>
-        <h2 className="text-base font-semibold text-gray-800">User Master</h2>
-        <p className="text-sm text-gray-500 mt-0.5">
-          Assign each PLI user to a helpdesk group so Project and Raised-by-Team auto-fill when selecting a requester.
-        </p>
-      </div>
-
-      {loading ? (
-        <div className="py-10 text-center text-gray-400 text-sm">Loading users…</div>
-      ) : (
-        <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-          {/* Toolbar */}
-          <div className="px-4 py-3 border-b border-gray-100 flex items-center gap-3">
-            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search users…"
-              className="px-3 py-1.5 border border-gray-200 rounded-lg text-xs w-52 focus:outline-none focus:ring-2 focus:ring-blue-500" />
-            <span className="text-xs text-gray-400">{filtered.length} user{filtered.length !== 1 ? 's' : ''}</span>
-          </div>
-
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-gray-50 text-xs text-gray-500 uppercase tracking-wider">
-                <tr>
-                  <th className="px-4 py-2.5 text-left">Name</th>
-                  <th className="px-4 py-2.5 text-left">Email</th>
-                  <th className="px-4 py-2.5 text-left">Role</th>
-                  <th className="px-4 py-2.5 text-left">Helpdesk Group</th>
-                  <th className="px-4 py-2.5 text-left">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.length === 0 ? (
-                  <tr><td colSpan={5} className="px-4 py-8 text-center text-gray-400 text-sm">No users found.</td></tr>
-                ) : filtered.map(u => {
-                  const uid = u._id || u.id;
-                  return (
-                    <tr key={uid} className="border-t border-gray-100">
-                      <td className="px-4 py-2 text-xs font-medium text-gray-800">{u.name}</td>
-                      <td className="px-4 py-2 text-xs text-gray-500">{u.email}</td>
-                      <td className="px-4 py-2 text-xs">
-                        <span className="px-1.5 py-0.5 bg-gray-100 rounded text-[10px]">{u.role}</span>
-                      </td>
-                      <td className="px-4 py-2">
-                        <select value={u.hdGroupId || ''} onChange={e => handleGroupChange(uid, e.target.value)}
-                          disabled={saving[uid]}
-                          className="text-xs border border-gray-200 rounded px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-blue-500">
-                          <option value="">— Unassigned —</option>
-                          {groups.map(g => <option key={g._id || g.id} value={g._id || g.id}>{g.name}</option>)}
-                        </select>
-                      </td>
-                      <td className="px-4 py-2 text-xs text-gray-400">
-                        {saving[uid] ? 'Saving…' : (u.hdGroup?.name || groups.find(g => (g._id || g.id) == u.hdGroupId)?.name || '—')}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-
-          {/* Bulk assign */}
-          <div className="px-4 py-3 border-t border-gray-100 bg-gray-50 flex items-center gap-3">
-            <span className="text-xs font-medium text-gray-700">Bulk Assign:</span>
-            <select value={bulkGroup} onChange={e => setBulkGroup(e.target.value)}
-              className="text-xs border border-gray-200 rounded px-2 py-1.5 bg-white focus:outline-none">
-              <option value="">— Select Group —</option>
-              {groups.map(g => <option key={g._id || g.id} value={g._id || g.id}>{g.name}</option>)}
-            </select>
-            <button onClick={handleBulkAssign} disabled={bulkAssigning || !bulkGroup}
-              className="px-3 py-1.5 bg-[#2196f3] text-white rounded text-xs font-medium hover:bg-[#1976d2] disabled:opacity-50 transition-colors">
-              {bulkAssigning ? 'Assigning…' : 'Assign All Visible'}
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ─── Section: Groups link ────────────────────────────────────────────────────
-function GroupsLinkSection() {
-  const navigate = useNavigate();
-  return (
-    <div className="space-y-4">
-      <div>
-        <h2 className="text-base font-semibold text-gray-800">Groups</h2>
-        <p className="text-sm text-gray-500 mt-0.5">Manage helpdesk support groups, SLA policies, and approval workflows.</p>
-      </div>
-      <div className="bg-white rounded-lg border border-gray-200 p-6 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="p-2.5 bg-blue-50 rounded-xl">
-            <HiOutlineUserGroup className="w-6 h-6 text-[#2196f3]" />
-          </div>
-          <div>
-            <p className="font-medium text-gray-900">Helpdesk Groups</p>
-            <p className="text-sm text-gray-500">Create and configure team groups with SLA and approvals.</p>
-          </div>
-        </div>
-        <button onClick={() => navigate('/helpdesk/groups')}
-          className="flex items-center gap-2 px-4 py-2 bg-[#2196f3] text-white rounded-lg text-sm font-medium hover:bg-[#1976d2] transition-colors">
-          <HiOutlineExternalLink className="w-4 h-4" /> Manage Groups
-        </button>
       </div>
     </div>
   );
@@ -1284,9 +823,7 @@ function AdditionalFieldsSettings() {
 function ContentPanel({ activeId }) {
   switch (activeId) {
     case 'instance':         return <InstanceSettings />;
-    case 'projects':         return <ProjectsSettings />;
-    case 'user-master':      return <UserMasterSettings />;
-    case 'groups-perm':      return <GroupsLinkSection />;
+    case 'widget':           return <PublicWidgetSettings />;
     case 'mail-server':      return <MailServerSettings />;
     case 'mail-filter':      return <MailFilterSettings />;
     case 'email-command':    return <PlaceholderContent title="Email Command" />;
@@ -1298,8 +835,6 @@ function ContentPanel({ activeId }) {
     case 'layouts':          return <PlaceholderContent title="Layouts" />;
     case 'automation':       return <AutomationSettings />;
     case 'survey':           return <PlaceholderContent title="User Survey" />;
-    case 'teams':            return <SimpleOptionSettings type="team" title="Raised-by Teams" description="Add or remove teams used in the 'Raised by Team' field on tickets." />;
-    case 'groups':           return <GroupsLinkSection />;
     case 'sites':            return <SimpleOptionSettings type="site" title="Sites" description="Add or remove site locations used when raising tickets." />;
     case 'advanced-portal':  return <AdvancedPortalSettings />;
     case 'requester-portal': return <PlaceholderContent title="Requester Portal" />;

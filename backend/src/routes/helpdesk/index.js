@@ -25,6 +25,7 @@ require('../../models/helpdesk');
 const ticketsRouter       = require('./tickets.routes');
 const approvalsRouter     = require('./approvals.routes');
 const groupsRouter        = require('./groups.routes');
+const teamsRouter         = require('./teams.routes');
 const hdProjectsRouter    = require('./hdProjects.routes');
 const hdOptionsRouter     = require('./hdOptions.routes');
 const solutionsRouter     = require('./solutions.routes');
@@ -50,6 +51,9 @@ router.use(authenticate, helpdeskAuth);
 router.use('/tickets',       ticketsRouter);
 router.use('/assignees',     require('./assignees.routes'));
 router.use('/groups',        groupsRouter);
+router.use('/teams',         teamsRouter);   // read-only: team = reporting manager + direct reports
+router.use('/pm-projects',   require('./pmProjects.routes')); // read-only PM project list for ticket creation
+router.use('/widget-settings', require('./widgetSettings.routes')); // public widget tokens on the common project list
 router.use('/projects',      hdProjectsRouter);
 router.use('/options',       hdOptionsRouter);
 router.use('/announcements', announcementsRouter);

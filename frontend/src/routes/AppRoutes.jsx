@@ -74,6 +74,7 @@ import DailyLogHistory from '../pages/pm/DailyLogHistory';
 import MyTasks from '../pages/pm/MyTasks';
 import PMSettings from '../pages/pm/PMSettings';
 import ResourceUtilisation from '../pages/pm/ResourceUtilisation';
+import AllocationExceptions from '../pages/pm/AllocationExceptions';
 
 // Helpdesk pages (lazy-loaded)
 const HdDashboard          = lazy(() => import('../pages/helpdesk/HdDashboard'));
@@ -81,7 +82,6 @@ const TicketList           = lazy(() => import('../pages/helpdesk/TicketList'));
 const CreateTicket         = lazy(() => import('../pages/helpdesk/CreateTicket'));
 const TicketDetail         = lazy(() => import('../pages/helpdesk/TicketDetail'));
 const KnowledgeBase        = lazy(() => import('../pages/helpdesk/KnowledgeBase'));
-const HdGroups             = lazy(() => import('../pages/helpdesk/HdGroups'));
 const HdAnnouncements      = lazy(() => import('../pages/helpdesk/HdAnnouncements'));
 const HdSettings           = lazy(() => import('../pages/helpdesk/HdSettings'));
 const TicketApprovalRespond = lazy(() => import('../pages/helpdesk/TicketApprovalRespond'));
@@ -201,6 +201,7 @@ export default function AppRoutes() {
           <Route path="/pm/my-tasks" element={<RoleRoute roles={ALL_ROLES}><MyTasks /></RoleRoute>} />
           <Route path="/pm/settings" element={<RoleRoute roles={['admin', 'manager', 'senior_manager']}><PMSettings /></RoleRoute>} />
           <Route path="/pm/utilisation" element={<RoleRoute roles={['admin', 'manager', 'senior_manager', 'md', 'director']}><ResourceUtilisation /></RoleRoute>} />
+          <Route path="/pm/allocation-exceptions" element={<RoleRoute roles={['admin', 'manager', 'senior_manager', 'md', 'director']}><AllocationExceptions /></RoleRoute>} />
 
           {/* CSAT routes */}
           <Route path="/csat/client-organisations" element={<RoleRoute roles={['admin', 'manager', 'senior_manager']}><ClientOrgsPage /></RoleRoute>} />
@@ -223,7 +224,6 @@ export default function AppRoutes() {
           <Route path="/helpdesk/tickets/:id" element={<RoleRoute roles={ALL_ROLES}><TicketDetail /></RoleRoute>} />
           <Route path="/helpdesk/knowledge-base" element={<RoleRoute roles={ALL_ROLES}><KnowledgeBase /></RoleRoute>} />
           <Route path="/helpdesk/solutions/:id" element={<SolutionDetail />} />
-          <Route path="/helpdesk/groups" element={<RoleRoute roles={HD_MANAGER_ROLES}><HdGroups /></RoleRoute>} />
           <Route path="/helpdesk/announcements" element={<RoleRoute roles={ALL_ROLES}><HdAnnouncements /></RoleRoute>} />
           <Route path="/helpdesk/settings" element={<RoleRoute roles={['admin', 'senior_manager']}><HdSettings /></RoleRoute>} />
           <Route path="/helpdesk/reports" element={<RoleRoute roles={HD_MANAGER_ROLES}><HdReports /></RoleRoute>} />

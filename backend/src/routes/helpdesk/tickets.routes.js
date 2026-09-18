@@ -50,6 +50,10 @@ router.delete('/:id',
 // â”€â”€ History â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 router.get('/:id/history',   ticketCtrl.getHistory);
 
+// ── Allocation exception (over-capacity request; decided in /pm/allocation-exceptions) ──
+// Permission (admin or canAssign) is enforced in the controller, same as assigning.
+router.post('/:id/allocation-exception', ticketCtrl.requestTicketAllocationException);
+
 // â”€â”€ Ticket linking â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 router.post('/:id/link',     ticketCtrl.linkTicket);
 

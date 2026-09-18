@@ -82,6 +82,9 @@ export default function AllocationTypeInput({
     if (!from || !to) { setCalendar(null); setCalError(null); setCalLoading(false); return; }
     let alive = true;
     setCalLoading(true);
+    // First lookup for a range runs at once (so an immediate mode switch can convert);
+    // later date edits are debounced while the user types.
+    const delay = lastDaysRef.current == null ? 0 : 300;
     const t = setTimeout(() => {
       api.get('/pm/config/calendar/working-days', { params: { from, to } })
         .then(res => {
@@ -98,7 +101,7 @@ export default function AllocationTypeInput({
           setCalError(err.response?.data?.message || err.response?.data?.error?.message || 'Could not compute working days');
         })
         .finally(() => { if (alive) setCalLoading(false); });
-    }, 300);
+    }, delay);
     return () => { alive = false; clearTimeout(t); };
   }, [from, to]);
 
@@ -129,12 +132,13 @@ export default function AllocationTypeInput({
     if (next === mode || disabled) return;
     const knownDays = days ?? lastDaysRef.current;
     if (next === 'total') {
-      // per_day → total: h × days
-      const converted = hpd != null && knownDays ? round1(hpd * knownDays) : null;
+      // per_day → total: h × days. If days are not known yet, keep the stored total
+      // (if any) rather than wiping the field.
+      const converted = hpd != null && knownDays ? round1(hpd * knownDays) : (total ?? null);
       onChange?.({ ...v, allocationMode: 'total', allocationTotalHours: converted, hoursPerDay: null });
     } else {
-      // total → per_day: total ÷ days (1 decimal)
-      const converted = total != null && knownDays ? round1(total / knownDays) : null;
+      // total → per_day: total ÷ days (1 decimal); same fallback to the stored per-day value.
+      const converted = total != null && knownDays ? round1(total / knownDays) : (hpd ?? null);
       onChange?.({ ...v, allocationMode: 'per_day', hoursPerDay: converted, allocationTotalHours: null });
     }
   };

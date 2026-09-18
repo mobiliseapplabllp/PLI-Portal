@@ -3,13 +3,31 @@ const PmHoliday  = require('../../models/pm/PmHoliday');
 const { ValidationError } = require('../../utils/errors');
 
 const DEFAULT_SATURDAYS = [2, 4];
+const DEFAULT_EXCEPTION_APPROVER_ROLES = ['admin'];
+const DEFAULT_EXCEPTION_MAX_HOURS = 12;
+/** Every role users.role can hold (config/constants ROLES). */
+const KNOWN_ROLES = Object.values(require('../../config/constants').ROLES);
 
+/**
+ * The pm_settings singleton. The model's getters guarantee
+ * `exceptionApproverRoles` is a non-empty array and `exceptionMaxHoursPerDay`
+ * a number (migration 044), so callers never re-parse them.
+ */
 const getSettings = async () => {
   const [settings] = await PmSettings.findOrCreate({
     where: { id: 1 },
     defaults: { id: 1 },
   });
   return settings;
+};
+
+/** { roles: string[], maxHoursPerDay: number } — the exception policy (D2, D3). */
+const getExceptionPolicy = async () => {
+  const s = await getSettings();
+  return {
+    roles:          s.exceptionApproverRoles || [...DEFAULT_EXCEPTION_APPROVER_ROLES],
+    maxHoursPerDay: Number(s.exceptionMaxHoursPerDay) || DEFAULT_EXCEPTION_MAX_HOURS,
+  };
 };
 
 // ── Validators ───────────────────────────────────────────────────────────────
@@ -32,6 +50,30 @@ const validateWorkingSaturdays = (raw) => {
   });
   if (new Set(out).size !== out.length) throw bad();
   return [...out].sort((a, b) => a - b);
+};
+
+/** Non-empty array of unique known roles. Returns a de-duplicated copy. */
+const validateExceptionApproverRoles = (raw) => {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    throw new ValidationError('exceptionApproverRoles must be a non-empty array of roles');
+  }
+  const out = [];
+  for (const r of raw) {
+    if (typeof r !== 'string' || !KNOWN_ROLES.includes(r)) {
+      throw new ValidationError(`exceptionApproverRoles: unknown role "${r}" (known: ${KNOWN_ROLES.join(', ')})`);
+    }
+    if (!out.includes(r)) out.push(r);
+  }
+  return out;
+};
+
+/** 8–24 in 0.5 steps. */
+const validateExceptionMaxHours = (raw) => {
+  const v = Number(raw);
+  if (!Number.isFinite(v) || v < 8 || v > 24 || Math.round(v * 2) !== v * 2) {
+    throw new ValidationError('exceptionMaxHoursPerDay must be between 8 and 24 in steps of 0.5');
+  }
+  return v;
 };
 
 const parseSaturdays = (v) => {
@@ -85,6 +127,7 @@ const ALLOWED_FIELDS = [
   'consolidatedReport', 'emailAlertOnProjectCreate', 'emailAlertOnMilestoneComplete',
   'emailAlertOnRaidRaised', 'helpdeskDailyReportEnabled', 'helpdeskDailyReportTime',
   'workingHoursPerDay', 'workingSaturdays',
+  'exceptionApproverRoles', 'exceptionMaxHoursPerDay',
 ];
 
 const updateSettings = async (data) => {
@@ -98,11 +141,21 @@ const updateSettings = async (data) => {
   if ('workingSaturdays' in updateData) {
     updateData.workingSaturdays = validateWorkingSaturdays(updateData.workingSaturdays);
   }
+  if ('exceptionApproverRoles' in updateData) {
+    updateData.exceptionApproverRoles = validateExceptionApproverRoles(updateData.exceptionApproverRoles);
+  }
+  if ('exceptionMaxHoursPerDay' in updateData) {
+    updateData.exceptionMaxHoursPerDay = validateExceptionMaxHours(updateData.exceptionMaxHoursPerDay);
+  }
 
   Object.assign(settings, updateData);
   if ('workingSaturdays' in updateData) settings.changed('workingSaturdays', true);
+  if ('exceptionApproverRoles' in updateData) settings.changed('exceptionApproverRoles', true);   // JSON column
   await settings.save();
   return settings;
 };
 
-module.exports = { getSettings, getCalendar, getWorkingHoursPerDay, updateCalendar, updateSettings };
+module.exports = {
+  getSettings, getCalendar, getWorkingHoursPerDay, updateCalendar, updateSettings,
+  getExceptionPolicy, validateExceptionApproverRoles, validateExceptionMaxHours, KNOWN_ROLES,
+};

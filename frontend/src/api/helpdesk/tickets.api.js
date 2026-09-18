@@ -51,6 +51,18 @@ export const getTicketHistoryApi = (id) => api.get(`/helpdesk/tickets/${id}/hist
 export const linkTicketApi = (id, data) => api.post(`/helpdesk/tickets/${id}/link`, data);
 
 /**
+ * Ask an approver to allow an over-capacity allocation for a ticket.
+ * The ticket is saved with the requested allocation in a pending state and an
+ * approval row is raised in the existing Allocation exceptions inbox.
+ * @param {number|string} ticketId
+ * @param {{ allocationMode:'per_day'|'total', allocationHoursPerDay?:number|null,
+ *           allocationTotalHours?:number|null, allocationFrom:string, allocationTo:string,
+ *           assigneeId?:string, reason:string }} body
+ */
+export const requestTicketAllocationExceptionApi = (ticketId, body) =>
+  api.post(`/helpdesk/tickets/${ticketId}/allocation-exception`, body);
+
+/**
  * Bulk-upload tickets from a parsed CSV row array.
  * @param {object[]} rows  Array of plain objects keyed by CSV header names.
  */

@@ -9,6 +9,7 @@ import api from '../../api/axios';
 import { HiOutlineArrowLeft, HiOutlinePlus, HiOutlineX, HiOutlineUserGroup, HiOutlineUserAdd } from 'react-icons/hi';
 import ResourceAvailabilityCard from '../../components/pm/ResourceAvailabilityCard';
 import AllocationTypeInput, { formatAllocation } from '../../components/pm/AllocationTypeInput';
+import ProjectUsageChecks, { useProjectNameCheck } from '../../components/pm/ProjectUsageChecks';
 
 // ── Role badge colour — default for unlisted roles ────────────────────────────
 const DEFAULT_BADGE = 'bg-gray-50 text-gray-600 border-gray-200';
@@ -67,6 +68,9 @@ export default function CreateProject() {
   const [memberDraft,    setMemberDraft]    = useState(DRAFT_EMPTY);
   const [draftDerived,   setDraftDerived]   = useState({ hoursPerDay: null, totalHours: null, workingDays: null }); // per-day derived by AllocationTypeInput
   const [showMemberForm, setShowMemberForm] = useState(false);
+  // Shown when the user picks "request approval/exception" on the draft row — the
+  // project does not exist yet, so an exception cannot be requested here.
+  const [exceptionNote,  setExceptionNote]  = useState(false);
 
   const [form, setForm] = useState({
     clientOrgId:  null,
@@ -78,6 +82,9 @@ export default function CreateProject() {
     billingType:  'Non-Billable',
     projectType:  '',
     status:       'Yet to Start',
+    // Created from Project Management → Product by default (milestones are created).
+    isProduct:    true,
+    isOperations: false,
   });
 
   // Close member modal on Escape
@@ -111,6 +118,10 @@ export default function CreateProject() {
   const set = (field, val) => setForm(f => ({ ...f, [field]: val }));
   const selectedOrg = clientOrgs.find(o => (o._id || o.id) === form.clientOrgId) || null;
   const setDraft    = (f, v) => setMemberDraft(p => ({ ...p, [f]: v }));
+  // Duplicate-name check against the full name the server will receive
+  const nameCheck = useProjectNameCheck(
+    selectedOrg && form.name.trim() ? `${selectedOrg.name} - ${form.name.trim()}` : form.name
+  );
 
   const handleAddDraftMember = () => {
     if (!memberDraft.userId) return toast.error('Select a team member');
@@ -142,6 +153,7 @@ export default function CreateProject() {
     e.preventDefault();
     if (!form.name.trim())  return toast.error('Project name is required');
     if (!form.projectType)  return toast.error('Select a project type');
+    if (nameCheck.taken)    return toast.error(nameCheck.message || 'A project with this name already exists');
     setSaving(true);
     const fullName = selectedOrg
       ? `${selectedOrg.name} - ${form.name.trim()}`
@@ -155,6 +167,8 @@ export default function CreateProject() {
         billingType:      form.billingType,
         projectType:      form.projectType,
         status:           form.status,
+        isProduct:        form.isProduct !== false,
+        isOperations:     form.isOperations === true,
         accountManagerId: derivedAccountManagerId || undefined,
         managerId:        derivedManagerId || (isMgr ? userId : undefined),
         startDate:        form.plannedStart || undefined,
@@ -264,6 +278,8 @@ export default function CreateProject() {
                     placeholder={selectedOrg ? 'Project name…' : 'e.g. PLI Portal Redesign 2026'}
                   />
                 </div>
+                {nameCheck.checking && <p className="text-xs text-gray-400 mt-1">Checking name…</p>}
+                {nameCheck.taken && <p className="text-xs text-red-600 mt-1">{nameCheck.message}</p>}
               </div>
             </div>
 
@@ -323,6 +339,15 @@ export default function CreateProject() {
                   ))}
                 </div>
               </div>
+            </div>
+
+            {/* ── Used for: Product (milestones) / Operations (tickets) ─────── */}
+            <div>
+              <Lbl>Used for</Lbl>
+              <ProjectUsageChecks
+                value={{ isProduct: form.isProduct, isOperations: form.isOperations }}
+                onChange={(next) => setForm(f => ({ ...f, ...next }))}
+              />
             </div>
 
             {/* ── ROW 3: Planned Start | Planned End ─────────────────────── */}
@@ -448,7 +473,7 @@ export default function CreateProject() {
               </button>
               <button
                 type="submit"
-                disabled={saving || !form.name.trim() || !form.projectType}
+                disabled={saving || !form.name.trim() || !form.projectType || nameCheck.taken}
                 className="px-6 py-2 text-sm font-semibold bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors shadow-sm"
               >
                 {saving ? 'Creating…' : 'Create Project'}
@@ -560,17 +585,22 @@ export default function CreateProject() {
                     toDate={memberDraft.allocationTo || null}
                     newHoursPerDay={draftDerived.hoursPerDay != null ? Number(draftDerived.hoursPerDay) : null}
                     onSuggestionSelect={(suggestion) => {
+                      setExceptionNote(false);
                       if (suggestion.type === 'reduce_hours' && suggestion.suggestedHoursPerDay != null) {
                         setMemberDraft(d => ({ ...d, allocationMode: 'per_day', hoursPerDay: String(suggestion.suggestedHoursPerDay), allocationTotalHours: '' }));
                       }
                       if (suggestion.type === 'shift_dates' && suggestion.suggestedFromDate) {
                         setMemberDraft(d => ({ ...d, allocationFrom: suggestion.suggestedFromDate }));
                       }
-                      if (suggestion.type === 'request_approval') {
-                        toast(`Contact the manager of "${suggestion.targetProjectName}" to release capacity for this person, then retry.`);
-                      }
                     }}
+                    // No project id yet → exceptions cannot be requested from the draft row.
+                    onRequestException={() => setExceptionNote(true)}
                   />
+                  {exceptionNote && (
+                    <p className="mt-2 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2" role="status">
+                      Exceptions can be requested after the project is created. For now, reduce the hours or shift the dates using the options above.
+                    </p>
+                  )}
                 </div>
               )}
             </div>

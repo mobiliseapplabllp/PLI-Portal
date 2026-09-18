@@ -2,33 +2,45 @@
  * CreateTicket.jsx
  * Layout matches original NewRequest.jsx exactly:
  *   LEFT  → Card 1: Request Information (Subject, Description, Type+Status, Mode+Category)
- *         → Card 2: Requester Details (Search, Name+Email, Project+Team)
+ *         → Card 2: Requester Details (Search, Name+Email, Project)
  *   RIGHT → Card 3: Classification (Priority, Impact+Urgency, Due Date)
- *         → Card 4: Assignment (Group, Agent)
+ *         → Card 4: Assignment (Team / Manager, Assign to)
  *         → Attachment + Action buttons
  *
- * PLI adaptations: Redux dispatch, lowercase ENUM values, ID-based group/assignee,
+ * PLI adaptations: Redux dispatch, lowercase ENUM values, ID-based team/assignee,
  * react-hot-toast, PLI API wrappers.
+ *
+ * Team model: a "team" is a reporting manager + their active direct reports
+ * (employee master). Helpdesk groups are retired — the requester's team is
+ * derived server-side from their department; nothing is typed here.
+ * Projects are PM projects (UUID) — projectId sent is the PM project id.
  */
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
+import api from '../../api/axios';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import toast from 'react-hot-toast';
 import {
-  createTicket,
   fetchHdOptions,
   selectSubmitting,
   selectHdOptions,
 } from '../../store/helpdeskSlice';
-import { getGroupsApi } from '../../api/helpdesk/groups.api';
-import { getHdProjectsApi } from '../../api/helpdesk/hdProjects.api';
-import { getUsersApi } from '../../api/users.api';
-import AllocationTypeInput from '../../components/pm/AllocationTypeInput';
+// The create call is made through the API wrapper (not the thunk) so the HTTP 409
+// `conflict` body survives — the thunk collapses every error to a message string.
+import { createTicketApi, requestTicketAllocationExceptionApi } from '../../api/helpdesk/tickets.api';
+import TicketConflictPanel from '../../components/helpdesk/TicketConflictPanel';
+import TicketExceptionModal from '../../components/helpdesk/TicketExceptionModal';
+import { listTeamsApi, getTeamMembersApi } from '../../api/helpdesk/teams.api';
+import { listPmProjectsForTicketsApi } from '../../api/helpdesk/teams.api';
+import { getUsersApi, getUserByIdApi } from '../../api/users.api';
+import SearchSelect from '../../components/common/SearchSelect';
+import QuickCreateProjectModal from '../../components/helpdesk/QuickCreateProjectModal';
 import {
   HiOutlineArrowLeft,
   HiOutlineSave,
   HiOutlineChevronDown,
   HiOutlineSearch,
+  HiOutlinePlus,
 } from 'react-icons/hi';
 
 // ── Static option lists for MySQL ENUM fields (cannot be changed via UI) ─────
@@ -89,6 +101,12 @@ const HD_DOC_CATEGORIES = [
   'Others',
 ];
 
+// PM project statuses hidden by default in the Project picker (case-insensitive)
+const CLOSED_PROJECT_STATUSES = ['completed', 'cancelled', 'closed'];
+// Roles allowed to create projects when PM settings cannot be read (same default as backend)
+const DEFAULT_CREATOR_ROLES = ['admin', 'manager', 'senior_manager'];
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 const PRIORITY_COLORS = {
   Low:      { active: 'bg-green-100 border-green-300 text-green-700',  idle: 'border-gray-300 hover:bg-gray-50' },
   Medium:   { active: 'bg-yellow-100 border-yellow-300 text-yellow-700', idle: 'border-gray-300 hover:bg-gray-50' },
@@ -109,13 +127,115 @@ const EMPTY_FORM = {
   dueDate:        '',
   requesterName:  '',
   requesterEmail: '',
-  projectId:      '',
-  raisedByTeam:   '',         // group name string (matches original's formData.team)
-  groupId:        '',         // INT — PLI uses ID not name
-  assigneeId:     '',         // UUID — PLI primary assignee
+  projectId:      '',         // UUID — PM project id
+  teamManagerId:  '',         // UUID — reporting manager whose team owns the ticket
+  assigneeId:     '',         // UUID — PLI primary assignee (must be in the team)
   billable:       'Non-Billable',
   docFiles:       [],         // array of {file, category, categoryOther}
 };
+
+/**
+ * Working-days line under the ticket's Total hours field.
+ * Tickets are allocated as a TOTAL; the server stores the per-day figure, so this
+ * asks the working calendar for the days in the window and reports total ÷ days.
+ */
+function AllocationDerivedLine({ total, from, to, onDerived }) {
+  const [days, setDays]   = useState(null);
+  const [error, setError] = useState(null);
+  const cbRef = useRef(onDerived);
+  cbRef.current = onDerived;
+
+  useEffect(() => {
+    if (!from || !to || from > to) { setDays(null); setError(null); return undefined; }
+    let alive = true;
+    const t = setTimeout(() => {
+      api.get('/pm/config/calendar/working-days', { params: { from, to } })
+        .then(res => {
+          if (!alive) return;
+          const d = Number(res.data?.data?.workingDays ?? res.data?.workingDays);
+          setDays(Number.isFinite(d) && d > 0 ? d : null);
+          setError(null);
+        })
+        .catch(err => {
+          if (!alive) return;
+          setDays(null);
+          setError(err.response?.data?.message || err.response?.data?.error?.message || 'Could not compute working days');
+        });
+    }, 300);
+    return () => { alive = false; clearTimeout(t); };
+  }, [from, to]);
+
+  const perDay = total != null && days ? Math.round((total / days) * 10) / 10 : null;
+  useEffect(() => { cbRef.current?.({ hoursPerDay: perDay, totalHours: total ?? null, workingDays: days }); }, [perDay, total, days]);
+
+  if (error) return <p className="text-[10px] text-red-500 mt-0.5">{error}</p>;
+  if (!from || !to) return <p className="text-[10px] text-amber-600 mt-0.5">Total hours needs both a start and an end date</p>;
+  if (!days) return <p className="text-[10px] text-gray-400 mt-0.5">Calculating working days…</p>;
+  return (
+    <p className={`text-[10px] mt-0.5 ${perDay > 8 ? 'text-amber-600' : 'text-gray-500'}`}>
+      = {perDay ?? '—'}h/day over {days} working day{days === 1 ? '' : 's'}
+      {perDay != null && ` · ${Math.round((perDay / 8) * 100)}% of capacity`}
+    </p>
+  );
+}
+
+/**
+ * AgentCapacityLine — what this ticket does to the chosen agent's day.
+ * Same source as the Assign dialog: GET /pm/users/:id/availability, which counts
+ * their project periods AND their other open tickets.
+ */
+function AgentCapacityLine({ userId, from, to, addHoursPerDay, totalHours, suppressWarning = false, onCapacity }) {
+  const [avail, setAvail]     = useState(null);
+  const [loading, setLoading] = useState(false);
+  // Report the agent's real daily capacity up to the page (the conflict panel needs
+  // it as a fallback) — this is the only availability fetch on the form, reuse it.
+  const capRef = useRef(onCapacity);
+  capRef.current = onCapacity;
+  useEffect(() => {
+    const c = Number(avail?.capacity);
+    capRef.current?.(Number.isFinite(c) && c > 0 ? c : null);
+  }, [avail]);
+
+  useEffect(() => {
+    if (!userId || !from || !to || from > to) { setAvail(null); return undefined; }
+    let alive = true;
+    setLoading(true);
+    const t = setTimeout(() => {
+      api.get(`/pm/users/${userId}/availability`, { params: { fromDate: from, toDate: to } })
+        .then(res => { if (alive) setAvail(res.data?.data ?? res.data ?? null); })
+        .catch(() => { if (alive) setAvail(null); })
+        .finally(() => { if (alive) setLoading(false); });
+    }, 300);
+    return () => { alive = false; clearTimeout(t); };
+  }, [userId, from, to]);
+
+  if (!userId) return <p className="text-[10px] text-gray-500 mt-1">Counts against the agent&apos;s capacity alongside project allocations.</p>;
+  if (loading && !avail) return <p className="text-[10px] text-gray-400 mt-1">Checking capacity…</p>;
+  if (!avail) return null;
+
+  const r1       = (n) => Math.round((Number(n) || 0) * 10) / 10;
+  const capacity = Number(avail.capacity ?? 0);
+  const peak     = Number(avail.peakHours ?? 0);
+  const free     = Number(avail.freeHours ?? 0);
+  const add      = Number(addHoursPerDay ?? 0);
+  const exceeds  = capacity > 0 && add > 0 && peak + add > capacity;
+
+  return (
+    <div className="mt-1">
+      <p className="text-[10px] text-gray-500">
+        {r1(free)}h free on their busiest day ({r1(peak)}h / {r1(capacity)}h already committed across projects and tickets)
+      </p>
+      {exceeds && !suppressWarning && (
+        <div className="mt-1 flex items-start gap-1.5 rounded border border-red-200 bg-red-50 px-2 py-1.5 text-[10px] text-red-700">
+          <span>
+            Adding {r1(add)}h/day{totalHours ? ` (${r1(totalHours)}h total)` : ''} puts them at {r1(peak + add)}h / {r1(capacity)}h
+            {avail.overDays ? ` on ${avail.overDays} day${avail.overDays === 1 ? '' : 's'}` : ''} — over capacity, the request will be refused.
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
 
 // ── Shared style helpers (compact text-xs, matching original) ────────────────
 const inp = (hasErr) =>
@@ -138,6 +258,8 @@ export default function CreateTicket() {
   const location   = useLocation();
   const submitting = useSelector(selectSubmitting);
   const hdOptions  = useSelector(selectHdOptions);
+  const authUser   = useSelector(s => s.auth.user);
+  const authUserId = authUser?._id ?? authUser?.id ?? '';
 
   // ── Derive live option arrays from Redux (fall back to sensible defaults) ───
   const optCategory    = (hdOptions.category    || []).map(o => o.name);
@@ -149,7 +271,14 @@ export default function CreateTicket() {
   // ── Data state ──────────────────────────────────────────────────────────────
   const [formData,    setFormData]    = useState(() => {
     const src = location.state?.duplicateFrom;
-    if (!src) return EMPTY_FORM;
+    // C1 — requester defaults to the logged-in user (still changeable via the picker)
+    const selfRequester = {
+      requesterName:  authUser?.name  || '',
+      requesterEmail: authUser?.email || '',
+    };
+    if (!src) return { ...EMPTY_FORM, ...selfRequester };
+    // Only carry a PM (UUID) project id forward — legacy INT hd_project ids are not selectable here
+    const srcPmProjectId = src.pmProjectId || src.pmProject?._id || src.pmProject?.id || src.projectId || '';
     return {
       ...EMPTY_FORM,
       title:          src.title        ? `Copy of ${src.title}` : '',
@@ -160,18 +289,28 @@ export default function CreateTicket() {
       priority:       src.priority     || EMPTY_FORM.priority,
       impact:         src.impact       || EMPTY_FORM.impact,
       urgency:        src.urgency      || EMPTY_FORM.urgency,
-      groupId:        src.groupId      || '',
+      teamManagerId:  src.teamManagerId || src.teamManager?._id || src.teamManager?.id || '',
       assigneeId:     '',   // do NOT copy assignee — must be re-chosen
-      requesterName:  src.requesterName || src.requesterUser?.name || '',
-      requesterEmail: src.requesterEmail || src.requesterUser?.email || '',
-      projectId:      src.projectId    || '',
-      raisedByTeam:   src.raisedByTeam || '',
+      requesterName:  src.requesterName  || src.requesterUser?.name  || selfRequester.requesterName,
+      requesterEmail: src.requesterEmail || src.requesterUser?.email || selfRequester.requesterEmail,
+      projectId:      UUID_RE.test(String(srcPmProjectId)) ? srcPmProjectId : '',
       dueDate:        '',   // do NOT copy dueDate
     };
   });
-  const [groups,      setGroups]      = useState([]);
-  const [groupUsers,  setGroupUsers]  = useState([]);
-  const [projects,    setProjects]    = useState([]);
+  // Read-only context for the selected requester: "<Department> · Reports to <Manager>"
+  const [requesterMeta, setRequesterMeta] = useState({ department: '', manager: '' });
+  // C3 — teams (reporting managers) + members of the chosen team
+  const [teams,          setTeams]          = useState([]);
+  const [teamsLoading,   setTeamsLoading]   = useState(false);
+  const [members,        setMembers]        = useState([]);
+  const [membersLoading, setMembersLoading] = useState(false);
+  // C4 — PM projects
+  const [projects,        setProjects]        = useState([]);
+  const [projectsLoading, setProjectsLoading] = useState(false);
+  const [showClosed,      setShowClosed]      = useState(false);
+  // C5 — quick-create project (role-gated)
+  const [showProjectModal, setShowProjectModal] = useState(false);
+  const canCreateProject = !!authUser?.role && DEFAULT_CREATOR_ROLES.includes(authUser.role);
   const [errors,      setErrors]      = useState({});
   const [saving,      setSaving]      = useState(false);
   const [submitError, setSubmitError] = useState('');
@@ -179,15 +318,46 @@ export default function CreateTicket() {
 
   // ── Phase 3: effort allocation — only shown/sent when an assignee is chosen ─
   const isoDay = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-  // Ticket forms default to "Total hours" (DEFAULT_ALLOC_TOTAL); "Hours per day" is still selectable.
+  // Tickets are allocated in TOTAL HOURS only — "Hours per day" is not offered here;
+  // the per-day figure sent to the server is total ÷ working days in the window.
   const DEFAULT_ALLOC_TOTAL = 10;
   const [alloc, setAlloc] = useState({ allocationMode: 'total', hoursPerDay: '', allocationTotalHours: String(DEFAULT_ALLOC_TOTAL), from: '', to: '' });
-  const [allocDerived, setAllocDerived] = useState({ hoursPerDay: null, totalHours: null, workingDays: null }); // per-day derived by AllocationTypeInput
-  const allocIsTotal    = alloc.allocationMode === 'total';
-  const allocRaw        = Number(allocIsTotal ? alloc.allocationTotalHours : alloc.hoursPerDay);
-  const allocHoursValid = Number.isFinite(allocRaw) && allocRaw >= 0.5 && allocRaw <= (allocIsTotal ? 9999 : 12) && Math.round(allocRaw * 2) === allocRaw * 2;
-  // Per-day figure sent as allocationHoursPerDay: the entered value in per_day mode, else total ÷ working days
-  const allocHoursNum   = allocIsTotal ? allocDerived.hoursPerDay : allocRaw;
+  const [allocDerived, setAllocDerived] = useState({ hoursPerDay: null, totalHours: null, workingDays: null }); // per-day derived from the total
+  // HTTP 409 `conflict` body from the last create attempt — the ticket was NOT created
+  const [allocConflict, setAllocConflict] = useState(null);
+  // "Request exception…" opens the shared modal: it collects the reason, then this
+  // page creates the ticket WITHOUT an allocation and raises the exception on it.
+  const [showException, setShowException] = useState(false);
+  // Real daily capacity of the chosen agent (reported by AgentCapacityLine's
+  // /pm/users/:id/availability fetch) — used by the conflict panel when the 409
+  // body carries no capacity of its own.
+  const [agentCapacity, setAgentCapacity] = useState(null);
+
+  /**
+   * Apply a conflict suggestion to this form.
+   * The form is TOTAL-only, so "Use N hrs/day" is converted back to a total:
+   *   total = N × working days in the window (the days AllocationDerivedLine resolved).
+   */
+  const applyConflictSuggestion = (patch) => {
+    setShowException(false);
+    if (patch.allocationFrom) setAlloc(p => ({ ...p, from: patch.allocationFrom }));
+    if (patch.allocationTo)   setAlloc(p => ({ ...p, to:   patch.allocationTo }));
+    if (patch.allocationHoursPerDay != null) {
+      const days = Number(allocDerived.workingDays);
+      if (Number.isFinite(days) && days > 0) {
+        const total = Math.round(Number(patch.allocationHoursPerDay) * days * 2) / 2;
+        setAlloc(p => ({ ...p, allocationTotalHours: String(total) }));
+      } else {
+        toast.error('Working days for this window are not known yet — adjust the total hours manually.');
+        return;
+      }
+    }
+    setAllocConflict(null);
+  };
+  const allocIsTotal    = true;
+  const allocRaw        = Number(alloc.allocationTotalHours);
+  const allocHoursValid = Number.isFinite(allocRaw) && allocRaw >= 0.5 && allocRaw <= 9999 && Math.round(allocRaw * 2) === allocRaw * 2;
+  const allocHoursNum   = allocDerived.hoursPerDay;
   const allocDatesValid = !!alloc.from && !!alloc.to && alloc.from <= alloc.to;
   // When an assignee is (re)chosen, fill defaults: today → dueDate || today+7
   useEffect(() => {
@@ -214,23 +384,110 @@ export default function CreateTicket() {
   const [showRequesterDropdown, setShowRequesterDropdown] = useState(false);
   const requesterRef = useRef(null);
 
-  // ── On mount: load groups + all active users + configurable options ──────────
+  // ── Requester context line helper ("<Department> · Reports to <Manager>") ───
+  const metaFromUser = (u) => ({
+    department: u?.department?.name || u?.departmentName || u?.department_name || (typeof u?.department === 'string' ? u.department : '') || '',
+    manager:    u?.manager?.name    || u?.managerName    || u?.manager_name    || '',
+  });
+
+  // ── On mount: teams, PM projects, PM creator roles, configurable options ────
   useEffect(() => {
-    getGroupsApi()
-      .then(res => setGroups(res.data?.data || res.data || []))
-      .catch(() => toast.error('Failed to load groups'));
-    // Load ALL active users so the assignee dropdown is always populated
-    getUsersApi({ isActive: true, pageSize: 200 })
+    // C3 — teams = reporting managers from the employee master
+    setTeamsLoading(true);
+    listTeamsApi()
       .then(res => {
-        const list = res.data?.data?.users || res.data?.data || res.data || [];
-        setGroupUsers(Array.isArray(list) ? list : []);
+        const list = Array.isArray(res.data?.data) ? res.data.data : [];
+        setTeams(list);
+        // A duplicated ticket may carry a "self team" (assignee with no manager) that is
+        // not a selectable team — drop it rather than submit a hidden, invalid value.
+        setFormData(prev => (
+          prev.teamManagerId && !list.some(t => String(t._id ?? t.id) === String(prev.teamManagerId))
+            ? { ...prev, teamManagerId: '' }
+            : prev
+        ));
       })
-      .catch(() => setGroupUsers([]));
+      .catch(() => { setTeams([]); toast.error('Failed to load teams'); })
+      .finally(() => setTeamsLoading(false));
+
+    // C4 — all PM projects (closed ones hidden client-side by default)
+    setProjectsLoading(true);
+    // Helpdesk-side list: every PM project (not membership-filtered), closed ones included
+    listPmProjectsForTicketsApi({ includeClosed: 1 })
+      .then(res => {
+        const list = res.data?.data || [];
+        setProjects(Array.isArray(list) ? list : []);
+      })
+      .catch(() => setProjects([]))
+      .finally(() => setProjectsLoading(false));
+
+    // C5 — who may create projects: the button is shown for the standard creator roles;
+    // the PM create API enforces the real rule (PM settings' allowedCreatorRoles) and
+    // the modal surfaces its 403 message if the role is not allowed.
+
+    // C1/C2 — logged-in user's department + reporting manager for the context line.
+    // Redux auth carries department but not manager → fetch the full user record.
+    if (authUserId && !location.state?.duplicateFrom) {
+      setRequesterMeta(metaFromUser(authUser));
+      getUserByIdApi(authUserId)
+        .then(res => setRequesterMeta(metaFromUser(res.data?.data?.user || res.data?.data)))
+        .catch(() => {});
+    }
+
     // Only fetch options if not already loaded (avoid redundant network calls)
     if (!hdOptions || Object.keys(hdOptions).length === 0) {
       dispatch(fetchHdOptions());
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── C3: when the team changes, (re)load its members ─────────────────────────
+  useEffect(() => {
+    if (!formData.teamManagerId) { setMembers([]); return undefined; }
+    let cancelled = false;
+    setMembersLoading(true);
+    getTeamMembersApi(formData.teamManagerId)
+      .then(res => {
+        if (cancelled) return;
+        const list = res.data?.data?.members || [];
+        setMembers(Array.isArray(list) ? list : []);
+      })
+      .catch(() => { if (!cancelled) { setMembers([]); toast.error('Failed to load team members'); } })
+      .finally(() => { if (!cancelled) setMembersLoading(false); });
+    return () => { cancelled = true; };
+  }, [formData.teamManagerId]);
+
+  // ── SearchSelect option lists ────────────────────────────────────────────────
+  const teamOptions = useMemo(() => teams.map(t => {
+    const id = t._id ?? t.id;
+    const n  = Number(t.memberCount ?? 0);
+    return { value: id, label: t.name, sub: `${t.email || ''}${t.email ? ' · ' : ''}${n} member${n === 1 ? '' : 's'}` };
+  }), [teams]);
+
+  const memberOptions = useMemo(() => members.map(m => {
+    const id = m._id ?? m.id;
+    return {
+      value: id,
+      label: m.isManager ? `${m.name} (manager)` : m.name,
+      sub:   [m.email, m.designation].filter(Boolean).join(' · '),
+    };
+  }), [members]);
+
+  const isClosedProject = (p) => CLOSED_PROJECT_STATUSES.includes(String(p.status || '').toLowerCase());
+  const projectOptions = useMemo(() => projects
+    .filter(p => showClosed || isClosedProject(p) === false || String(p._id ?? p.id) === String(formData.projectId))
+    .map(p => {
+      const client  = p.clientName || '';
+      const manager = p.managerName || '';
+      const sub = [client, manager ? `PM: ${manager}` : '', isClosedProject(p) ? p.status : ''].filter(Boolean).join(' · ');
+      return { value: p._id ?? p.id, label: p.name, sub };
+    }), [projects, showClosed, formData.projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // C5 — a project created from the modal joins the list and becomes the selection
+  const handleProjectCreated = (project) => {
+    if (!project) return;
+    const id = project._id ?? project.id;
+    setProjects(prev => [project, ...prev.filter(p => String(p._id ?? p.id) !== String(id))]);
+    setFormData(prev => ({ ...prev, projectId: id }));
+  };
 
   // ── Debounced requester search (fires whenever search term changes) ──────────
   useEffect(() => {
@@ -256,46 +513,25 @@ export default function CreateTicket() {
     return () => document.removeEventListener('click', handler);
   }, []);
 
-  // ── When Assignment Group changes, clear the selected assignee ──────────────
-  // (We no longer filter the agent list by group — all active users are always shown)
-  useEffect(() => {
-    setFormData(prev => ({ ...prev, assigneeId: '' }));
-  }, [formData.groupId]);
-
-  // ── Select a requester from picker ──────────────────────────────────────────
+  // ── Select a requester from picker (on-behalf) ──────────────────────────────
+  // Team/department context is derived server-side; here we only show it read-only.
   const selectRequester = (r) => {
-    const hdGroupId   = r.hdGroupId || r.hd_group_id || null;
-    const hdGroupName = r.hdGroup?.name || r.hdGroupName || r.groupName || r.group_name || r.department || '';
-
     setFormData(prev => ({
       ...prev,
       requesterName:  r.name,
       requesterEmail: r.email,
-      raisedByTeam:   hdGroupName,
-      projectId:      '',     // Reset project on requester change
     }));
+    setRequesterMeta(metaFromUser(r));
     setRequesterSearch('');
     setShowRequesterDropdown(false);
-
-    // Load projects scoped to requester's helpdesk group
-    if (hdGroupId) {
-      getHdProjectsApi({ groupId: hdGroupId })
-        .then(res => setProjects(res.data?.data || res.data || []))
-        .catch(() => setProjects([]));
-    } else {
-      // No helpdesk group assigned — load all projects as fallback
-      getHdProjectsApi()
-        .then(res => setProjects(res.data?.data || res.data || []))
-        .catch(() => setProjects([]));
-    }
   };
 
-  // ── Assignment group change: clear agent (matches original handleAssignmentGroupChange) ─
-  const handleAssignmentGroupChange = (value) => {
+  // ── C3: Team / Manager change clears the assignee (must be re-chosen in the new team) ─
+  const handleTeamChange = (value) => {
     setFormData(prev => ({
       ...prev,
-      groupId:    value,
-      assigneeId: '',
+      teamManagerId: value || '',
+      assigneeId:    '',
     }));
   };
 
@@ -339,6 +575,58 @@ export default function CreateTicket() {
     return Object.keys(newErrors).length === 0;
   };
 
+  // ── Payload builder ─────────────────────────────────────────────────────────
+  /**
+   * Build the create payload (plain object, or FormData when an attachment is
+   * attached — identical either way apart from the file).
+   * `withAllocation: false` omits every allocation field: that is the exception
+   * path, where the ticket must be created unallocated and the hours are then
+   * requested as an exception against the new id.
+   */
+  const buildCreatePayload = ({ withAllocation = true } = {}) => {
+    const normalized = {
+      ...formData,
+      // Map display labels to backend ENUM values
+      priority:    PRIORITY_VALUE[formData.priority]    || formData.priority,
+      impact:      IMPACT_VALUE[formData.impact]        || formData.impact.toLowerCase(),
+      urgency:     URGENCY_VALUE[formData.urgency]      || formData.urgency.toLowerCase(),
+      requestType: REQUEST_TYPE_VALUE[formData.requestType] || formData.requestType,
+      mode:        MODE_VALUE[formData.mode]            || formData.mode,
+    };
+    // Strip empty optional fields (teamManagerId + assigneeId = team model; projectId = PM UUID)
+    ['teamManagerId', 'assigneeId', 'dueDate', 'projectId'].forEach(k => {
+      if (!normalized[k]) delete normalized[k];
+    });
+    // Phase 3 — effort allocation only travels with an assignee
+    if (withAllocation && normalized.assigneeId && allocHoursValid && allocDatesValid) {
+      normalized.allocationMode        = 'total';
+      normalized.allocationHoursPerDay = allocHoursNum ?? null;   // derived: total ÷ working days
+      normalized.allocationTotalHours  = allocRaw;
+      normalized.allocationFrom        = alloc.from;
+      normalized.allocationTo          = alloc.to;
+    }
+
+    if (!attachment) return normalized;
+    const fd = new FormData();
+    Object.entries(normalized).forEach(([k, v]) => {
+      if (v !== '' && v !== null && v !== undefined) fd.append(k, v);
+    });
+    fd.append('attachment', attachment);
+    return fd;
+  };
+
+  /** Upload the documents queued on the form against a freshly created ticket. */
+  const uploadQueuedDocs = async (ticketId) => {
+    if (!ticketId || docEntries.length === 0) return;
+    const { uploadHdDocumentApi } = await import('../../api/helpdesk/helpdesk.api');
+    await Promise.allSettled(docEntries.map(entry => {
+      const fd = new FormData();
+      fd.append('file', entry.file);
+      fd.append('category', entry.category === 'Others' ? (entry.categoryOther || 'Others') : entry.category);
+      return uploadHdDocumentApi(ticketId, fd);
+    }));
+  };
+
   // ── Submit ──────────────────────────────────────────────────────────────────
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -346,45 +634,12 @@ export default function CreateTicket() {
 
     setSaving(true);
     setSubmitError('');
+    setAllocConflict(null);
+    setShowException(false);
 
     try {
-      let payload;
-
-      // Build the normalised payload shared by both paths
-      const normalized = {
-        ...formData,
-        // Map display labels to backend ENUM values
-        priority:    PRIORITY_VALUE[formData.priority]    || formData.priority,
-        impact:      IMPACT_VALUE[formData.impact]        || formData.impact.toLowerCase(),
-        urgency:     URGENCY_VALUE[formData.urgency]      || formData.urgency.toLowerCase(),
-        requestType: REQUEST_TYPE_VALUE[formData.requestType] || formData.requestType,
-        mode:        MODE_VALUE[formData.mode]            || formData.mode,
-      };
-      // Strip empty optional fields
-      ['groupId', 'assigneeId', 'dueDate', 'projectId', 'raisedByTeam'].forEach(k => {
-        if (!normalized[k]) delete normalized[k];
-      });
-      // Phase 3 — effort allocation only travels with an assignee
-      if (normalized.assigneeId && allocHoursValid && allocDatesValid) {
-        normalized.allocationMode        = allocIsTotal ? 'total' : 'per_day';
-        normalized.allocationHoursPerDay = allocHoursNum ?? null;                 // derived per-day (null until working days resolve)
-        normalized.allocationTotalHours  = allocIsTotal ? allocRaw : null;
-        normalized.allocationFrom        = alloc.from;
-        normalized.allocationTo          = alloc.to;
-      }
-
-      if (attachment) {
-        const fd = new FormData();
-        Object.entries(normalized).forEach(([k, v]) => {
-          if (v !== '' && v !== null && v !== undefined) fd.append(k, v);
-        });
-        fd.append('attachment', attachment);
-        payload = fd;
-      } else {
-        payload = normalized;
-      }
-
-      const result = await dispatch(createTicket(payload)).unwrap();
+      const res    = await createTicketApi(buildCreatePayload());
+      const result = res.data?.data ?? res.data ?? {};
       toast.success('Ticket created successfully');
       // Backend renames id → _id via renameIdsForClient; fall back to .id for safety
       const ticketId = result?._id ?? result?.id;
@@ -393,25 +648,76 @@ export default function CreateTicket() {
         return;
       }
       // Upload any queued documents
-      if (docEntries.length > 0 && ticketId) {
-        const { uploadHdDocumentApi } = await import('../../api/helpdesk/helpdesk.api');
-        await Promise.allSettled(docEntries.map(entry => {
-          const fd = new FormData();
-          fd.append('file', entry.file);
-          fd.append('category', entry.category === 'Others' ? (entry.categoryOther || 'Others') : entry.category);
-          return uploadHdDocumentApi(ticketId, fd);
-        }));
-      }
+      await uploadQueuedDocs(ticketId);
       navigate(`/helpdesk/tickets/${ticketId}`);
     } catch (err) {
+      const body   = err?.response?.data;
+      const status = err?.response?.status;
       const msg =
         typeof err === 'string'
           ? err
-          : err?.message || 'Failed to create request. Please try again.';
-      setSubmitError(msg);
-      toast.error(msg);
+          : body?.message || body?.error?.message || err?.message || 'Failed to create request. Please try again.';
+      // 409 = the allocation would put the agent over capacity — nothing was created.
+      // Keep the form open and show the conflict box with one-click fixes.
+      if (status === 409 && body?.conflict) {
+        setAllocConflict(body.conflict);
+        setSubmitError('');
+      } else {
+        setSubmitError(msg);
+        toast.error(msg);
+      }
     } finally {
       setSaving(false);
+    }
+  };
+
+  // ── "Request exception…" — two writes, in order ─────────────────────────────
+  /**
+   * An exception row must point at an existing ticket, so from the create form the
+   * flow is: (a) create the ticket with NO allocation, (b) POST the exception for
+   * the allocation the user typed, (c) go to the ticket.
+   * Thrown errors surface inline in the modal (creation step only) — once the
+   * ticket exists we never leave the user on this form: a duplicate would follow.
+   */
+  const exceptionInFlight = useRef(false);
+  const handleExceptionSubmit = async (reason, body) => {
+    if (exceptionInFlight.current) return;                     // double-submit guard
+    if (!validate()) throw new Error('Fix the highlighted fields on the form first.');
+    exceptionInFlight.current = true;
+    setSaving(true);
+    setSubmitError('');
+
+    let ticketId = null;
+    try {
+      // (a) create the ticket WITHOUT any allocation field
+      const res    = await createTicketApi(buildCreatePayload({ withAllocation: false }));
+      const result = res.data?.data ?? res.data ?? {};
+      // (b) the API renames id → _id
+      ticketId = result?._id ?? result?.id;
+      if (!ticketId) throw new Error('Ticket created but the server returned no id — open it from the ticket list.');
+    } catch (err) {
+      exceptionInFlight.current = false;
+      setSaving(false);
+      throw err;                                               // modal shows it inline; form intact
+    }
+
+    // From here the ticket EXISTS — always finish on the ticket page.
+    await uploadQueuedDocs(ticketId).catch(() => {});
+    try {
+      // (c) raise the exception for the allocation the user originally typed
+      await requestTicketAllocationExceptionApi(ticketId, { ...body, reason });
+      toast.success('Ticket created — exception requested, awaiting approval');
+    } catch (err) {
+      const msg = err?.response?.data?.message
+        || err?.response?.data?.error?.message
+        || err?.message || '';
+      toast.error(`Ticket created, but the allocation exception was NOT raised${msg ? ` (${msg})` : ''} — request it from the ticket.`);
+    } finally {
+      exceptionInFlight.current = false;
+      setSaving(false);
+      setShowException(false);
+      setAllocConflict(null);
+      navigate(`/helpdesk/tickets/${ticketId}`);
     }
   };
 
@@ -630,7 +936,7 @@ export default function CreateTicket() {
                           ) : (
                             requesters.map(r => (
                               <button
-                                key={r.id}
+                                key={r._id ?? r.id}
                                 type="button"
                                 onClick={() => selectRequester(r)}
                                 className="w-full px-2 py-1.5 text-left hover:bg-blue-50 flex justify-between"
@@ -643,6 +949,12 @@ export default function CreateTicket() {
                         </div>
                       )}
                     </div>
+                    {/* C2 — read-only context; team is derived server-side from the department */}
+                    <p className="text-[10px] text-gray-500 mt-1">
+                      <span className="font-medium text-gray-700">{requesterMeta.department || '—'}</span>
+                      <span className="mx-1 text-gray-300">·</span>
+                      Reports to <span className="font-medium text-gray-700">{requesterMeta.manager || '—'}</span>
+                    </p>
                   </div>
 
                   {/* Requester Name + Email — always editable (matches original) */}
@@ -681,48 +993,53 @@ export default function CreateTicket() {
                     </div>
                   </div>
 
-                  {/* Project + Raised by Team — same row (matches original layout) */}
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className={LBL}>Project</label>
-                      <p className={HINT}>Projects from requester's team</p>
-                      <select
-                        name="projectId"
-                        value={formData.projectId}
-                        onChange={handleChange}
-                        className={sel()}
-                      >
-                        <option value="">
-                          {projects.length
-                            ? '-- Select Project --'
-                            : !formData.requesterName
-                              ? '-- Select requester first --'
-                              : '-- No projects found --'}
-                        </option>
-                        {projects.map(p => (
-                          <option key={p.id} value={p.id}>
-                            {p.name}
-                            {p.status && p.status !== 'Active' ? ` (${p.status})` : ''}
-                          </option>
-                        ))}
-                      </select>
+                  {/* C4/C5 — Project (PM projects) + quick-create */}
+                  <div>
+                    <div className="flex items-center justify-between mb-0.5">
+                      <label className={`${LBL} mb-0`}>Project</label>
+                      <label className="flex items-center gap-1 text-[10px] text-gray-500 cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={showClosed}
+                          onChange={e => setShowClosed(e.target.checked)}
+                          className="w-3 h-3"
+                        />
+                        Show closed
+                      </label>
                     </div>
-                    <div>
-                      <label className={LBL}>Raised by Team</label>
-                      <p className={HINT}>Which team raised it (≠ Assignment Group)</p>
-                      <select
-                        value={formData.raisedByTeam}
-                        onChange={e =>
-                          setFormData(prev => ({ ...prev, raisedByTeam: e.target.value }))
-                        }
-                        className={sel()}
-                      >
-                        <option value="">-- Select Group --</option>
-                        {groups.map(g => (
-                          <option key={g.id} value={g.name}>{g.name}</option>
-                        ))}
-                      </select>
+                    <div className="flex items-start gap-2">
+                      <div className="flex-1 min-w-0">
+                        <SearchSelect
+                          options={projectOptions}
+                          value={formData.projectId}
+                          onChange={(v) => setFormData(prev => ({ ...prev, projectId: v || '' }))}
+                          placeholder={projectsLoading ? 'Loading projects…' : '— Select project —'}
+                          loading={projectsLoading}
+                          emptyText={showClosed ? 'No projects found' : 'No open projects — tick "Show closed"'}
+                          renderFooter={canCreateProject ? () => (
+                            <button
+                              type="button"
+                              onMouseDown={(e) => { e.preventDefault(); setShowProjectModal(true); }}
+                              className="w-full text-left px-1.5 py-1 text-xs text-emerald-700 hover:bg-emerald-50 rounded"
+                            >
+                              + Other Project
+                            </button>
+                          ) : undefined}
+                        />
+                      </div>
+                      {canCreateProject && (
+                        <button
+                          type="button"
+                          onClick={() => setShowProjectModal(true)}
+                          title="Create a project that is not in the list"
+                          className="flex-shrink-0 inline-flex items-center gap-1 px-2 py-1.5 border border-dashed border-gray-300 text-gray-500 hover:border-emerald-400 hover:text-emerald-600 rounded text-xs font-medium transition-colors whitespace-nowrap"
+                        >
+                          <HiOutlinePlus className="w-3.5 h-3.5" />
+                          Other Project
+                        </button>
+                      )}
                     </div>
+                    <p className={`${HINT} mt-0.5`}>PM projects · completed / cancelled / closed hidden unless "Show closed"</p>
                   </div>
 
                 </div>
@@ -856,41 +1173,36 @@ export default function CreateTicket() {
                 </h2>
                 <div className="space-y-3">
 
-                  {/* Group */}
+                  {/* C3 — Team / Manager (reporting manager from the employee master) */}
                   <div>
-                    <label className={LBL}>Group</label>
-                    <select
-                      name="groupId"
-                      value={formData.groupId}
-                      onChange={e => handleAssignmentGroupChange(e.target.value)}
-                      className={sel()}
-                    >
-                      <option value="">-- Select Group --</option>
-                      {groups.map(g => (
-                        <option key={g.id} value={g.id}>{g.name}</option>
-                      ))}
-                    </select>
+                    <label className={LBL}>Team / Manager</label>
+                    <p className={HINT}>A team is a manager and their direct reports</p>
+                    <SearchSelect
+                      options={teamOptions}
+                      value={formData.teamManagerId}
+                      onChange={handleTeamChange}
+                      placeholder={teamsLoading ? 'Loading teams…' : '— Select team —'}
+                      loading={teamsLoading}
+                      emptyText="No teams found"
+                    />
                   </div>
 
-                  {/* Assign to Agent — disabled until group selected (matches original) */}
+                  {/* C3 — Assign to: members of the chosen team, manager first */}
                   <div>
-                    <label className={LBL}>Assign to Agent</label>
-                    <select
-                      name="assigneeId"
+                    <label className={LBL}>Assign to</label>
+                    <SearchSelect
+                      options={memberOptions}
                       value={formData.assigneeId}
-                      onChange={handleChange}
-                      className={sel()}
-                    >
-                      <option value="">-- Unassigned --</option>
-                      {groupUsers.map(u => (
-                        <option key={u._id || u.id} value={u._id || u.id}>
-                          {u.name}{u.role ? ` (${u.role})` : ''}
-                        </option>
-                      ))}
-                    </select>
-                    {groupUsers.length === 0 && (
-                      <p className="text-xs text-gray-500 mt-0.5">Loading agents…</p>
-                    )}
+                      onChange={(v) => setFormData(prev => ({ ...prev, assigneeId: v || '' }))}
+                      placeholder={
+                        !formData.teamManagerId
+                          ? 'Select a team first'
+                          : membersLoading ? 'Loading members…' : '— Unassigned —'
+                      }
+                      disabled={!formData.teamManagerId}
+                      loading={membersLoading}
+                      emptyText="No members in this team"
+                    />
                   </div>
 
                   {/* Phase 3 — effort allocation (revealed once an agent is chosen) */}
@@ -918,26 +1230,56 @@ export default function CreateTicket() {
                           />
                         </div>
                       </div>
-                      <AllocationTypeInput
-                        compact
-                        value={alloc}
-                        onChange={next => setAlloc(p => ({
-                          ...p,
-                          allocationMode:       next.allocationMode,
-                          hoursPerDay:          next.hoursPerDay ?? '',
-                          allocationTotalHours: next.allocationTotalHours ?? '',
-                        }))}
+                      {/* Total hours only — tickets are never allocated per day */}
+                      <div>
+                        <label className={LBL}>Total hours</label>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="number"
+                            min="0.5"
+                            step="0.5"
+                            value={alloc.allocationTotalHours}
+                            onChange={e => setAlloc(p => ({ ...p, allocationTotalHours: e.target.value }))}
+                            placeholder="e.g. 10"
+                            className={inp(!allocHoursValid)}
+                          />
+                          <span className="text-[11px] text-gray-400 whitespace-nowrap">hours</span>
+                        </div>
+                        <AllocationDerivedLine
+                          total={allocHoursValid ? allocRaw : null}
+                          from={alloc.from || null}
+                          to={alloc.to || null}
+                          onDerived={setAllocDerived}
+                        />
+                      </div>
+                      {!allocHoursValid && <span className={ERR}>Total hours must be at least 0.5 in steps of 0.5</span>}
+                      {!allocDatesValid && alloc.from && alloc.to && <span className={ERR}>Start date must be on or before end date</span>}
+                      {/* Real capacity for the chosen agent + window (projects AND their other tickets) */}
+                      <AgentCapacityLine
+                        userId={formData.assigneeId}
                         from={alloc.from || null}
                         to={alloc.to || null}
-                        capacity={8}
-                        maxPerDay={12}
-                        defaultMode="total"
-                        inputClassName={inp(!allocHoursValid)}
-                        onDerived={setAllocDerived}
+                        addHoursPerDay={allocHoursValid ? allocDerived.hoursPerDay : null}
+                        totalHours={allocHoursValid ? allocRaw : null}
+                        suppressWarning={!!allocConflict}
+                        onCapacity={setAgentCapacity}
                       />
-                      {!allocHoursValid && <span className={ERR}>{allocIsTotal ? 'Total hours must be at least 0.5 in steps of 0.5' : 'Hours must be 0.5–12 in steps of 0.5'}</span>}
-                      {!allocDatesValid && alloc.from && alloc.to && <span className={ERR}>Start date must be on or before end date</span>}
-                      <p className="text-[10px] text-gray-500 mt-1">Counts against the agent's capacity alongside project allocations.</p>
+
+                      {/* Server refused the allocation (HTTP 409) — nothing was created */}
+                      <TicketConflictPanel
+                        compact
+                        conflict={allocConflict}
+                        // Real capacity from the agent's availability fetch above;
+                        // the panel prefers the 409 body's own figure when it has one.
+                        capacity={agentCapacity}
+                        onApply={applyConflictSuggestion}
+                        onRequestException={() => setShowException(true)}
+                        // The server says exceptions are not allowed for this allocation:
+                        // no modal to open, so explain the remaining options.
+                        note={allocConflict?.canRequestException === false
+                          ? 'An exception cannot be requested for this allocation — reduce the hours or shift the dates using the options above.'
+                          : null}
+                      />
                     </div>
                   )}
 
@@ -1071,6 +1413,39 @@ export default function CreateTicket() {
           </div>
         </form>
       </div>
+
+      {/* Over-capacity → collect a reason, then create the ticket unallocated and
+          raise the exception against it (handleExceptionSubmit). Same modal as
+          TicketDetail / TicketList — only the write is ours (`onSubmit`). */}
+      {showException && allocConflict && (
+        <TicketExceptionModal
+          open
+          conflict={allocConflict}
+          ticket={{ reqNumber: formData.title }}
+          allocation={{
+            assigneeId:            formData.assigneeId,
+            assigneeName:          members.find(m => String(m._id ?? m.id) === String(formData.assigneeId))?.name || 'Agent',
+            allocationMode:        'total',
+            allocationHoursPerDay: allocDerived.hoursPerDay,
+            allocationTotalHours:  allocHoursValid ? allocRaw : null,
+            allocationFrom:        alloc.from,
+            allocationTo:          alloc.to,
+          }}
+          onSubmit={handleExceptionSubmit}
+          submitLabel="Create ticket & request exception"
+          submittingLabel="Creating ticket…"
+          onClose={() => setShowException(false)}
+        />
+      )}
+
+      {/* C5 — quick-create PM project (role-gated; same API as PM › New Project) */}
+      {canCreateProject && (
+        <QuickCreateProjectModal
+          open={showProjectModal}
+          onClose={() => setShowProjectModal(false)}
+          onCreated={handleProjectCreated}
+        />
+      )}
     </div>
   );
 }

@@ -16,7 +16,16 @@ export const getByStatusApi = () => api.get('/helpdesk/dashboard/by-status');
 export const getByPriorityApi = () => api.get('/helpdesk/dashboard/by-priority');
 
 /**
- * Fetch ticket counts grouped by agent group.
+ * Fetch ticket counts grouped by team (reporting manager).
+ * Response data: [{ teamManagerId, teamName, total, pending }]
+ * Legacy rows (tickets without a team manager) have teamManagerId null and
+ * teamName like 'Group: <name>' or 'Unassigned'.
+ */
+export const getByTeamApi = () => api.get('/helpdesk/dashboard/by-team');
+
+/**
+ * Fetch ticket counts grouped by legacy helpdesk group.
+ * @deprecated Use getByTeamApi — kept for compatibility only.
  */
 export const getByGroupApi = () => api.get('/helpdesk/dashboard/by-group');
 

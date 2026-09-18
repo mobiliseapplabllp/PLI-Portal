@@ -65,6 +65,65 @@ async function assertWeightWithinBudget(projectId, parentMilestoneId, excludeMil
   }
 }
 
+/**
+ * Sub-milestone weights are ALWAYS an equal split of their parent's 100%:
+ * 5 subs → 20.00 each. DECIMAL(5,2) cannot hold 100/3 exactly, so every sub
+ * gets the 2-decimal floor and the last one takes the remainder
+ * (33.33 / 33.33 / 33.34) — the group always totals exactly 100.00.
+ *
+ * Shown to users as a share of the PROJECT too: parent 10% × 20% = 2%.
+ */
+function equalSplit(n) {
+  if (n <= 0) return [];
+  const base = Math.floor(10000 / n) / 100;
+  const last = Math.round((100 - base * (n - 1)) * 100) / 100;
+  return Array.from({ length: n }, (_, i) => (i === n - 1 ? last : base));
+}
+
+async function rebalanceSubWeights(parentMilestoneId, transaction) {
+  const subs = await Milestone.findAll({
+    where: { parentMilestoneId },
+    order: [['order', 'ASC'], ['createdAt', 'ASC']],
+    transaction,
+  });
+  const weights = equalSplit(subs.length);
+  for (let i = 0; i < subs.length; i++) {
+    if (Number(subs[i].weightPercentage) !== weights[i]) {
+      await subs[i].update({ weightPercentage: weights[i] }, { transaction });
+    }
+  }
+}
+
+/**
+ * A parent with sub-milestones takes its progress from them:
+ *   parent % = Σ(sub progress × sub share of parent) ÷ 100
+ * Worked example: 5 subs at 20% each, one at 50% → 50 × 20 ÷ 100 = 10% complete.
+ * A parent with no subs keeps its manually entered progress. Status is untouched.
+ */
+function rolledUpProgress(subs) {
+  const earned = subs.reduce(
+    (sum, s) => sum + (Number(s.completionPercentage) || 0) * (Number(s.weightPercentage) || 0) / 100,
+    0,
+  );
+  return Math.max(0, Math.min(100, Math.round(earned)));
+}
+
+async function rollupParentProgress(parentMilestoneId, transaction) {
+  const parent = await Milestone.findByPk(parentMilestoneId, { transaction });
+  if (!parent) return null;
+  const subs = await Milestone.findAll({
+    where: { parentMilestoneId },
+    attributes: ['id', 'completionPercentage', 'weightPercentage'],
+    transaction,
+  });
+  if (subs.length === 0) return parent;
+  const pct = rolledUpProgress(subs);
+  if (Number(parent.completionPercentage) !== pct) {
+    await parent.update({ completionPercentage: pct }, { transaction });
+  }
+  return parent;
+}
+
 function canManage(user, project) {
   if (MANAGERS.includes(user.role)) return true;
   if (String(project.managerId) === String(user._id ?? user.id)) return true;
@@ -195,26 +254,38 @@ const createSubMilestone = async (projectId, parentMilestoneId, data, user) => {
   const parent = await Milestone.findOne({ where: { id: parentMilestoneId, projectId } });
   if (!parent) throw new NotFoundError('Parent milestone');
 
-  // Guard: sub-milestones share their parent's 100% budget
-  if (data.weightPercentage != null) {
-    await assertWeightWithinBudget(projectId, parentMilestoneId, null, Number(data.weightPercentage));
+  // Sub weight is never taken from the request — it is an equal split of the
+  // parent, recalculated for every sibling. The parent's progress follows.
+  const t = await sequelize.transaction();
+  try {
+    const maxOrder = await Milestone.max('order', { where: { projectId, parentMilestoneId }, transaction: t }) || 0;
+    const sub = await Milestone.create({
+      name:              data.name,
+      description:       data.description,
+      accountableUserId: data.accountableUserId,
+      plannedStartDate:  data.plannedStartDate,
+      plannedEndDate:    data.plannedEndDate,
+      type:              data.type,
+      projectId,
+      parentMilestoneId,
+      isDefault: false,
+      order: maxOrder + 1,
+    }, { transaction: t });
+    await rebalanceSubWeights(parentMilestoneId, t);
+    const updatedParent = await rollupParentProgress(parentMilestoneId, t);
+    await t.commit();
+    await sub.reload();
+    return { ...sub.toJSON(), parentMilestone: pickParent(updatedParent) };
+  } catch (err) {
+    await t.rollback();
+    throw err;
   }
-
-  const maxOrder = await Milestone.max('order', { where: { projectId, parentMilestoneId } }) || 0;
-  return Milestone.create({
-    name:              data.name,
-    description:       data.description,
-    weightPercentage:  data.weightPercentage,
-    accountableUserId: data.accountableUserId,
-    plannedStartDate:  data.plannedStartDate,
-    plannedEndDate:    data.plannedEndDate,
-    type:              data.type,
-    projectId,
-    parentMilestoneId,
-    isDefault: false,
-    order: maxOrder + 1,
-  });
 };
+
+/** The parent fields the UI refreshes after a sub changes. */
+function pickParent(p) {
+  return p ? { id: p.id, completionPercentage: p.completionPercentage, weightPercentage: p.weightPercentage } : null;
+}
 
 // ── UPDATE milestone ──────────────────────────────────────────────────────────
 const updateMilestone = async (projectId, milestoneId, data, user) => {
@@ -232,6 +303,28 @@ const updateMilestone = async (projectId, milestoneId, data, user) => {
   if (!canManage(user, project)) {
     if (!isAccountable || !isStatusOrProgressOnly) {
       throw new ForbiddenError('Not authorized to update this milestone');
+    }
+  }
+
+  const isSub = !!milestone.parentMilestoneId;
+
+  // Sub weight is an automatic equal split — it cannot be typed. A value equal to
+  // the stored one is ignored so an edit form that echoes it back still saves.
+  if (isSub && data.weightPercentage !== undefined && data.weightPercentage !== null) {
+    if (Number(data.weightPercentage) !== Number(milestone.weightPercentage)) {
+      throw new ValidationError('Sub-milestone weight is calculated automatically (an equal share of its milestone)');
+    }
+    delete data.weightPercentage;
+  }
+
+  // A milestone with sub-milestones takes its progress from them.
+  if (!isSub && data.completionPercentage !== undefined && data.completionPercentage !== null) {
+    const subCount = await Milestone.count({ where: { parentMilestoneId: milestoneId } });
+    if (subCount > 0) {
+      if (Number(data.completionPercentage) !== Number(milestone.completionPercentage)) {
+        throw new ValidationError('Progress is calculated from its sub-milestones — update those instead');
+      }
+      delete data.completionPercentage;
     }
   }
 
@@ -258,8 +351,22 @@ const updateMilestone = async (projectId, milestoneId, data, user) => {
   }
 
   const previousStatus = milestone.status;
-  Object.assign(milestone, data);
-  await milestone.save();
+  const progressChanged = data.completionPercentage !== undefined &&
+    Number(data.completionPercentage) !== Number(milestone.completionPercentage);
+
+  let updatedParent = null;
+  const t = await sequelize.transaction();
+  try {
+    Object.assign(milestone, data);
+    await milestone.save({ transaction: t });
+    if (isSub && progressChanged) {
+      updatedParent = await rollupParentProgress(milestone.parentMilestoneId, t);
+    }
+    await t.commit();
+  } catch (err) {
+    await t.rollback();
+    throw err;
+  }
 
   // Email alert on milestone completion
   const isNowCompleted = data.status?.toLowerCase() === 'completed';
@@ -286,7 +393,7 @@ const updateMilestone = async (projectId, milestoneId, data, user) => {
     }
   }
 
-  return { ...milestone.toJSON(), weightWarning };
+  return { ...milestone.toJSON(), weightWarning, parentMilestone: pickParent(updatedParent) };
 };
 
 // ── DELETE milestone ──────────────────────────────────────────────────────────
@@ -298,7 +405,22 @@ const deleteMilestone = async (projectId, milestoneId, user) => {
 
   const milestone = await Milestone.findOne({ where: { id: milestoneId, projectId } });
   if (!milestone) throw new NotFoundError('Milestone');
-  await milestone.destroy();
+
+  const parentId = milestone.parentMilestoneId;
+  const t = await sequelize.transaction();
+  try {
+    await milestone.destroy({ transaction: t });
+    // Removing a sub re-splits its siblings and recomputes the parent. With no
+    // subs left the parent keeps its last value and becomes manual again.
+    if (parentId) {
+      await rebalanceSubWeights(parentId, t);
+      await rollupParentProgress(parentId, t);
+    }
+    await t.commit();
+  } catch (err) {
+    await t.rollback();
+    throw err;
+  }
 };
 
 const updateMilestoneStatus   = (pid, mid, status, user)   => updateMilestone(pid, mid, { status }, user);
@@ -457,4 +579,6 @@ module.exports = {
   updateMilestoneStatus, updateMilestoneProgress,
   updateMilestonePlannedDates, updateMilestoneActualDates,
   unlockPlannedDates, lockPlannedDates,
+  // weight split + progress roll-up (also used by migration 049 and tests)
+  equalSplit, rolledUpProgress, rebalanceSubWeights, rollupParentProgress,
 };

@@ -25,6 +25,13 @@ const HdReminder        = require('./HdReminder');
 const HdAttachment      = require('./HdAttachment');
 const HdDocument        = require('./HdDocument');
 const User              = require('../User');
+// PM Project model only depends on config/database — safe to require here without
+// pulling in models/associations.js (no circular load).
+const Project           = require('../pm/Project');
+// Same reasoning: PmAllocationApproval only depends on config/database. The
+// approval ↔ ticket link is declared HERE (not in models/associations.js, which
+// deliberately never requires the helpdesk models) so nothing loads circularly.
+const PmAllocationApproval = require('../pm/PmAllocationApproval');
 
 // â”€â”€ Ticket â†” Group / Project â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 HdGroup.hasMany(HdTicket,   { foreignKey: 'groupId',   as: 'tickets' });
@@ -74,6 +81,18 @@ HdTicket.belongsTo(HdTicket, { foreignKey: 'linkedTicketId', as: 'linkedTicket' 
 // Allows eager-loading user names in ticket lists and detail views.
 HdTicket.belongsTo(User, { foreignKey: 'assigneeId',  as: 'assigneeUser',  constraints: false });
 HdTicket.belongsTo(User, { foreignKey: 'requesterId', as: 'requesterUser', constraints: false });
+// Team owning the ticket = the reporting manager (users.id). Migration 043.
+HdTicket.belongsTo(User, { foreignKey: 'teamManagerId', as: 'teamManager', constraints: false });
+
+// ── Ticket / legacy HdProject ↔ PM Project (pm_projects UUID) ──────────────
+HdTicket.belongsTo(Project,  { foreignKey: 'pmProjectId', as: 'pmProject', constraints: false });
+HdProject.belongsTo(Project, { foreignKey: 'pmProjectId', as: 'pmProject', constraints: false });
+
+// ── Ticket ↔ allocation exception request (migration 047) ──────────────────
+// No FK constraints: the approval row outlives the ticket, exactly as the project
+// exception rows outlive their member.
+PmAllocationApproval.belongsTo(HdTicket, { foreignKey: 'ticketId', as: 'ticket', constraints: false });
+HdTicket.hasMany(PmAllocationApproval,   { foreignKey: 'ticketId', as: 'allocationApprovals', constraints: false });
 
 // â”€â”€ Approval â†” PLI User (approver / requestedBy) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 HdTicketApproval.belongsTo(User, { foreignKey: 'approverId',   as: 'approver',          constraints: false });
@@ -111,4 +130,8 @@ module.exports = {
   HdDocument,
   // Re-export User so consumers can `const { HdTicket, User } = require('.../helpdesk')` if needed
   User,
+  // PM Project (aliased as 'pmProject' on HdTicket / HdProject)
+  Project,
+  // Allocation exception requests (aliased as 'ticket' on the approval)
+  PmAllocationApproval,
 };

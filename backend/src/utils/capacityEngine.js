@@ -142,10 +142,59 @@ function toRanges(days) {
 
 const fmtShort = (s) => toDate(s).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
 
+const NO_SUGGESTIONS = Object.freeze({ reduceTo: null, nextFreeDate: null, shortenTo: null, overloadHours: 0 });
+
+/** How far past the proposed window to look for a start date where the hours fit. */
+const NEXT_FREE_HORIZON_DAYS = 365;
+/** A start date qualifies when the hours fit for the whole proposed length or at least this many working days. */
+const MIN_FIT_RUN = 5;
+
+/**
+ * Ways out of a conflict, computed from the existing load only (pure).
+ *
+ *   reduceTo      hours/day that fit on every day of the window (0.5 steps), or null when none do
+ *   nextFreeDate  first working day AFTER the conflict begins from which the proposed hours fit
+ *                 for the whole proposed length or ≥ MIN_FIT_RUN working days; null when none
+ *                 within NEXT_FREE_HORIZON_DAYS past the window
+ *   shortenTo     last fitting working day before the first over-capacity day; null when the
+ *                 very first working day is already over
+ *   overloadHours peak − capacity (0.1 precision)
+ */
+function suggestFixes(existing, proposed, cal, { load, peak, remaining }) {
+  const cap   = cal.hoursPerDay;
+  const hours = Number(proposed.hoursPerDay);
+  const overloadHours = Math.max(0, Math.round((peak - cap) * 10) / 10);
+
+  const firstOverIdx = load.findIndex(d => d.hours > cap + 0.001);
+  const shortenTo = firstOverIdx > 0 ? load[firstOverIdx - 1].date : null;
+
+  // Search for a later start over an extended window of existing load only.
+  const start   = toDate(proposed.allocationFrom) || today();
+  const winEnd  = toDate(proposed.allocationTo) || new Date(start.getTime() + 90 * DAY_MS);
+  const horizon = new Date(winEnd.getTime() + NEXT_FREE_HORIZON_DAYS * DAY_MS);
+  const ext     = dailyLoad(existing, start, horizon, cal);
+  const length  = load.length;                                   // proposed length in working days
+  const needed  = Math.max(1, Math.min(length, MIN_FIT_RUN));
+
+  // run[i] = number of consecutive working days from i on which the proposed hours fit
+  const run = new Array(ext.length).fill(0);
+  for (let i = ext.length - 1; i >= 0; i--) {
+    const fits = ext[i].hours + hours <= cap + 0.001;
+    run[i] = fits ? 1 + (run[i + 1] || 0) : 0;
+  }
+  let nextFreeDate = null;
+  for (let i = Math.max(1, firstOverIdx); i < ext.length; i++) {
+    if (run[i] >= length || run[i] >= needed) { nextFreeDate = ext[i].date; break; }
+  }
+
+  return { reduceTo: remaining > 0 ? remaining : null, nextFreeDate, shortenTo, overloadHours };
+}
+
 /**
  * Would adding/changing one allocation push a person over capacity on any
  * working day in its window?
- * @returns { ok, overDays, ranges, peak, remaining, capacity, message }
+ * @returns { ok, overDays, ranges, peak, remaining, capacity, message, suggestions }
+ *   suggestions: { reduceTo, nextFreeDate, shortenTo, overloadHours } — see suggestFixes
  */
 function checkConflict(existing, proposed, calendar) {
   const cal = normaliseCalendar(calendar);
@@ -158,12 +207,13 @@ function checkConflict(existing, proposed, calendar) {
     .reduce((m, d) => Math.max(m, d.hours), 0);
   const remaining = Math.max(0, Math.floor((cap - busiestExisting) * 2) / 2);   // round DOWN to 0.5
 
-  if (!over.length) return { ok: true, overDays: 0, ranges: [], peak, remaining, capacity: cap, message: null };
+  if (!over.length) return { ok: true, overDays: 0, ranges: [], peak, remaining, capacity: cap, message: null, suggestions: { ...NO_SUGGESTIONS } };
 
   const ranges = toRanges(over);
   const rangeTxt = ranges.map(r => r.from === r.to ? fmtShort(r.from) : `${fmtShort(r.from)}–${fmtShort(r.to)}`).join(', ');
+  const suggestions = suggestFixes(existing, proposed, cal, { load, peak, remaining });
   return {
-    ok: false, overDays: over.length, ranges, peak, remaining, capacity: cap,
+    ok: false, overDays: over.length, ranges, peak, remaining, capacity: cap, suggestions,
     message:
       `Over capacity on ${over.length} working day${over.length === 1 ? '' : 's'} (${rangeTxt}): ${peak}h / ${cap}h. ` +
       (remaining > 0

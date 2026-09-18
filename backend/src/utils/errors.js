@@ -37,16 +37,34 @@ class ConflictError extends AppError {
   }
 }
 
-/** 409 raised by the capacity engine; carries the engine result for the API body. */
+const EMPTY_SUGGESTIONS = { reduceTo: null, nextFreeDate: null, shortenTo: null, overloadHours: 0 };
+
+/**
+ * 409 raised by the capacity engine; carries the engine result for the API body.
+ *
+ * @param result   capacityEngine.checkConflict() result (may carry `suggestions`)
+ * @param capacity working hours/day the check ran against
+ * @param options  { exceptionMaxHoursPerDay?: number, canRequestException?: boolean }
+ *                 — the exception cap from pm_settings so the client can offer "Request exception…"
+ */
 class AllocationConflictError extends ConflictError {
-  constructor(result, capacity) {
+  constructor(result, capacity, options = {}) {
     super(result.message || 'Allocation exceeds capacity');
+    const s = result.suggestions || {};
     this.conflict = {
       overDays:  result.overDays,
       ranges:    result.ranges,
       peak:      result.peak,
       remaining: result.remaining,
       capacity,
+      suggestions: {
+        reduceTo:      s.reduceTo      ?? EMPTY_SUGGESTIONS.reduceTo,
+        nextFreeDate:  s.nextFreeDate  ?? EMPTY_SUGGESTIONS.nextFreeDate,
+        shortenTo:     s.shortenTo     ?? EMPTY_SUGGESTIONS.shortenTo,
+        overloadHours: s.overloadHours ?? Math.max(0, Math.round(((Number(result.peak) || 0) - (Number(capacity) || 0)) * 10) / 10),
+      },
+      canRequestException:     options.canRequestException !== false,
+      exceptionMaxHoursPerDay: options.exceptionMaxHoursPerDay != null ? Number(options.exceptionMaxHoursPerDay) : null,
     };
   }
 }

@@ -2,7 +2,8 @@
  * Utilisation Service — one person's (or a team's) committed hours vs monthly
  * capacity, across BOTH modules:
  *
- *   • PM   — pm_project_members.hoursPerDay over allocationFrom → allocationTo
+ *   • PM   — pm_allocation_segments (one line per SEGMENT, keyed by segmentId) via
+ *            allocation.service.loadSegmentsForUsers — the one PM loader
  *   • HD   — hd_tickets.allocation_hours_per_day over allocation_from → allocation_to
  *            (assignment is single-valued via hd_tickets.assignee_id)
  *
@@ -12,45 +13,51 @@
  */
 
 const { Op } = require('sequelize');
-const ProjectMember = require('../../models/pm/ProjectMember');
-const Project       = require('../../models/pm/Project');
 const User          = require('../../models/User');
 const HdTicket      = require('../../models/helpdesk/HdTicket');
 const pmSettingsService = require('./pmSettings.service');
+// Only the SEGMENT half here — this service builds its own HD lines below with
+// ticket-specific fields (reqNumber, title) that the shared loader does not carry.
+const { loadSegmentsForUsers } = require('./allocation.service');
 const E = require('../../utils/capacityEngine');
 const { ValidationError } = require('../../utils/errors');
 
-const INACTIVE_PROJECT_STATUSES = ['completed', 'cancelled', 'closed'];
 const INACTIVE_TICKET_STATUSES  = ['closed', 'resolved'];
 const MAX_MONTHS = 12;
 
 const dateOnly = (v) => (v ? String(v instanceof Date ? E.iso(v) : v).slice(0, 10) : null);
 
-/** Every allocation (PM + HD) for a set of users, grouped by userId. */
-async function loadAllocations(userIds) {
+/**
+ * Every allocation (PM + HD) for a set of users, grouped by userId.
+ * PM lines are one per SEGMENT (`segmentId`; `refId` stays the projectId) and
+ * carry `exceptionStatus` ('none' | 'approved' | 'pending'); pending exception
+ * segments are EXCLUDED unless `includePending` is set — they never count
+ * towards totals (D1). Callers that opt in must keep them out of the arithmetic.
+ */
+async function loadAllocations(userIds, { includePending = false, calendar } = {}) {
   const ids = [...new Set(userIds.map(String))];
   const byUser = new Map(ids.map(id => [id, []]));
   if (!ids.length) return byUser;
 
-  const members = await ProjectMember.findAll({
-    where: { userId: { [Op.in]: ids }, hoursPerDay: { [Op.ne]: null } },
-    include: [{
-      model: Project, as: 'project', attributes: ['id', 'name', 'status'], required: true,
-      where: { status: { [Op.notIn]: INACTIVE_PROJECT_STATUSES } },
-    }],
-  });
-  for (const m of members) {
-    byUser.get(String(m.userId))?.push({
+  // countedOnly=false returns every status; keep counted + pending, never rejected.
+  const segments = await loadSegmentsForUsers(ids, { countedOnly: !includePending, calendar });
+  for (const s of segments) {
+    if (s.hoursPerDay == null) continue;
+    if (s.exceptionStatus !== 'none' && s.exceptionStatus !== 'approved' && !(includePending && s.exceptionStatus === 'pending')) continue;
+    byUser.get(String(s.userId))?.push({
       source: 'project',
-      refId: m.projectId,
-      name: m.project?.name || 'Project',
-      status: m.project?.status || null,
-      hoursPerDay: Number(m.hoursPerDay),
-      allocationMode: m.allocationMode || 'per_day',
-      allocationTotalHours: m.allocationTotalHours == null ? null : Number(m.allocationTotalHours),
-      allocationFrom: dateOnly(m.allocationFrom),
-      allocationTo: dateOnly(m.allocationTo),
-      isEstimated: m.hoursConfirmed === false,
+      refId: s.projectId,
+      memberId: s.memberId,
+      segmentId: s.segmentId,
+      name: s.projectName || 'Project',
+      status: s.projectStatus || null,
+      hoursPerDay: Number(s.hoursPerDay),
+      allocationMode: s.allocationMode || 'per_day',
+      allocationTotalHours: s.allocationTotalHours,
+      allocationFrom: s.allocationFrom,
+      allocationTo: s.allocationTo,
+      isEstimated: s.isEstimated === true,
+      exceptionStatus: s.exceptionStatus || 'none',
     });
   }
 
@@ -76,10 +83,13 @@ async function loadAllocations(userIds) {
       // No explicit end → the ticket's due date; still none → engine treats as open-ended
       allocationTo: dateOnly(t.allocationTo) || dateOnly(t.dueDate),
       isEstimated: false,
+      exceptionStatus: 'none',
     });
   }
   return byUser;
 }
+
+const isPendingException = (a) => a.exceptionStatus === 'pending';
 
 const bandOf = (b) => b;   // kept for clarity — engine already bands
 
@@ -111,17 +121,27 @@ function monthRange(from, to) {
   return out;
 }
 
-/** One person, one month, full breakdown. */
+/**
+ * One person, one month, full breakdown. `lines` (counted) each carry
+ * `exceptionStatus`; pending exception rows are returned separately in
+ * `pendingExceptionLines` (same shape, `counted: false`) and never touch totals.
+ */
 async function getUserUtilisation(userId, monthStr, calendar) {
   const { year, month } = parseMonth(monthStr);
   const cal  = calendar || await pmSettingsService.getCalendar();
   const user = await User.findByPk(userId, { attributes: ['id', 'name', 'email', 'role', 'designation'] });
-  const allocs = (await loadAllocations([userId])).get(String(userId)) || [];
-  const bd = withModuleTotals(E.monthBreakdown(allocs, year, month, cal));
+  const all     = (await loadAllocations([userId], { includePending: true, calendar: cal })).get(String(userId)) || [];
+  const counted = all.filter(a => !isPendingException(a));
+  const pending = all.filter(isPendingException);
+  const bd = withModuleTotals(E.monthBreakdown(counted, year, month, cal));
+  const pendingExceptionLines = pending.length
+    ? E.monthBreakdown(pending, year, month, cal).lines.map(l => ({ ...l, counted: false }))
+    : [];
   return {
     userId: String(userId),
     user: user ? { name: user.name, email: user.email, role: user.role, designation: user.designation } : null,
     ...bd,
+    pendingExceptionLines,
   };
 }
 
@@ -139,7 +159,7 @@ async function getTeamUtilisation({ userIds, from, to }) {
     users = await User.findAll({ where, attributes: ['id', 'name', 'email', 'role', 'designation'], order: [['name', 'ASC']] });
   }
 
-  const allocByUser = await loadAllocations(users.map(u => u.id));
+  const allocByUser = await loadAllocations(users.map(u => u.id), { calendar: cal });
 
   const monthMeta = months.map(({ year, month, key }) => {
     const cap = E.getMonthlyCapacity(year, month, cal);

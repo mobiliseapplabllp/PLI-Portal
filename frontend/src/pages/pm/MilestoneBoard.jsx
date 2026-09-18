@@ -56,7 +56,7 @@ const EMPTY_FORM = {
 };
 const EMPTY_SUB_FORM = {
   name: '', plannedStartDate: '', plannedEndDate: '',
-  accountableUserId: '', weightPercentage: '', status: 'not_started',
+  accountableUserId: '', status: 'not_started',
 };
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -358,17 +358,24 @@ export default function MilestoneBoard() {
 
   const handleProgressChange = async (milestoneId, pct) => {
     try {
-      await updateMilestoneProgressApi(id, milestoneId, Number(pct));
+      const res = await updateMilestoneProgressApi(id, milestoneId, Number(pct));
+      // A sub's progress rolls up — the server returns the recalculated parent
+      const parent   = res?.data?.data?.parentMilestone;
+      const parentId = parent ? (parent._id ?? parent.id) : null;
       setMilestones(prev => prev.map(m => {
         if ((m._id || m.id) === milestoneId) return { ...m, completionPercentage: Number(pct) };
-        return {
+        const updated = {
           ...m,
           subMilestones: (m.subMilestones || []).map(sm =>
             (sm._id || sm.id) === milestoneId ? { ...sm, completionPercentage: Number(pct) } : sm,
           ),
         };
+        if (parentId && (m._id || m.id) === parentId) updated.completionPercentage = parent.completionPercentage;
+        return updated;
       }));
-    } catch { toast.error('Failed to update progress'); }
+    } catch (err) {
+      toast.error(err?.response?.data?.message || err?.response?.data?.error?.message || 'Failed to update progress');
+    }
   };
 
   // ── Default milestone weight editing ────────────────────────────────────
@@ -425,11 +432,8 @@ export default function MilestoneBoard() {
     if (!subForm.name.trim()) return toast.error('Sub-milestone name is required');
     setSavingSub(true);
     try {
-      const payload = {
-        ...subForm,
-        weightPercentage: subForm.weightPercentage !== '' ? Number(subForm.weightPercentage) : undefined,
-      };
-      await createSubMilestoneApi(id, parentId, payload);
+      // No weight is sent — the server splits the milestone's weight equally
+      await createSubMilestoneApi(id, parentId, subForm);
       toast.success('Sub-milestone created');
       setShowSubFormFor(null);
       setSubForm(EMPTY_SUB_FORM);
@@ -1198,8 +1202,12 @@ export default function MilestoneBoard() {
                               type="range" min="0" max="100" step="5"
                               value={form.completionPercentage}
                               onChange={e => setF('completionPercentage', Number(e.target.value))}
-                              className="w-full accent-emerald-600 mt-2"
+                              disabled={subs.length > 0}
+                              className="w-full accent-emerald-600 mt-2 disabled:opacity-50 disabled:cursor-not-allowed"
                             />
+                            {subs.length > 0 && (
+                              <p className="text-[11px] text-gray-400 mt-1">Calculated from its sub-milestones</p>
+                            )}
                           </div>
                         </div>
                         <div className="flex justify-end gap-2 mt-3">
@@ -1262,6 +1270,14 @@ export default function MilestoneBoard() {
                                         </span>
                                       )}
                                     </div>
+                                    {sm.weightPercentage != null && (
+                                      <p className="text-[11px] text-gray-400 mt-0.5" title="Equal share of the milestone, set automatically">
+                                        {m.weightPercentage != null
+                                          ? `${Math.round(Number(m.weightPercentage) * Number(sm.weightPercentage)) / 100}% of project · `
+                                          : ''}
+                                        {Number(sm.weightPercentage)}% of milestone
+                                      </p>
+                                    )}
                                   </td>
 
                                   {/* Accountable */}
@@ -1590,17 +1606,15 @@ export default function MilestoneBoard() {
                             </select>
                           </div>
                           <div>
-                            <label className="text-xs font-medium text-gray-600 block mb-1">Weight %</label>
-                            <input
-                              type="number"
-                              min="0"
-                              max="100"
-                              step="0.5"
-                              value={subForm.weightPercentage}
-                              onChange={e => setSF('weightPercentage', e.target.value)}
-                              placeholder="Optional"
-                              className={inputCls}
-                            />
+                            <label className="text-xs font-medium text-gray-600 block mb-1">Weight</label>
+                            {/* Always an equal split of the milestone — shown, never typed */}
+                            <p className="text-xs text-gray-500 mt-2">
+                              {Math.round(10000 / (subs.length + 1)) / 100}% of milestone
+                              {m.weightPercentage != null
+                                ? ` · ${Math.round(Number(m.weightPercentage) * 100 / (subs.length + 1)) / 100}% of project`
+                                : ''}
+                              <span className="block text-[11px] text-gray-400">Split equally across {subs.length + 1} sub-milestone{subs.length ? 's' : ''}</span>
+                            </p>
                           </div>
                           <div>
                             <label className="text-xs font-medium text-gray-600 block mb-1">Status</label>
@@ -1783,7 +1797,7 @@ export default function MilestoneBoard() {
                             )}
                           </td>
                           <td className="px-5 py-3">
-                            {canManage ? (
+                            {canManage && !(m.subMilestones || []).length ? (
                               <div className="flex items-center gap-2">
                                 <input
                                   type="range" min="0" max="100" step="5"

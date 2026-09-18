@@ -1,6 +1,7 @@
 'use strict';
 
 const { ForbiddenError, UnauthorizedError } = require('../utils/errors');
+const User = require('../models/User');
 
 /**
  * @typedef {Object} HdPermissions
@@ -16,7 +17,9 @@ const { ForbiddenError, UnauthorizedError } = require('../utils/errors');
 /**
  * @typedef {'all' | 'group' | 'own'} HdScope
  * - 'all'   – can see every ticket regardless of assignment or department.
- * - 'group' – can see tickets belonging to their department / team.
+ * - 'group' – TEAM scope: tickets whose team_manager_id is me, or whose
+ *             requester/assignee is me or one of my direct reports
+ *             (plus legacy group_id = my hd_group_id). Name kept for compatibility.
  * - 'own'   – can see only tickets they created or are assigned to.
  */
 
@@ -29,6 +32,9 @@ const { ForbiddenError, UnauthorizedError } = require('../utils/errors');
  * @property {boolean}      isAdmin     - True for admin / md / director.
  * @property {HdScope}      scope       - Ticket visibility scope.
  * @property {HdPermissions} permissions - Granular capability flags.
+ * @property {number|null}  groupId     - Legacy hd_groups id (read-only, kept for old tickets).
+ * @property {string|null}  managerId   - The user's own reporting manager (users.managerId).
+ * @property {string|null}  teamManagerId - Team the user belongs to as a member (= managerId).
  */
 
 /** Roles that are considered full helpdesk administrators. */
@@ -175,24 +181,45 @@ function resolveRoleMapping(role) {
  *
  * @type {import('express').RequestHandler}
  */
-function helpdeskAuth(req, res, next) {
+async function helpdeskAuth(req, res, next) {
   if (!req.user) {
     return next(new UnauthorizedError('Authentication required'));
   }
 
-  // authenticate middleware applies renameIdsForClient() which renames id → _id.
-  // Support both field names so this middleware works regardless of that transform.
-  const id    = req.user._id ?? req.user.id;
-  const { name, email, role } = req.user;
-  const { isAdmin, scope, permissions } = resolveRoleMapping(role);
+  try {
+    // authenticate middleware applies renameIdsForClient() which renames id → _id.
+    // Support both field names so this middleware works regardless of that transform.
+    const id    = req.user._id ?? req.user.id;
+    const { name, email, role } = req.user;
+    const { isAdmin, scope, permissions } = resolveRoleMapping(role);
 
-  /** @type {HdUser} */
-  // Attach the user's helpdesk group so group-scope filtering works correctly.
-  // req.user may have hdGroupId (camelCase from ORM) or hd_group_id (snake_case from raw query).
-  const groupId = req.user.hdGroupId ?? req.user.hd_group_id ?? null;
-  req.hdUser = { id, name, email, role, isAdmin, scope, permissions, groupId };
+    // Legacy helpdesk group — kept for reads of old tickets only.
+    // req.user may have hdGroupId (camelCase from ORM) or hd_group_id (snake_case from raw query).
+    const groupId = req.user.hdGroupId ?? req.user.hd_group_id ?? null;
 
-  next();
+    // Reporting manager = the team this user belongs to as a member.
+    // authenticate loads the full user row, so managerId is normally already here;
+    // fall back to a single lookup only when the property is absent entirely.
+    let managerId = Object.prototype.hasOwnProperty.call(req.user, 'managerId')
+      ? req.user.managerId
+      : undefined;
+    if (managerId === undefined) {
+      const row = await User.findOne({ attributes: ['managerId'], where: { id }, raw: true });
+      managerId = row ? row.managerId : null;
+    }
+    managerId = managerId ?? null;
+
+    /** @type {HdUser} */
+    req.hdUser = {
+      id, name, email, role, isAdmin, scope, permissions, groupId,
+      managerId,
+      teamManagerId: managerId,
+    };
+
+    next();
+  } catch (err) {
+    next(err);
+  }
 }
 
 /**

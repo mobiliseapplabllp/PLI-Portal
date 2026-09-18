@@ -18,11 +18,12 @@ function fmtDate(iso) {
   }
 }
 
+// Day-level period label ("12 Sep") — segments are day-bounded, month-only hid the boundaries
 function fmtDateShort(iso) {
   if (!iso) return '—';
   try {
-    return new Intl.DateTimeFormat('en-US', {
-      month: 'short', year: 'numeric',
+    return new Intl.DateTimeFormat('en-GB', {
+      day: 'numeric', month: 'short',
     }).format(new Date(iso));
   } catch {
     return iso;
@@ -59,23 +60,40 @@ function AssignmentRow({ asgn, capacity }) {
   const barPct = capacity > 0 ? Math.min(hours / capacity, 1) * 100 : 0;
   const from = asgn.allocationFrom ?? asgn.fromDate;
   const to   = asgn.allocationTo   ?? asgn.toDate;
+  // Exception lines: approved ones count and get a chip; pending ones are shown
+  // greyed because they are NOT counted against capacity until decided.
+  const exc = asgn.exceptionStatus;
+  const isPendingExc  = exc === 'pending';
+  const isApprovedExc = exc === 'approved';
   return (
-    <li className="flex items-center gap-2 text-xs text-gray-700">
+    <li className={`flex items-center gap-2 text-xs ${isPendingExc ? 'text-gray-400' : 'text-gray-700'}`}>
       {/* Mini proportional bar */}
       <div
         className="w-12 h-1.5 bg-gray-100 rounded-full overflow-hidden shrink-0"
         aria-hidden="true"
       >
         <div
-          className="h-full bg-blue-400 rounded-full"
+          className={`h-full rounded-full ${isPendingExc ? 'bg-gray-300' : isApprovedExc ? 'bg-purple-400' : 'bg-blue-400'}`}
           style={{ width: `${barPct}%` }}
         />
       </div>
 
       {/* Project name */}
-      <span className="font-medium text-gray-700 truncate min-w-0 flex-1">
+      <span className={`font-medium truncate min-w-0 flex-1 ${isPendingExc ? 'text-gray-400' : 'text-gray-700'}`}>
         {asgn.projectName}
       </span>
+
+      {/* Exception chips */}
+      {isApprovedExc && (
+        <span className="text-purple-700 bg-purple-50 border border-purple-200 rounded px-1 text-[10px] shrink-0" title="Approved allocation exception">
+          exception
+        </span>
+      )}
+      {isPendingExc && (
+        <span className="text-gray-500 bg-gray-50 border border-gray-200 rounded px-1 text-[10px] shrink-0" title="Awaiting approval — not counted against capacity">
+          pending exception (not counted)
+        </span>
+      )}
 
       {/* Estimated tag — hours pre-filled from a legacy % and not yet confirmed */}
       {asgn.isEstimated && (
@@ -144,6 +162,11 @@ function SuggestionCard({ suggestion, onSelect }) {
  *   toDate            — ISO date of new assignment end (string | null)
  *   newHoursPerDay    — hours/day of the new assignment (number | null)
  *   onSuggestionSelect — called with the suggestion object the user clicks
+ *   onRequestException — optional. When provided, the `request_approval`
+ *                        suggestion calls this instead of onSuggestionSelect,
+ *                        with { capacity, peakHours, projectedPeak, freeHours,
+ *                        nextFreeDate, newHoursPerDay, suggestion } so the caller
+ *                        can open the exception-request modal.
  */
 export default function ResourceAvailabilityCard({
   userId,
@@ -151,6 +174,7 @@ export default function ResourceAvailabilityCard({
   toDate,
   newHoursPerDay = null,
   onSuggestionSelect,
+  onRequestException,
 }) {
   const [data,    setData]    = useState(null);
   // Initialise to true when userId is already known so the component starts in
@@ -227,6 +251,15 @@ export default function ResourceAvailabilityCard({
                            'bg-emerald-500';
 
   const projectedBarColor = isOverAllocated ? 'bg-red-400' : 'bg-indigo-400';
+
+  // The server only emits `request_approval` when another manager's project is
+  // freeable. When the host page can open the exception flow, always offer it
+  // on an over-allocation so the user has a path forward.
+  const visibleSuggestions = (typeof onRequestException === 'function'
+    && isOverAllocated
+    && !suggestions.some(s => s.type === 'request_approval'))
+    ? [...suggestions, { type: 'request_approval', label: 'Request an exception', description: '', buttonLabel: 'Request exception…' }]
+    : suggestions;
 
   // Card wrapper classes
   const cardCls = isOverAllocated
@@ -332,7 +365,9 @@ export default function ResourceAvailabilityCard({
           </p>
           <ul className="space-y-2" role="list">
             {currentAssignments.map((asgn, idx) => (
-              <AssignmentRow key={idx} asgn={asgn} capacity={capacity} />
+              // One row per allocation SEGMENT — a project can appear several times
+              // (one per period), so key by segmentId when the server sends it.
+              <AssignmentRow key={asgn.segmentId ?? `${asgn.projectId ?? asgn.projectName ?? 'a'}-${idx}`} asgn={asgn} capacity={capacity} />
             ))}
           </ul>
         </div>
@@ -348,19 +383,32 @@ export default function ResourceAvailabilityCard({
       )}
 
       {/* ── Conflict resolution suggestions ────────────────────────────────── */}
-      {isOverAllocated && suggestions.length > 0 && (
+      {isOverAllocated && visibleSuggestions.length > 0 && (
         <div className="space-y-2">
           <p className="text-[11px] font-semibold text-gray-600 uppercase tracking-wide">
             Resolve conflict
           </p>
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-            {suggestions.map((sug, idx) => (
-              <SuggestionCard
-                key={idx}
-                suggestion={sug}
-                onSelect={onSuggestionSelect}
-              />
-            ))}
+            {visibleSuggestions.map((sug, idx) => {
+              // request_approval → open the exception flow when the host page supports it
+              const isException = sug.type === 'request_approval' && typeof onRequestException === 'function';
+              const suggestion = isException
+                ? { ...sug, label: 'Request an exception', buttonLabel: sug.buttonLabel || 'Request exception…',
+                    description: `Ask an approver to allow ${fmtHours(projectedPeak)}h / ${fmtHours(capacity)}h on the busiest day for this window` }
+                : sug;
+              return (
+                <SuggestionCard
+                  key={idx}
+                  suggestion={suggestion}
+                  onSelect={isException
+                    ? () => onRequestException({
+                        capacity, peakHours, projectedPeak, freeHours, nextFreeDate,
+                        newHoursPerDay: effectiveNewHours, suggestion: sug,
+                      })
+                    : onSuggestionSelect}
+                />
+              );
+            })}
           </div>
         </div>
       )}

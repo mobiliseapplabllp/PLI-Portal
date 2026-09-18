@@ -6,31 +6,24 @@
  */
 
 const crypto      = require('crypto');
-const { HdProject } = require('../../models/helpdesk');
-const { sendSuccess, sendError } = require('../../utils/response');
+const { HdProject, Project: PmProject } = require('../../models/helpdesk');
+const { sendSuccess } = require('../../utils/response');
 const { NotFoundError, ForbiddenError } = require('../../utils/errors');
+
+/** `pmProject { id, name }` when the legacy project is linked to a PM project (B12). */
+const PM_PROJECT_INCLUDE = { model: PmProject, as: 'pmProject', attributes: ['id', 'name'], required: false };
 
 // ─── Controllers ─────────────────────────────────────────────────────────────
 
 /**
  * GET /helpdesk/projects
- * List helpdesk projects.
- * - ?groupId=N   → only projects belonging to that group (used by CreateTicket)
- * - ?all=true    → all projects regardless of group (admin/settings)
- * Without filters, returns projects visible to the caller's group.
+ * List legacy helpdesk projects (all of them — no group scoping any more).
+ * Each row carries `pmProject { id, name }` when linked to a PM project.
  * @type {import('express').RequestHandler}
  */
 const listProjects = async (req, res, next) => {
   try {
-    const { groupId, all } = req.query;
-    const where = {};
-    if (groupId) {
-      where.groupId = parseInt(groupId, 10) || null;
-    }
-    const projects = await HdProject.findAll({
-      where,
-      order: [['name', 'ASC']],
-    });
+    const projects = await HdProject.findAll({ include: [PM_PROJECT_INCLUDE], order: [['name', 'ASC']] });
     return sendSuccess(res, projects, 'Projects fetched');
   } catch (err) {
     next(err);
@@ -44,7 +37,7 @@ const listProjects = async (req, res, next) => {
  */
 const getProject = async (req, res, next) => {
   try {
-    const project = await HdProject.findByPk(req.params.id);
+    const project = await HdProject.findByPk(req.params.id, { include: [PM_PROJECT_INCLUDE] });
     if (!project) return next(new NotFoundError('Project'));
     return sendSuccess(res, project, 'Project fetched');
   } catch (err) {
@@ -63,14 +56,14 @@ const createProject = async (req, res, next) => {
     if (!req.hdUser.isAdmin && !req.hdUser.permissions.canManageProjects)
       return next(new ForbiddenError('Insufficient permissions'));
 
-    const { name, description, managerId, groupId, status } = req.body;
-    if (!name || !name.trim()) return sendError(res, 'name is required', 400);
+    // body.groupId is ignored — helpdesk groups are retired.
+    const { name, description, managerId, status } = req.body;
+    if (!name || !name.trim()) return res.status(400).json({ success: false, message: 'name is required', error: { message: 'name is required' } });
 
     const project = await HdProject.create({
       name:        name.trim(),
       description: description || null,
       managerId:   managerId   || req.hdUser.id,
-      groupId:     groupId     || null,
       status:      status      || 'Active',
       publicToken: crypto.randomUUID(),
     });
@@ -94,11 +87,11 @@ const updateProject = async (req, res, next) => {
     const project = await HdProject.findByPk(req.params.id);
     if (!project) return next(new NotFoundError('Project'));
 
-    const { name, description, managerId, groupId, status } = req.body;
+    // body.groupId is ignored — helpdesk groups are retired.
+    const { name, description, managerId, status } = req.body;
     if (name        !== undefined) project.name        = name.trim();
     if (description !== undefined) project.description = description;
     if (managerId   !== undefined) project.managerId   = managerId;
-    if (groupId     !== undefined) project.groupId     = groupId || null;
     if (status      !== undefined) project.status      = status;
 
     await project.save();

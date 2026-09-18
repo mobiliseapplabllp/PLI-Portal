@@ -34,6 +34,12 @@ router.get('/users/:userId/utilisation',  authorize(...ALL),        utilCtrl.get
 // no top-level '/:param' route exists in this file, so '/utilisation' is unambiguous.
 router.get('/utilisation',                authorize(...MGMT_ROLES), utilCtrl.getTeamUtilisation);
 
+// ── Allocation exception inbox (ALL; the service decides visibility/approver roles) ──
+// Registered before router.use('/projects', …) like /utilisation above.
+router.get('/allocation-exceptions',                authorize(...ALL), projectCtrl.listAllocationExceptions);
+router.patch('/allocation-exceptions/:approvalId',  authorize(...ALL), projectCtrl.decideAllocationException);
+router.delete('/allocation-exceptions/:approvalId', authorize(...ALL), projectCtrl.cancelAllocationException);
+
 // ── RAID summary (must be before /projects/:id catch-all) ────────────────────
 router.get('/projects/raid-summary', authorize(...MANAGERS), raidCtrl.raidSummary);
 

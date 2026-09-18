@@ -5,7 +5,9 @@
  * CRUD for sub-tasks attached to a helpdesk ticket.
  */
 
+const { Op } = require('sequelize');
 const { HdTask, HdTicket } = require('../../models/helpdesk');
+const { ticketVisibilityWhere } = require('./ticket.controller');
 const { sendSuccess, sendError } = require('../../utils/response');
 const { NotFoundError, ForbiddenError } = require('../../utils/errors');
 
@@ -77,14 +79,20 @@ const updateTask = async (req, res, next) => {
     const task = await HdTask.findByPk(req.params.id);
     if (!task) return next(new NotFoundError('Task'));
 
-    // Authorization: only admins or the ticket's group-scoped agents may update tasks
+    // Authorization: admins, or anyone the ticket is visible to under the
+    // team rule (B4 — same helper as listTickets), or the ticket's owner.
     const hdUser = req.hdUser;
     if (!hdUser.isAdmin) {
-      const ticket = await HdTicket.findByPk(task.ticketId, { attributes: ['id', 'groupId', 'assigneeId', 'requesterId'] });
+      const ticket = await HdTicket.findByPk(task.ticketId, { attributes: ['id', 'assigneeId', 'requesterId'] });
       if (!ticket) return next(new NotFoundError('Ticket'));
-      const inGroup  = hdUser.scope === 'all' || (hdUser.scope === 'group' && ticket.groupId === hdUser.groupId);
-      const isOwner  = ticket.assigneeId === hdUser.id || ticket.requesterId === hdUser.id;
-      if (!inGroup && !isOwner) {
+      const isOwner = ticket.assigneeId === hdUser.id || ticket.requesterId === hdUser.id;
+      let inTeam = false;
+      if (!isOwner) {
+        const vis = await ticketVisibilityWhere(hdUser);
+        inTeam = vis === null
+          || (await HdTicket.count({ where: { [Op.and]: [{ id: ticket.id }, vis] } })) > 0;
+      }
+      if (!inTeam && !isOwner) {
         return next(new ForbiddenError('You do not have permission to update tasks on this ticket'));
       }
     }

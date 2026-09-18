@@ -32,6 +32,12 @@ const Project = sequelize.define(
     // ── projectType now stores project category (Signed/Unsigned/Contract/Demo) ─
     projectType:     { type: DataTypes.STRING(100), allowNull: true },
 
+    // Usage flags (migration 046) — independent, both may be true.
+    // isProduct: planned in Project Management; default milestones are created on
+    // creation ONLY when this is true. isOperations: accepts helpdesk tickets.
+    isProduct:       { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
+    isOperations:    { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+
     // Planned dates — set once at creation, treated as read-only after
     startDate:          { type: DataTypes.DATEONLY, allowNull: true },  // plannedStartDate in UI
     endDate:            { type: DataTypes.DATEONLY, allowNull: true },  // plannedEndDate in UI

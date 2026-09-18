@@ -40,6 +40,16 @@ const dayLabel = (iso) => {
   if (!m || !d) return iso || '';
   return `${d} ${MONTH_NAMES[m - 1]}`;
 };
+/** 'YYYY-MM-DD' × 2 → '21 Sep – 30 Nov' (years shown only when they differ or the range crosses a year). */
+const periodLabel = (from, to) => {
+  const a = String(from || '').slice(0, 10), b = String(to || '').slice(0, 10);
+  const [ya, ma, da] = a.split('-').map(Number);
+  const [yb, mb, db] = b.split('-').map(Number);
+  if (!ma || !mb) return `${a} – ${b}`;
+  const withYear = ya !== yb;
+  const f = (d, m, y) => `${d} ${MONTH_NAMES[m - 1]}${withYear ? ` ${y}` : ''}`;
+  return `${f(da, ma, ya)} – ${f(db, mb, yb)}`;
+};
 const fmtHours = (x) => Math.round((Number(x) || 0) * 10) / 10;
 const fmtPct = (x) => Math.round(Number(x) || 0);
 const getId = (u) => u?._id || u?.id || u?.userId || '';
@@ -151,8 +161,16 @@ function DrillDown({ target, onClose }) {
   const totalHours = Number(detail?.totalHours) || 0;
   const band       = BAND_BAR[detail?.band] ? detail.band : 'free';
   const barPct     = capHours > 0 ? Math.min(100, (totalHours / capHours) * 100) : 0;
-  const lines      = Array.isArray(detail?.lines) ? detail.lines : [];
-  const totDays    = lines.reduce((s, l) => s + (Number(l.workingDaysInMonth) || 0), 0);
+  // Counted lines plus pending-exception lines (backend keeps them apart so totals never include them)
+  const lines      = [
+    ...(Array.isArray(detail?.lines) ? detail.lines : []),
+    ...(Array.isArray(detail?.pendingExceptionLines) ? detail.pendingExceptionLines.map(l => ({ ...l, exceptionStatus: 'pending' })) : []),
+  ];
+  // Pending exceptions are not counted (backend excludes them from totals) — keep the days total consistent
+  const totDays    = lines
+    .filter((l) => l.exceptionStatus !== 'pending')
+    .reduce((s, l) => s + (Number(l.workingDaysInMonth) || 0), 0);
+  const hasException = lines.some((l) => l.exceptionStatus === 'approved' || l.exceptionStatus === 'pending');
 
   return (
     <div className="fixed inset-0 z-50" role="dialog" aria-modal="true" aria-labelledby="util-drill-title">
@@ -278,8 +296,19 @@ function DrillDown({ target, onClose }) {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-100">
-                        {lines.map((l, i) => (
-                          <tr key={`${l.source}-${l.refId ?? i}`} className="hover:bg-gray-50">
+                        {lines.map((l, i) => {
+                          const pendingEx  = l.exceptionStatus === 'pending';
+                          const approvedEx = l.exceptionStatus === 'approved';
+                          // PM lines are one per allocation SEGMENT (period) — several
+                          // lines can share a projectId, so key by segmentId when present.
+                          const lineFrom = l.allocationFrom ?? l.fromDate;
+                          const lineTo   = l.allocationTo   ?? l.toDate;
+                          return (
+                          <tr
+                            key={`${l.source}-${l.segmentId ?? l.refId ?? i}`}
+                            className={pendingEx ? 'bg-gray-50/70 text-gray-400' : 'hover:bg-gray-50'}
+                            title={pendingEx ? 'Pending exception — not counted until approved' : undefined}
+                          >
                             <td className="px-4 py-2.5">
                               <span
                                 className={[
@@ -303,15 +332,37 @@ function DrillDown({ target, onClose }) {
                                     estimated
                                   </span>
                                 )}
+                                {approvedEx && (
+                                  <span
+                                    className="inline-flex px-1.5 py-0.5 rounded-full bg-violet-50 text-violet-700 border border-violet-200 text-[10px] font-medium uppercase tracking-wide shrink-0"
+                                    title="Approved allocation exception — allowed above daily capacity"
+                                  >
+                                    exception
+                                  </span>
+                                )}
+                                {pendingEx && (
+                                  <span
+                                    className="inline-flex px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500 border border-gray-200 text-[10px] font-medium uppercase tracking-wide shrink-0"
+                                    title="Exception awaiting approval — not counted in totals"
+                                  >
+                                    pending — not counted
+                                  </span>
+                                )}
                               </div>
                               {l.status && <p className="text-xs text-gray-400">{l.status}</p>}
+                              {l.source !== 'helpdesk' && lineFrom && lineTo && (
+                                <p className="text-xs text-gray-400 tabular-nums" title="Allocation period">
+                                  {periodLabel(lineFrom, lineTo)}
+                                </p>
+                              )}
                             </td>
-                            <td className="px-4 py-2.5 text-right tabular-nums text-gray-700">{fmtHours(l.hoursPerDay)}h</td>
-                            <td className="px-4 py-2.5 text-right tabular-nums text-gray-700">{l.workingDaysInMonth ?? 0}</td>
-                            <td className="px-4 py-2.5 text-right tabular-nums text-gray-900 font-medium">{fmtHours(l.hours)}</td>
-                            <td className="px-4 py-2.5 text-right tabular-nums text-gray-700">{fmtPct(l.pct)}%</td>
+                            <td className={`px-4 py-2.5 text-right tabular-nums ${pendingEx ? 'text-gray-400 line-through' : 'text-gray-700'}`}>{fmtHours(l.hoursPerDay)}h</td>
+                            <td className={`px-4 py-2.5 text-right tabular-nums ${pendingEx ? 'text-gray-400' : 'text-gray-700'}`}>{l.workingDaysInMonth ?? 0}</td>
+                            <td className={`px-4 py-2.5 text-right tabular-nums ${pendingEx ? 'text-gray-400 line-through' : 'text-gray-900 font-medium'}`}>{fmtHours(l.hours)}</td>
+                            <td className={`px-4 py-2.5 text-right tabular-nums ${pendingEx ? 'text-gray-400 line-through' : 'text-gray-700'}`}>{fmtPct(l.pct)}%</td>
                           </tr>
-                        ))}
+                          );
+                        })}
                       </tbody>
                       <tfoot className="bg-gray-50 border-t border-gray-200">
                         <tr>
@@ -323,6 +374,12 @@ function DrillDown({ target, onClose }) {
                       </tfoot>
                     </table>
                   </div>
+                )}
+                {hasException && (
+                  <p className="px-4 py-2 border-t border-gray-100 text-[11px] text-gray-500">
+                    <span className="font-medium text-violet-700">Exception</span>: approved to exceed daily capacity, counted in totals.{' '}
+                    <span className="font-medium">Pending — not counted</span>: awaiting approval, excluded from totals and capacity checks.
+                  </p>
                 )}
               </div>
             </>
@@ -661,6 +718,10 @@ export default function ResourceUtilisation() {
             <span className="inline-flex items-center gap-1.5">
               <span className="inline-block w-2 h-2 rounded-full bg-red-500" />
               Red dot: under 100% overall but over capacity on at least one day
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="inline-flex px-1.5 py-0.5 rounded-full bg-violet-50 text-violet-700 border border-violet-200 text-[10px] font-medium uppercase tracking-wide">exception</span>
+              Approved allocation exception (counted); pending exceptions are not counted
             </span>
           </div>
         </div>

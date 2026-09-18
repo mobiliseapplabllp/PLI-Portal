@@ -56,6 +56,7 @@ import {
   getClientEmployeesApi, createClientEmployeeApi, deleteClientEmployeeApi,
 } from '../../api/csat.api';
 import { getUsersApi } from '../../api/users.api';
+import { ROLE_OPTIONS as APP_ROLE_OPTIONS } from '../../utils/constants';
 
 const getId = (item) => item?._id || item?.id || '';
 
@@ -1116,6 +1117,16 @@ const ROLE_OPTIONS = [
   { value: 'director',       label: 'Director' },
 ];
 
+// Every role the app knows (constants list + md/director which it omits) — for exception approvers
+const EXCEPTION_APPROVER_ROLE_OPTIONS = [
+  ...APP_ROLE_OPTIONS,
+  { value: 'md',       label: 'MD' },
+  { value: 'director', label: 'Director' },
+].filter((o, i, arr) => arr.findIndex(x => x.value === o.value) === i);
+
+const EXCEPTION_CAP_MIN = 8;
+const EXCEPTION_CAP_MAX = 24;
+
 function SchedulerTab() {
   const [form,      setForm]      = useState(null);   // null = not loaded yet
   const [loading,   setLoading]   = useState(true);
@@ -1138,6 +1149,10 @@ function SchedulerTab() {
           : ['admin', 'manager', 'senior_manager'],
         helpdeskDailyReportEnabled: s.helpdeskDailyReportEnabled  ?? false,
         helpdeskDailyReportTime:    s.helpdeskDailyReportTime      ?? '09:00',
+        exceptionApproverRoles:     Array.isArray(s.exceptionApproverRoles) && s.exceptionApproverRoles.length
+          ? s.exceptionApproverRoles
+          : ['admin'],
+        exceptionMaxHoursPerDay:    Number(s.exceptionMaxHoursPerDay) > 0 ? Number(s.exceptionMaxHoursPerDay) : 12,
       });
     } catch {
       toast.error('Failed to load scheduler settings');
@@ -1151,9 +1166,14 @@ function SchedulerTab() {
   const setF = (k, v) => setForm(prev => ({ ...prev, [k]: v }));
 
   const handleSave = async () => {
+    if (!form.exceptionApproverRoles?.length) return toast.error('Pick at least one exception approver role');
+    const cap = Number(form.exceptionMaxHoursPerDay);
+    if (!Number.isFinite(cap) || cap < EXCEPTION_CAP_MIN || cap > EXCEPTION_CAP_MAX || (cap * 2) % 1 !== 0) {
+      return toast.error(`Exception cap must be between ${EXCEPTION_CAP_MIN} and ${EXCEPTION_CAP_MAX} hrs/day in 0.5 steps`);
+    }
     setSaving(true);
     try {
-      await api.put('/pm/settings', form);
+      await api.put('/pm/settings', { ...form, exceptionMaxHoursPerDay: cap });
       toast.success('Scheduler settings saved');
     } catch (e) {
       // Settings validation errors come through the global handler as { error: { message } }
@@ -1186,6 +1206,13 @@ function SchedulerTab() {
   const toggleRole = (role) => {
     const current = form.allowedCreatorRoles;
     setF('allowedCreatorRoles',
+      current.includes(role) ? current.filter(r => r !== role) : [...current, role],
+    );
+  };
+
+  const toggleApproverRole = (role) => {
+    const current = form.exceptionApproverRoles || [];
+    setF('exceptionApproverRoles',
       current.includes(role) ? current.filter(r => r !== role) : [...current, role],
     );
   };
@@ -1361,6 +1388,60 @@ function SchedulerTab() {
                 </button>
               );
             })}
+          </div>
+        </div>
+      </div>
+
+      {/* Allocation exceptions */}
+      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+        <div className="px-5 py-4 border-b border-gray-100 bg-gray-50">
+          <h3 className="text-sm font-semibold text-gray-800">Allocation Exceptions</h3>
+          <p className="text-xs text-gray-500 mt-0.5">
+            Who may approve a request to allocate someone beyond their daily capacity, and the hard ceiling for such requests.
+            A requester can never approve their own request.
+          </p>
+        </div>
+        <div className="px-5 py-4 space-y-5">
+          <div>
+            <p className="text-sm font-medium text-gray-700 mb-2">Exception approver roles</p>
+            <div className="flex flex-wrap gap-3">
+              {EXCEPTION_APPROVER_ROLE_OPTIONS.map(({ value, label }) => {
+                const active = (form.exceptionApproverRoles || []).includes(value);
+                return (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => toggleApproverRole(value)}
+                    className={`px-3 py-1.5 rounded-full text-sm font-medium border transition-colors ${
+                      active
+                        ? 'bg-emerald-100 text-emerald-700 border-emerald-300'
+                        : 'bg-gray-50 text-gray-500 border-gray-200 hover:border-gray-300'
+                    }`}
+                  >
+                    {active && <HiOutlineCheck className="inline w-3.5 h-3.5 mr-1" />}
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+            {!(form.exceptionApproverRoles || []).length && (
+              <p className="text-xs text-red-500 mt-2">At least one role is required</p>
+            )}
+          </div>
+          <div>
+            <label className="text-xs font-medium text-gray-600 block mb-1">Exception cap (hrs/day)</label>
+            <input
+              type="number"
+              min={EXCEPTION_CAP_MIN}
+              max={EXCEPTION_CAP_MAX}
+              step="0.5"
+              value={form.exceptionMaxHoursPerDay}
+              onChange={e => setF('exceptionMaxHoursPerDay', e.target.value === '' ? '' : Number(e.target.value))}
+              className={`${inputCls} w-40`}
+            />
+            <p className="text-xs text-gray-400 mt-1">
+              {EXCEPTION_CAP_MIN}–{EXCEPTION_CAP_MAX} in 0.5 steps. No exception may request more than this per day.
+            </p>
           </div>
         </div>
       </div>

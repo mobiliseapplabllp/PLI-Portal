@@ -7,6 +7,7 @@ import {
   HiOutlineViewGrid, HiOutlineViewList, HiOutlineEye, HiX,
 } from 'react-icons/hi';
 import api from '../../api/axios';
+import { projectProgress } from '../../utils/pmProgress';
 
 // New status names (from pm_statuses config table)
 const STATUS_COLORS = {
@@ -430,11 +431,9 @@ export default function ProjectList() {
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {filtered.map(p => {
             const ms      = p.milestones || [];
-            // Count from flat milestones — only top-level for progress
-            const topMs   = ms.filter(m => !m.parentMilestoneId);
-            const pct     = topMs.length > 0
-              ? Math.round((topMs.filter(m => m.status === 'completed').length / topMs.length) * 100)
-              : 0;
+            const topMs   = ms.filter(m => !m.parentMilestoneId);   // "N milestones" label
+            // Weighted by milestone weight; sub progress already rolled up server-side
+            const pct     = projectProgress(ms);
             const today   = new Date().toISOString().slice(0, 10);
             const delayed = ms.filter(m => m.plannedEndDate && m.plannedEndDate < today && m.status !== 'completed').length;
             const pid     = p._id || p.id;

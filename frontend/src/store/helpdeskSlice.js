@@ -6,7 +6,6 @@ import {
   updateTicketApi,
   deleteTicketApi,
   bulkAssignTicketsApi,
-  getGroupsApi,
   getHdProjectsApi,
   getSolutionsApi,
   getAnnouncementsApi,
@@ -20,7 +19,10 @@ import {
 
 /**
  * Fetch a paginated, filtered list of tickets.
- * @param {Object} params - Query parameters (page, pageSize, status, priority, …)
+ * @param {Object} params - Query parameters (page, pageSize, status, priority, …).
+ *   Callers spread `ticketsFilters` into params, so every key in that object —
+ *   including `teamManagerId` (and legacy `groupId`) — is forwarded verbatim as
+ *   a query-string param to GET /helpdesk/tickets.
  */
 export const fetchTickets = createAsyncThunk(
   'helpdesk/fetchTickets',
@@ -29,7 +31,7 @@ export const fetchTickets = createAsyncThunk(
       const res = await getTicketsApi(params);
       return res.data.data;
     } catch (err) {
-      return rejectWithValue(err.response?.data?.error?.message || 'Failed to load tickets');
+      return rejectWithValue(err.response?.data?.error?.message || err.response?.data?.message || 'Failed to load tickets');
     }
   },
 );
@@ -45,7 +47,7 @@ export const fetchTicketById = createAsyncThunk(
       const res = await getTicketByIdApi(id);
       return res.data.data;
     } catch (err) {
-      return rejectWithValue(err.response?.data?.error?.message || 'Failed to load ticket');
+      return rejectWithValue(err.response?.data?.error?.message || err.response?.data?.message || 'Failed to load ticket');
     }
   },
 );
@@ -61,7 +63,7 @@ export const createTicket = createAsyncThunk(
       const res = await createTicketApi(data);
       return res.data.data;
     } catch (err) {
-      return rejectWithValue(err.response?.data?.error?.message || 'Failed to create ticket');
+      return rejectWithValue(err.response?.data?.error?.message || err.response?.data?.message || 'Failed to create ticket');
     }
   },
 );
@@ -79,7 +81,7 @@ export const updateTicket = createAsyncThunk(
       const res = await updateTicketApi(id, data);
       return res.data.data;
     } catch (err) {
-      return rejectWithValue(err.response?.data?.error?.message || 'Failed to update ticket');
+      return rejectWithValue(err.response?.data?.error?.message || err.response?.data?.message || 'Failed to update ticket');
     }
   },
 );
@@ -95,14 +97,15 @@ export const deleteTicket = createAsyncThunk(
       await deleteTicketApi(id);
       return id;
     } catch (err) {
-      return rejectWithValue(err.response?.data?.error?.message || 'Failed to delete ticket');
+      return rejectWithValue(err.response?.data?.error?.message || err.response?.data?.message || 'Failed to delete ticket');
     }
   },
 );
 
 /**
- * Bulk-assign tickets to an agent / group.
- * @param {Object} data - { ticketIds, agentId, groupId, … }
+ * Bulk-assign tickets to an assignee within a team.
+ * @param {Object} data - { ticketIds, assigneeId, teamManagerId? }
+ *   Response data may include `skippedDetails: [{ ticketId, reason }]`.
  */
 export const bulkAssignTickets = createAsyncThunk(
   'helpdesk/bulkAssignTickets',
@@ -111,37 +114,23 @@ export const bulkAssignTickets = createAsyncThunk(
       const res = await bulkAssignTicketsApi(data);
       return res.data.data;
     } catch (err) {
-      return rejectWithValue(err.response?.data?.error?.message || 'Bulk assign failed');
+      return rejectWithValue(err.response?.data?.error?.message || err.response?.data?.message || 'Bulk assign failed');
     }
   },
 );
 
 /**
- * Fetch all helpdesk groups.
- */
-export const fetchGroups = createAsyncThunk(
-  'helpdesk/fetchGroups',
-  async (_, { rejectWithValue }) => {
-    try {
-      const res = await getGroupsApi();
-      return res.data.data;
-    } catch (err) {
-      return rejectWithValue(err.response?.data?.error?.message || 'Failed to load groups');
-    }
-  },
-);
-
-/**
- * Fetch projects available in the helpdesk module.
+ * Fetch legacy helpdesk projects (GET /helpdesk/projects). The former groupId
+ * filter was removed server-side, so no argument is forwarded.
  */
 export const fetchHdProjects = createAsyncThunk(
   'helpdesk/fetchHdProjects',
-  async (groupId, { rejectWithValue }) => {
+  async (_, { rejectWithValue }) => {
     try {
-      const res = await getHdProjectsApi(groupId);
+      const res = await getHdProjectsApi();
       return res.data.data;
     } catch (err) {
-      return rejectWithValue(err.response?.data?.error?.message || 'Failed to load projects');
+      return rejectWithValue(err.response?.data?.error?.message || err.response?.data?.message || 'Failed to load projects');
     }
   },
 );
@@ -157,7 +146,7 @@ export const fetchSolutions = createAsyncThunk(
       const res = await getSolutionsApi(params);
       return res.data.data;
     } catch (err) {
-      return rejectWithValue(err.response?.data?.error?.message || 'Failed to load solutions');
+      return rejectWithValue(err.response?.data?.error?.message || err.response?.data?.message || 'Failed to load solutions');
     }
   },
 );
@@ -172,7 +161,7 @@ export const fetchAnnouncements = createAsyncThunk(
       const res = await getAnnouncementsApi();
       return res.data.data;
     } catch (err) {
-      return rejectWithValue(err.response?.data?.error?.message || 'Failed to load announcements');
+      return rejectWithValue(err.response?.data?.error?.message || err.response?.data?.message || 'Failed to load announcements');
     }
   },
 );
@@ -190,7 +179,7 @@ export const fetchHdOptions = createAsyncThunk(
       const res = await getAllHdOptionsApi();
       return res.data.data;
     } catch (err) {
-      return rejectWithValue(err.response?.data?.error?.message || 'Failed to load helpdesk options');
+      return rejectWithValue(err.response?.data?.error?.message || err.response?.data?.message || 'Failed to load helpdesk options');
     }
   },
 );
@@ -205,7 +194,7 @@ export const fetchDashboardStats = createAsyncThunk(
       const res = await getDashboardStatsApi();
       return res.data.data;
     } catch (err) {
-      return rejectWithValue(err.response?.data?.error?.message || 'Failed to load dashboard stats');
+      return rejectWithValue(err.response?.data?.error?.message || err.response?.data?.message || 'Failed to load dashboard stats');
     }
   },
 );
@@ -225,7 +214,8 @@ const initialState = {
     status: '',
     priority: '',
     category: '',
-    groupId: '',
+    teamManagerId: '',   // team = reporting manager (users.id); forwarded as ?teamManagerId=
+    groupId: '',         // legacy helpdesk group filter, kept for compatibility
     projectId: '',
     search: '',
     dateFrom: '',
@@ -238,10 +228,6 @@ const initialState = {
   currentTicket: null,
   currentTicketLoading: false,
   currentTicketError: null,
-
-  // Groups
-  groups: [],
-  groupsLoading: false,
 
   // Projects
   hdProjects: [],
@@ -424,20 +410,6 @@ const helpdeskSlice = createSlice({
       })
 
       // ------------------------------------------------------------------
-      // fetchGroups
-      // ------------------------------------------------------------------
-      .addCase(fetchGroups.pending, (state) => {
-        state.groupsLoading = true;
-      })
-      .addCase(fetchGroups.fulfilled, (state, action) => {
-        state.groupsLoading = false;
-        state.groups = action.payload || [];
-      })
-      .addCase(fetchGroups.rejected, (state) => {
-        state.groupsLoading = false;
-      })
-
-      // ------------------------------------------------------------------
       // fetchHdProjects
       // ------------------------------------------------------------------
       .addCase(fetchHdProjects.pending, (state) => {
@@ -533,7 +505,6 @@ export const selectTicketsFilters     = (state) => state.helpdesk.ticketsFilters
 export const selectTicketsLoading     = (state) => state.helpdesk.ticketsLoading;
 export const selectCurrentTicket      = (state) => state.helpdesk.currentTicket;
 export const selectCurrentTicketLoading = (state) => state.helpdesk.currentTicketLoading;
-export const selectGroups             = (state) => state.helpdesk.groups;
 export const selectHdProjects         = (state) => state.helpdesk.hdProjects;
 export const selectSolutions          = (state) => state.helpdesk.solutions;
 export const selectAnnouncements      = (state) => state.helpdesk.announcements;
