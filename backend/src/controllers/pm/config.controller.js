@@ -33,10 +33,37 @@ const updateProjectType = async (req, res, next) => {
     const type = await PmProjectType.findByPk(req.params.id);
     if (!type) return res.status(404).json({ message: 'Project type not found' });
     const { name, isActive, sortOrder } = req.body;
-    if (name !== undefined) type.name = name;
+    const oldName = type.name;
+    const renaming = name !== undefined && String(name) !== String(oldName);
+    if (renaming) {
+      const clash = await PmProjectType.findOne({ where: { name } });
+      if (clash && String(clash.id) !== String(type.id)) {
+        return res.status(409).json({ message: `Project type "${name}" already exists` });
+      }
+      type.name = name;
+    }
     if (isActive !== undefined) type.isActive = isActive;
     if (sortOrder !== undefined) type.sortOrder = sortOrder;
-    await type.save();
+
+    // A rename must carry the NAME copy on every row that still stores it (the
+    // templates' and projects' projectType strings) — atomically with the rename,
+    // keyed by the FK so it can never miss a row or hit the wrong type. Before
+    // this, renaming a type silently orphaned all of its milestone templates.
+    const sequelize = require('../../config/database');
+    await sequelize.transaction(async (t) => {
+      await type.save({ transaction: t });
+      if (renaming) {
+        await PmMilestoneTemplate.update(
+          { projectType: name },
+          { where: { projectTypeId: type.id }, transaction: t },
+        );
+        const Project = require('../../models/pm/Project');
+        await Project.update(
+          { projectType: name },
+          { where: { projectType: oldName }, transaction: t },
+        );
+      }
+    });
     sendSuccess(res, type, 'Project type updated');
   } catch (e) { next(e); }
 };
@@ -51,6 +78,14 @@ const deleteProjectType = async (req, res, next) => {
     if (count > 0) {
       return res.status(409).json({
         message: `Cannot delete: ${count} project(s) use this type. Disable it instead.`,
+      });
+    }
+    // The FK (migration 052) is ON DELETE RESTRICT — say so up front rather than
+    // letting the database refuse with a constraint error.
+    const tplCount = await PmMilestoneTemplate.count({ where: { projectTypeId: type.id } });
+    if (tplCount > 0) {
+      return res.status(409).json({
+        message: `Cannot delete: ${tplCount} milestone template(s) belong to this type. Delete them (or copy them to another type) first, or disable the type instead.`,
       });
     }
     await type.destroy();
@@ -139,17 +174,22 @@ const deleteStatus = async (req, res, next) => {
 const getMilestoneTemplates = async (req, res, next) => {
   try {
     const where = {};
-    if (req.query.projectType) where.projectType = req.query.projectType;
+    // Filter by the FK, not the display-copy name string — a type's name can be
+    // renamed at any time (migration 052), so the id is the only stable key.
+    if (req.query.projectTypeId) where.projectTypeId = req.query.projectTypeId;
+    else if (req.query.projectType) where.projectType = req.query.projectType;
     if (req.query.activeOnly !== 'false') where.isActive = true;
     const templates = await PmMilestoneTemplate.findAll({
       where,
       order: [['projectType', 'ASC'], ['sortOrder', 'ASC']],
     });
-    // Group by projectType for convenience
+    // Group by projectTypeId for convenience — grouping by name would merge two
+    // types that happen to share a display string.
     const grouped = {};
     templates.forEach(t => {
-      if (!grouped[t.projectType]) grouped[t.projectType] = [];
-      grouped[t.projectType].push(t);
+      const key = t.projectTypeId ?? t.projectType;
+      if (!grouped[key]) grouped[key] = [];
+      grouped[key].push(t);
     });
     sendSuccess(res, { templates, grouped });
   } catch (e) { next(e); }
@@ -162,9 +202,13 @@ const createMilestoneTemplate = async (req, res, next) => {
     if (Number(minPct) < 0 || Number(maxPct) > 100 || Number(minPct) > Number(maxPct)) {
       return res.status(400).json({ message: 'Invalid percentage range' });
     }
+    // Resolve the real reference up front — a template must belong to a type that
+    // exists, and it is the id (not the name) the rename cascade is keyed by.
+    const typeRow = await PmProjectType.findOne({ where: { name: projectType } });
+    if (!typeRow) return res.status(400).json({ message: `Unknown project type "${projectType}"` });
     const maxOrder = await PmMilestoneTemplate.max('sortOrder', { where: { projectType } }) || 0;
     const tmpl = await PmMilestoneTemplate.create({
-      projectType, name,
+      projectType, projectTypeId: typeRow.id, name,
       minPct: Number(minPct) || 0,
       maxPct: Number(maxPct) || 100,
       sortOrder: sortOrder ?? maxOrder + 1,
@@ -204,8 +248,12 @@ const deleteMilestoneTemplate = async (req, res, next) => {
 const validateTemplateRanges = async (req, res, next) => {
   try {
     const { projectType } = req.params;
+    // Resolve the name to its current type row and filter by id — filtering by the
+    // name string would pull in another type's rows if a name is ever reused.
+    const typeRow = await PmProjectType.findOne({ where: { name: projectType } });
+    const where = typeRow ? { projectTypeId: typeRow.id, isActive: true } : { projectType, isActive: true };
     const templates = await PmMilestoneTemplate.findAll({
-      where: { projectType, isActive: true },
+      where,
       order: [['sortOrder', 'ASC']],
     });
     const sumMin = templates.reduce((s, t) => s + Number(t.minPct), 0);
@@ -325,7 +373,45 @@ const deleteMemberRole = async (req, res, next) => {
   } catch (e) { next(e); }
 };
 
+/**
+ * POST /pm/config/milestone-templates/copy   { fromType, toType }
+ * Make toType's milestone template an exact copy of fromType's (names, order,
+ * min/max %). toType's current rows are REPLACED, in one transaction. Only
+ * projects created afterwards use it — existing projects are untouched, because
+ * createDefaultMilestones copies template rows at project creation and keeps no link.
+ */
+const copyMilestoneTemplates = async (req, res, next) => {
+  try {
+    const fromType = String(req.body?.fromType || '').trim();
+    const toType   = String(req.body?.toType   || '').trim();
+    const bad = (message) => res.status(400).json({ success: false, message, error: { message } });
+    if (!fromType || !toType) return bad('Choose both a source and a target project type');
+    if (fromType === toType)  return bad('Source and target project type must be different');
+
+    const source = await PmMilestoneTemplate.findAll({
+      where: { projectType: fromType, isActive: true }, order: [['sortOrder', 'ASC'], ['id', 'ASC']], raw: true,
+    });
+    if (source.length === 0) return bad(`"${fromType}" has no milestone template to copy`);
+
+    const toTypeRow = await PmProjectType.findOne({ where: { name: toType } });
+    if (!toTypeRow) return bad(`Unknown project type "${toType}"`);
+
+    const sequelize = require('../../config/database');   // the instance — never destructure
+    let replaced = 0;
+    await sequelize.transaction(async (t) => {
+      replaced = await PmMilestoneTemplate.destroy({ where: { projectType: toType }, transaction: t });
+      await PmMilestoneTemplate.bulkCreate(source.map((s, i) => ({
+        projectType: toType, projectTypeId: toTypeRow.id, name: s.name, minPct: s.minPct, maxPct: s.maxPct,
+        sortOrder: s.sortOrder ?? i + 1, isActive: true,
+      })), { transaction: t });
+    });
+    sendSuccess(res, { fromType, toType, copied: source.length, replaced },
+      `Copied ${source.length} milestone(s) from ${fromType} to ${toType}`);
+  } catch (e) { next(e); }
+};
+
 module.exports = {
+  copyMilestoneTemplates,
   getProjectTypes, createProjectType, updateProjectType, deleteProjectType,
   getStatuses, getAllStatuses, createStatus, updateStatus, deleteStatus,
   getMilestoneTemplates, createMilestoneTemplate, updateMilestoneTemplate, deleteMilestoneTemplate,

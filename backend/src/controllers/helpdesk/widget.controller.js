@@ -11,8 +11,9 @@ const { HdProject, HdTicket, HdTicketHistory } = require('../../models/helpdesk'
 const { sendSuccess, sendError } = require('../../utils/response');
 const { NotFoundError }          = require('../../utils/errors');
 const { sendEmail }              = require('../../utils/emailService');
+const statusResolver             = require('../../services/helpdesk/statusResolver.service');
 
-const { TICKET_STATUS, TICKET_PRIORITY } = HdTicket;
+const { TICKET_PRIORITY } = HdTicket;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -91,6 +92,7 @@ const submitWidgetTicket = async (req, res, next) => {
       return sendError(res, 'This project is not accepting submissions', 403);
     }
 
+    const openStatus = await statusResolver.getBuiltInStatus('open');
     const t = await sequelize.transaction();
     try {
       const reqNumber = await generateReqNumber(t);
@@ -101,7 +103,8 @@ const submitWidgetTicket = async (req, res, next) => {
           description:  description || null,
           category:     category.trim(),
           priority:     TICKET_PRIORITY.MEDIUM,
-          status:       TICKET_STATUS.OPEN,
+          status:       openStatus.name,
+          statusId:     openStatus.id,
           projectId:    project.id,                       // token row (widget lookups key on it)
           pmProjectId:  project.pmProjectId || null,      // the common PM project, for lists/reports
           widgetSource: true,
@@ -117,7 +120,7 @@ const submitWidgetTicket = async (req, res, next) => {
           ticketId:  ticket.id,
           field:     'status',
           oldValue:  null,
-          newValue:  TICKET_STATUS.OPEN,
+          newValue:  openStatus.name,
           changedBy: null,
         },
         { transaction: t },
@@ -231,7 +234,10 @@ const reopenWidgetTicket = async (req, res, next) => {
 
     if (!ticket) return sendError(res, 'Ticket not found or access denied', 404);
 
-    ticket.status      = TICKET_STATUS.OPEN;
+    const priorStatus = ticket.status;
+    const openStatus  = await statusResolver.getBuiltInStatus('open');
+    ticket.status      = openStatus.name;
+    ticket.statusId     = openStatus.id;
     ticket.reopenCount += 1;
     ticket.closedAt    = null;
     await ticket.save();
@@ -239,8 +245,8 @@ const reopenWidgetTicket = async (req, res, next) => {
     await HdTicketHistory.create({
       ticketId:  ticket.id,
       field:     'status',
-      oldValue:  TICKET_STATUS.CLOSED,
-      newValue:  TICKET_STATUS.OPEN,
+      oldValue:  priorStatus,
+      newValue:  openStatus.name,
       changedBy: null,
     });
 

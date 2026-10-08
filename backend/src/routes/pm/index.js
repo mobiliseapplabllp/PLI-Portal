@@ -43,6 +43,17 @@ router.delete('/allocation-exceptions/:approvalId', authorize(...ALL), projectCt
 // ── RAID summary (must be before /projects/:id catch-all) ────────────────────
 router.get('/projects/raid-summary', authorize(...MANAGERS), raidCtrl.raidSummary);
 
+// ── Bulk project import (Client + Project Name spreadsheet, Operations-only) ──
+// Also registered before router.use('/projects', …) like raid-summary above —
+// a literal path must not fall through to project.routes.js's /:id catch-all.
+const bulkImportCtrl = require('../../controllers/pm/bulkImport.controller');
+const uploadEarly    = require('../../middleware/upload');
+router.get('/projects/bulk-import/template',       authorize(...MANAGERS), bulkImportCtrl.downloadTemplate);
+router.post('/projects/bulk-import/validate',      authorize(...MANAGERS), uploadEarly.single('file'), bulkImportCtrl.validateImport);
+router.post('/projects/bulk-import/confirm',       authorize(...MANAGERS), bulkImportCtrl.confirmImport);
+router.get('/projects/bulk-import/logs',           authorize(...MANAGERS), bulkImportCtrl.listImportLogs);
+router.post('/projects/bulk-import/:batchId/undo', authorize(...MANAGERS), bulkImportCtrl.undoImport);
+
 // ── Core project routes ───────────────────────────────────────────────────────
 router.use('/projects', projectRoutes);
 router.use('/projects/:id/milestones', milestoneRoutes);

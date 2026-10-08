@@ -1,0 +1,165 @@
+/**
+ * BulkImportProjectsModal — Excel import for Operations projects (Client + Project Name).
+ * 1. Download template  2. Choose file → server validates (writes nothing)
+ * 3. Preview: valid rows green (create/reuse client org shown), errors red
+ * 4. Import valid rows — creates a Client Org per new client (find-or-create) and
+ *    a Billable, Operations-only Project per row, tagged with a shared import batch
+ *    id so the whole run can be undone later from Import History.
+ * The server re-validates on import, so the preview is advice, not the guard.
+ */
+import { useState } from 'react';
+import toast from 'react-hot-toast';
+import { HiOutlineX, HiOutlineDownload, HiOutlineUpload } from 'react-icons/hi';
+import {
+  downloadBulkImportTemplateApi, validateBulkImportApi, confirmBulkImportApi,
+} from '../../api/pm/bulkImport.api';
+
+const errMsg = (err, fallback) =>
+  err?.response?.data?.message || err?.response?.data?.error?.message || fallback;
+
+export default function BulkImportProjectsModal({ open, onClose, onImported }) {
+  const [file, setFile]           = useState(null);
+  const [preview, setPreview]     = useState(null);   // { rows, totalRows, validCount, errorCount, fileName }
+  const [checking, setChecking]   = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [result, setResult]       = useState(null);   // last import's summary
+
+  if (!open) return null;
+
+  const reset = () => { setFile(null); setPreview(null); setResult(null); };
+  const close = () => { reset(); onClose(); };
+
+  const downloadTemplate = async () => {
+    try { await downloadBulkImportTemplateApi(); }
+    catch (err) { toast.error(errMsg(err, 'Could not download the template')); }
+  };
+
+  const check = async (f) => {
+    setFile(f); setPreview(null); setResult(null);
+    if (!f) return;
+    if (!/\.xlsx$/i.test(f.name)) { toast.error('Choose an Excel file (.xlsx)'); return; }
+    setChecking(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', f);
+      const res = await validateBulkImportApi(fd);
+      setPreview(res.data?.data ?? null);
+    } catch (err) {
+      toast.error(errMsg(err, 'Could not read the file'));
+      setFile(null);
+    } finally { setChecking(false); }
+  };
+
+  const doImport = async () => {
+    if (!preview?.validCount) return;
+    setImporting(true);
+    try {
+      const res = await confirmBulkImportApi({ rows: preview.rows, fileName: preview.fileName });
+      const r = res.data?.data || {};
+      setResult(r);
+      toast.success(
+        `Created ${r.projectsCreated ?? 0} project(s), ${r.orgsCreated ?? 0} new org(s) ` +
+        `(${r.orgsReused ?? 0} reused)${r.projectsSkipped ? ` · skipped ${r.projectsSkipped}` : ''}`
+      );
+      onImported?.();
+    } catch (err) { toast.error(errMsg(err, 'Import failed — nothing was saved')); }
+    finally { setImporting(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl max-h-[85vh] flex flex-col">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+          <h2 className="font-semibold text-gray-900">Import Projects (Operations)</h2>
+          <button onClick={close} className="p-1 rounded text-gray-400 hover:text-gray-700" aria-label="Close">
+            <HiOutlineX className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="px-5 py-4 space-y-4 overflow-auto">
+          <div className="flex flex-wrap items-center gap-3">
+            <button onClick={downloadTemplate} className="inline-flex items-center gap-1.5 px-3 py-2 text-sm border border-gray-200 rounded-lg hover:bg-gray-50">
+              <HiOutlineDownload className="w-4 h-4" /> Download template
+            </button>
+            <label className="inline-flex items-center gap-1.5 px-3 py-2 text-sm border border-emerald-300 text-emerald-700 rounded-lg hover:bg-emerald-50 cursor-pointer">
+              <HiOutlineUpload className="w-4 h-4" /> {file ? 'Choose another file' : 'Choose Excel file'}
+              <input type="file" accept=".xlsx" className="hidden" onChange={e => { check(e.target.files?.[0] || null); e.target.value = ''; }} />
+            </label>
+            {file && <span className="text-xs text-gray-500 truncate max-w-[16rem]">{file.name}</span>}
+          </div>
+          <p className="text-xs text-gray-500">
+            Columns: <strong>Client</strong> (required), <strong>Project Name</strong> (optional — leave blank to create a project named after the client alone, e.g. "Sodexo HITES"; an S.No column is fine and ignored).
+            A client not seen before is created automatically; repeated clients reuse the same organisation.
+            Every project is created as Operations-only, Billable, with no milestones.
+          </p>
+
+          {checking && <p className="text-sm text-gray-500">Checking the file…</p>}
+
+          {preview && !result && (
+            <>
+              <div className="flex flex-wrap gap-2 text-xs">
+                <span className="px-2 py-1 rounded-full bg-gray-100 text-gray-700">{preview.totalRows} rows</span>
+                <span className="px-2 py-1 rounded-full bg-emerald-100 text-emerald-700">{preview.validCount} ready to import</span>
+                {preview.errorCount > 0 && <span className="px-2 py-1 rounded-full bg-red-100 text-red-700">{preview.errorCount} with errors — will be skipped</span>}
+              </div>
+              <div className="overflow-x-auto border border-gray-100 rounded-lg">
+                <table className="w-full text-xs">
+                  <thead className="bg-gray-50 text-gray-500 uppercase tracking-wider">
+                    <tr>
+                      <th className="px-3 py-2 text-left">Row</th>
+                      <th className="px-3 py-2 text-left">Client</th>
+                      <th className="px-3 py-2 text-left">Will be saved as</th>
+                      <th className="px-3 py-2 text-left">Result</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-50">
+                    {preview.rows.map(r => (
+                      <tr key={r.rowNumber} className={r.valid ? '' : 'bg-red-50/60'}>
+                        <td className="px-3 py-2 text-gray-400">{r.rowNumber}</td>
+                        <td className="px-3 py-2 font-medium text-gray-800">
+                          {r.client || '—'}
+                          {r.orgAction === 'create' && <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700">new org</span>}
+                          {r.orgAction === 'reuse' && <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-600">existing</span>}
+                        </td>
+                        <td className="px-3 py-2 text-gray-600">{r.fullName || r.projectName || '—'}</td>
+                        <td className="px-3 py-2">
+                          {r.valid
+                            ? <span className="text-emerald-700 font-medium">Ready</span>
+                            : <span className="text-red-600">{r.errors.join('; ')}</span>}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+
+          {result && (
+            <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800 space-y-1">
+              <p className="font-medium">Import complete.</p>
+              <p>{result.projectsCreated} project(s) created · {result.orgsCreated} new client org(s) · {result.orgsReused} reused</p>
+              {result.projectsSkipped > 0 && <p>{result.projectsSkipped} row(s) skipped — see errors above.</p>}
+              <p className="text-xs text-emerald-700/80">Batch ID: {result.batchId} — undo this import anytime from Import History.</p>
+            </div>
+          )}
+        </div>
+
+        <div className="flex justify-end gap-2 px-5 py-4 border-t border-gray-100">
+          <button onClick={close} className="px-4 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50">
+            {result ? 'Close' : 'Cancel'}
+          </button>
+          {!result && (
+            <button
+              onClick={doImport}
+              disabled={!preview?.validCount || importing}
+              className="px-4 py-2 text-sm font-medium bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50"
+            >
+              {importing ? 'Importing…' : `Import ${preview?.validCount ?? 0} project${preview?.validCount === 1 ? '' : 's'}`}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}

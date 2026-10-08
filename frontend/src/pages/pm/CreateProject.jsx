@@ -10,6 +10,7 @@ import { HiOutlineArrowLeft, HiOutlinePlus, HiOutlineX, HiOutlineUserGroup, HiOu
 import ResourceAvailabilityCard from '../../components/pm/ResourceAvailabilityCard';
 import AllocationTypeInput, { formatAllocation } from '../../components/pm/AllocationTypeInput';
 import ProjectUsageChecks, { useProjectNameCheck } from '../../components/pm/ProjectUsageChecks';
+import SearchSelect from '../../components/common/SearchSelect';
 
 // ── Role badge colour — default for unlisted roles ────────────────────────────
 const DEFAULT_BADGE = 'bg-gray-50 text-gray-600 border-gray-200';
@@ -118,9 +119,13 @@ export default function CreateProject() {
   const set = (field, val) => setForm(f => ({ ...f, [field]: val }));
   const selectedOrg = clientOrgs.find(o => (o._id || o.id) === form.clientOrgId) || null;
   const setDraft    = (f, v) => setMemberDraft(p => ({ ...p, [f]: v }));
-  // Duplicate-name check against the full name the server will receive
+  // Duplicate-name check against the full name the server will receive — also
+  // scoped by clientName, since a bulk-imported project stores that field, and
+  // without sending it here the check can't tell "same client" from "no client".
   const nameCheck = useProjectNameCheck(
-    selectedOrg && form.name.trim() ? `${selectedOrg.name} - ${form.name.trim()}` : form.name
+    selectedOrg && form.name.trim() ? `${selectedOrg.name} - ${form.name.trim()}` : form.name,
+    undefined,
+    selectedOrg?.name
   );
 
   const handleAddDraftMember = () => {
@@ -152,6 +157,7 @@ export default function CreateProject() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!form.name.trim())  return toast.error('Project name is required');
+    if (!form.clientOrgId)  return toast.error('Select a client organisation');
     if (!form.projectType)  return toast.error('Select a project type');
     if (nameCheck.taken)    return toast.error(nameCheck.message || 'A project with this name already exists');
     setSaving(true);
@@ -242,17 +248,16 @@ export default function CreateProject() {
             <div className="grid grid-cols-2 gap-5">
               {/* Client Org */}
               <div>
-                <Lbl>Client Organisation</Lbl>
-                <select
+                <Lbl required>Client Organisation</Lbl>
+                <SearchSelect
+                  options={clientOrgs.map(org => ({ value: org._id || org.id, label: org.name }))}
                   value={form.clientOrgId || ''}
-                  onChange={e => set('clientOrgId', e.target.value || null)}
-                  className={inp}
-                >
-                  <option value="">— None —</option>
-                  {clientOrgs.map(org => (
-                    <option key={org._id || org.id} value={org._id || org.id}>{org.name}</option>
-                  ))}
-                </select>
+                  onChange={v => set('clientOrgId', v || null)}
+                  placeholder="Select a client…"
+                  allowClear={false}
+                  size="md"
+                  className="h-9"
+                />
               </div>
 
               {/* Project Name */}

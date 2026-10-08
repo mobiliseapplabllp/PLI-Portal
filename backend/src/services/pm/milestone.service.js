@@ -124,6 +124,18 @@ async function rollupParentProgress(parentMilestoneId, transaction) {
   return parent;
 }
 
+/**
+ * Forms send "Unassigned" as an empty string. accountableUserId is a foreign key
+ * to users.id, so '' must become NULL or the save fails with
+ * "Invalid reference (foreign key constraint)".
+ */
+function cleanRefs(data) {
+  if (data && data.accountableUserId !== undefined && String(data.accountableUserId ?? '').trim() === '') {
+    data.accountableUserId = null;
+  }
+  return data;
+}
+
 function canManage(user, project) {
   if (MANAGERS.includes(user.role)) return true;
   if (String(project.managerId) === String(user._id ?? user.id)) return true;
@@ -235,6 +247,7 @@ const createMilestone = async (projectId, data, user) => {
   }
 
   const maxOrder = await Milestone.max('order', { where: { projectId, parentMilestoneId: null } }) || 0;
+  cleanRefs(data);
   return Milestone.create({
     ...data,
     projectId,
@@ -249,10 +262,25 @@ const createSubMilestone = async (projectId, parentMilestoneId, data, user) => {
   await assertProjectVisible(projectId, user);
   const project = await Project.findByPk(projectId);
   if (!project) throw new NotFoundError('Project');
-  if (!canManage(user, project)) throw new ForbiddenError('Only project manager or admin can add sub-milestones');
+  // Adding a sub-milestone is normal day-to-day work breakdown, not a
+  // structural project decision — any visible team member may do it
+  // (assertProjectVisible above already confirmed real membership/ownership;
+  // only the top-level phases themselves stay manager/admin-only).
 
   const parent = await Milestone.findOne({ where: { id: parentMilestoneId, projectId } });
   if (!parent) throw new NotFoundError('Parent milestone');
+
+  // A non-manager adds a sub-milestone for their OWN work — they may only make
+  // themselves accountable for it, never hand it to someone else (that's a
+  // manager decision). Blank defaults to self rather than "Unassigned".
+  const uid = String(user._id ?? user.id);
+  let accountableUserId = cleanRefs({ accountableUserId: data.accountableUserId }).accountableUserId;
+  if (!canManage(user, project)) {
+    if (accountableUserId && String(accountableUserId) !== uid) {
+      throw new ForbiddenError('You can only add a sub-milestone accountable to yourself');
+    }
+    accountableUserId = uid;
+  }
 
   // Sub weight is never taken from the request — it is an equal split of the
   // parent, recalculated for every sibling. The parent's progress follows.
@@ -262,7 +290,7 @@ const createSubMilestone = async (projectId, parentMilestoneId, data, user) => {
     const sub = await Milestone.create({
       name:              data.name,
       description:       data.description,
-      accountableUserId: data.accountableUserId,
+      accountableUserId,
       plannedStartDate:  data.plannedStartDate,
       plannedEndDate:    data.plannedEndDate,
       type:              data.type,
@@ -295,18 +323,35 @@ const updateMilestone = async (projectId, milestoneId, data, user) => {
   const milestone = await Milestone.findOne({ where: { id: milestoneId, projectId } });
   if (!milestone) throw new NotFoundError('Milestone');
 
+  const isSub = !!milestone.parentMilestoneId;
   const isAccountable = String(milestone.accountableUserId) === String(user._id ?? user.id);
   const isStatusOrProgressOnly = Object.keys(data).every(k =>
     ['status', 'completionPercentage'].includes(k)
   );
 
+  // A non-manager may change ONLY the status/progress of a SUB-milestone they
+  // are personally accountable for — never a parent/phase (that stays a
+  // manager/admin decision regardless of who it's assigned to).
   if (!canManage(user, project)) {
-    if (!isAccountable || !isStatusOrProgressOnly) {
+    if (!isSub || !isAccountable || !isStatusOrProgressOnly) {
       throw new ForbiddenError('Not authorized to update this milestone');
     }
   }
 
-  const isSub = !!milestone.parentMilestoneId;
+  cleanRefs(data);
+
+  // A top-level milestone (phase) is decided by the admin — from the template or
+  // added by an admin. Only an admin may rename it or change its description.
+  // Sending the SAME value back (an edit form echoing it) is allowed.
+  if (!isSub && user.role !== 'admin') {
+    const changes = (field) => data[field] !== undefined &&
+      String(data[field] ?? '').trim() !== String(milestone[field] ?? '').trim();
+    if (changes('name') || changes('description')) {
+      throw new ForbiddenError("Only an admin can change a phase's name or description");
+    }
+    delete data.name;
+    delete data.description;
+  }
 
   // Sub weight is an automatic equal split — it cannot be typed. A value equal to
   // the stored one is ignored so an edit form that echoes it back still saves.
@@ -401,10 +446,15 @@ const deleteMilestone = async (projectId, milestoneId, user) => {
   await assertProjectVisible(projectId, user);
   const project = await Project.findByPk(projectId);
   if (!project) throw new NotFoundError('Project');
-  if (!canManage(user, project)) throw new ForbiddenError('Not authorized');
 
   const milestone = await Milestone.findOne({ where: { id: milestoneId, projectId } });
   if (!milestone) throw new NotFoundError('Milestone');
+
+  // A top-level phase is structural — only a manager/admin removes one. A
+  // sub-milestone is regular work breakdown — any visible team member may
+  // remove one (assertProjectVisible above already confirmed real access).
+  const isSub = !!milestone.parentMilestoneId;
+  if (!isSub && !canManage(user, project)) throw new ForbiddenError('Not authorized');
 
   const parentId = milestone.parentMilestoneId;
   const t = await sequelize.transaction();
@@ -472,10 +522,17 @@ async function updateMilestonePlannedDates(projectId, milestoneId, data, user) {
   await assertProjectVisible(projectId, user);
   const project = await Project.findByPk(projectId);
   if (!project) throw new NotFoundError('Project');
-  if (!canManage(user, project)) throw new ForbiddenError('Not authorized to update milestone dates');
 
   const milestone = await Milestone.findOne({ where: { id: milestoneId, projectId } });
   if (!milestone) throw new NotFoundError('Milestone not found');
+
+  // Same rule as status/progress: a non-manager may set planned dates ONLY on a
+  // SUB-milestone they are personally accountable for — never a parent/phase.
+  const isSub = !!milestone.parentMilestoneId;
+  const isAccountable = String(milestone.accountableUserId) === String(user._id ?? user.id);
+  if (!canManage(user, project) && !(isSub && isAccountable)) {
+    throw new ForbiddenError('Not authorized to update milestone dates');
+  }
 
   const { plannedStartDate, plannedEndDate, reason } = data;
 
@@ -497,6 +554,13 @@ async function updateMilestonePlannedDates(projectId, milestoneId, data, user) {
   const filtered = Object.fromEntries(Object.entries(dateFields).filter(([, v]) => v !== undefined && v !== null));
 
   if (Object.keys(filtered).length === 0) return milestone.toJSON();
+
+  // The resulting pair must be in order (compares YYYY-MM-DD strings, no timezone)
+  const effStart = String(filtered.plannedStartDate ?? milestone.plannedStartDate ?? '').slice(0, 10);
+  const effEnd   = String(filtered.plannedEndDate   ?? milestone.plannedEndDate   ?? '').slice(0, 10);
+  if (effStart && effEnd && effEnd < effStart) {
+    throw new ValidationError('Planned end date cannot be before the planned start date');
+  }
 
   // Log changes for each date field that changed
   for (const [field, newVal] of Object.entries(filtered)) {
@@ -531,10 +595,17 @@ async function updateMilestoneActualDates(projectId, milestoneId, data, user) {
   await assertProjectVisible(projectId, user);
   const project = await Project.findByPk(projectId);
   if (!project) throw new NotFoundError('Project');
-  if (!canManage(user, project)) throw new ForbiddenError('Not authorized to update milestone dates');
 
   const milestone = await Milestone.findOne({ where: { id: milestoneId, projectId } });
   if (!milestone) throw new NotFoundError('Milestone not found');
+
+  // Same rule as status/progress: a non-manager may log actual dates ONLY on a
+  // SUB-milestone they are personally accountable for — never a parent/phase.
+  const isSub = !!milestone.parentMilestoneId;
+  const isAccountable = String(milestone.accountableUserId) === String(user._id ?? user.id);
+  if (!canManage(user, project) && !(isSub && isAccountable)) {
+    throw new ForbiddenError('Not authorized to update milestone dates');
+  }
 
   const { actualStartDate, actualEndDate, reason } = data;
 

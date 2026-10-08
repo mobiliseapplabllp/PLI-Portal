@@ -10,6 +10,8 @@ import {
   getClientOrgsApi, createClientOrgApi, updateClientOrgApi, deleteClientOrgApi,
 } from '../../api/csat.api';
 import { getUsersApi } from '../../api/users.api';
+import ClientOrgImportModal from '../../components/csat/ClientOrgImportModal';
+import BulkImportProjectsModal from '../../components/pm/BulkImportProjectsModal';
 import Modal from '../../components/common/Modal';
 import ConfirmDialog from '../../components/common/ConfirmDialog';
 import Pagination from '../../components/common/Pagination';
@@ -45,6 +47,8 @@ export default function ClientOrgsPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
+  const [showImport, setShowImport] = useState(false);
+  const [showProjectImport, setShowProjectImport] = useState(false);
 
   const [showForm, setShowForm] = useState(false);
   const [editOrg, setEditOrg] = useState(null);
@@ -134,15 +138,42 @@ export default function ClientOrgsPage() {
           <p className="text-sm text-gray-500 mt-1">Manage client companies and their survey contacts</p>
         </div>
         {isAdmin && (
-          <button
-            onClick={openCreate}
-            className="flex items-center gap-2 px-4 py-2.5 bg-emerald-600 text-white text-sm font-semibold rounded-xl hover:bg-emerald-700 transition-colors shadow-sm shadow-emerald-100 flex-shrink-0"
-          >
-            <HiOutlinePlus className="w-4 h-4" />
-            Add Organisation
-          </button>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <button
+              onClick={() => setShowImport(true)}
+              className="flex items-center gap-2 px-4 py-2.5 border border-emerald-300 text-emerald-700 text-sm font-semibold rounded-xl hover:bg-emerald-50 transition-colors"
+            >
+              Import Excel
+            </button>
+            <button
+              onClick={() => setShowProjectImport(true)}
+              title="Bulk-import Operations projects (Client + Project Name)"
+              className="flex items-center gap-2 px-4 py-2.5 border border-gray-200 text-gray-700 text-sm font-semibold rounded-xl hover:bg-gray-50 transition-colors"
+            >
+              Import Projects
+            </button>
+            <button
+              onClick={openCreate}
+              className="flex items-center gap-2 px-4 py-2.5 bg-emerald-600 text-white text-sm font-semibold rounded-xl hover:bg-emerald-700 transition-colors shadow-sm shadow-emerald-100"
+            >
+              <HiOutlinePlus className="w-4 h-4" />
+              Add Organisation
+            </button>
+          </div>
         )}
       </div>
+
+      <ClientOrgImportModal
+        open={showImport}
+        onClose={() => setShowImport(false)}
+        onImported={() => { setPage(1); fetchOrgs(); }}
+      />
+
+      <BulkImportProjectsModal
+        open={showProjectImport}
+        onClose={() => setShowProjectImport(false)}
+        onImported={() => { setPage(1); fetchOrgs(); }}
+      />
 
       {/* Search bar */}
       <div className="relative max-w-xs">

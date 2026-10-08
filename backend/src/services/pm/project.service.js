@@ -56,7 +56,7 @@ const PROJECT_INCLUDE = [
   // Top-level milestones for list-view progress calculation
   {
     model: Milestone, as: 'milestones',
-    attributes: ['id', 'name', 'status', 'plannedEndDate', 'completionPercentage', 'weightPercentage', 'isDefault', 'parentMilestoneId', 'order'],
+    attributes: ['id', 'name', 'status', 'plannedStartDate', 'plannedEndDate', 'actualStartDate', 'actualEndDate', 'completionPercentage', 'weightPercentage', 'isDefault', 'parentMilestoneId', 'order'],
     include: [{ model: User, as: 'accountableUser', attributes: ['id', 'name'] }],
   },
 ];
@@ -145,8 +145,13 @@ const assertProjectVisible = async (projectId, user) => {
  * spaces, so "CRM Portal" and " crm  portal " are the same name. Applies to every
  * create path (PM page, the ticket form's "Other Project", any API client) and to
  * renames. Throws ConflictError(409) naming the existing project.
+ *
+ * Scoped by client (clientName, normalised) — the same project name is allowed
+ * to exist for two different clients (e.g. "OpSuite" for both Sodexo SoCampus
+ * and Perfect Genset); it only clashes against another project for the SAME
+ * client (including two projects that both have no client set).
  */
-const assertNameIsFree = async (name, excludeProjectId = null) => {
+const assertNameIsFree = async (name, excludeProjectId = null, clientName = null) => {
   const clean = String(name ?? '').trim().replace(/\s+/g, ' ');
   if (!clean) throw new ValidationError('Project name is required');
   // A LIKE on the collapsed name would miss rows stored with doubled or padded
@@ -158,13 +163,18 @@ const assertNameIsFree = async (name, excludeProjectId = null) => {
       sequelize.fn('TRIM', sequelize.fn('REGEXP_REPLACE', sequelize.col('name'), '[[:space:]]+', ' ')),
       { [Op.like]: likeSafe }
     ),
-    attributes: ['id', 'name', 'status', 'isProduct', 'isOperations'],
+    attributes: ['id', 'name', 'status', 'isProduct', 'isOperations', 'clientName'],
   });
   const norm = (s) => String(s ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
-  const clash = rows.find(p => norm(p.name) === norm(clean) && String(p.id) !== String(excludeProjectId ?? ''));
+  const clash = rows.find(p =>
+    norm(p.name) === norm(clean) &&
+    norm(p.clientName) === norm(clientName) &&
+    String(p.id) !== String(excludeProjectId ?? '')
+  );
   if (clash) {
     throw new ConflictError(
-      `A project named "${clash.name}" already exists (${clash.status || 'no status'}). Pick a different name or use the existing project.`
+      `A project named "${clash.name}" already exists for ${clash.clientName ? `client "${clash.clientName}"` : 'this (no) client'} ` +
+      `(${clash.status || 'no status'}). Pick a different name or use the existing project.`
     );
   }
   return clean;
@@ -180,7 +190,7 @@ const createProject = async (data, user) => {
   // (PmProjectType model currently has no `prefix` field)
 
   const {
-    name, description, purpose, clientName, clientEmail, notifyClient,
+    name, description, purpose, clientName, clientEmail, clientOrgId, notifyClient,
     managerId, ownerId, accountManagerId,
     status, billingType, projectType,
     startDate, endDate,
@@ -191,7 +201,7 @@ const createProject = async (data, user) => {
   // Operations-only project gets NO default milestones; Product (alone or with
   // Operations) does.
   // Returns the collapsed name — store THAT, so no new row is created with padding.
-  const cleanName = await assertNameIsFree(name);
+  const cleanName = await assertNameIsFree(name, null, clientName);
 
   const bool = (v, dflt) => (v === undefined || v === null || v === '' ? dflt : (v === true || v === 'true' || v === 1 || v === '1'));
   let product    = bool(isProduct, isOperations === undefined ? true : false);
@@ -199,7 +209,7 @@ const createProject = async (data, user) => {
   if (!product && !operations) product = true;   // never create a project that belongs nowhere
 
   const project = await Project.create({
-    name: cleanName, description, purpose, clientName, clientEmail, notifyClient,
+    name: cleanName, description, purpose, clientName, clientEmail, clientOrgId: clientOrgId || null, notifyClient,
     managerId,
     ownerId:          ownerId ?? accountManagerId,   // backward compat
     accountManagerId: accountManagerId ?? ownerId,
@@ -261,7 +271,7 @@ const updateProject = async (id, data, user) => {
   }
   // Explicit allowlist keeps updates to known model fields
   const ALLOWED_FIELDS = [
-    'name', 'description', 'purpose', 'clientName', 'clientEmail', 'notifyClient',
+    'name', 'description', 'purpose', 'clientName', 'clientEmail', 'clientOrgId', 'notifyClient',
     'managerId', 'ownerId', 'accountManagerId',
     'status', 'billingType', 'projectType',
     'isProduct', 'isOperations',      // usage flags — milestones are only created at creation time
@@ -270,8 +280,12 @@ const updateProject = async (id, data, user) => {
   ];
   const updateData = {};
   ALLOWED_FIELDS.forEach((key) => { if (key in data) updateData[key] = data[key]; });
-  // A rename must not collide with another project
-  if ('name' in updateData) updateData.name = await assertNameIsFree(updateData.name, project.id);
+  // A rename must not collide with another project for the SAME client — use the
+  // incoming clientName if it's changing too, else the project's current one.
+  if ('name' in updateData) {
+    const scopeClientName = 'clientName' in updateData ? updateData.clientName : project.clientName;
+    updateData.name = await assertNameIsFree(updateData.name, project.id, scopeClientName);
+  }
 
   // Turning Product ON later must still give the project its plan — milestones are
   // otherwise only created at creation time, which would leave it permanently empty.

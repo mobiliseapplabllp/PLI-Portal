@@ -86,6 +86,13 @@ const deleteOption = async (req, res, next) => {
     const option = await HdOption.findByPk(req.params.id);
     if (!option) return next(new NotFoundError('Option'));
 
+    if (option.isBuiltIn) {
+      return sendError(res,
+        `Cannot delete "${option.name}" — it's a built-in status used by ticket workflow logic ` +
+        `(SLA tracking, auto-close timestamps, the approval flow). Add a new status instead if you need something different.`,
+        409);
+    }
+
     await option.destroy();
     return sendSuccess(res, null, 'Option deleted');
   } catch (err) {

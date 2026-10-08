@@ -13,6 +13,12 @@ router.use(authenticate);
 const ADMIN_ONLY = authorize('admin');
 const CSAT_SENDERS = authorize('admin', 'manager', 'senior_manager');
 
+// ── Excel import — MUST stay above '/:id' (else "import" is read as an id) ──
+const upload = require('../../middleware/upload');
+router.get('/import/template',  ADMIN_ONLY, (req, res, next) => ctrl.getOrgImportTemplate(req, res, next));
+router.post('/import/validate', ADMIN_ONLY, upload.single('file'), (req, res, next) => ctrl.validateOrgImport(req, res, next));
+router.post('/import/commit',   ADMIN_ONLY, (req, res, next) => ctrl.commitOrgImport(req, res, next));
+
 // ── Client Organisations ──────────────────────────────────────────────────────
 router.get('/',      CSAT_SENDERS, listOrgs_);
 router.post('/',     ADMIN_ONLY, createClientOrgValidator, validate, createOrg_);

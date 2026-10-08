@@ -16,6 +16,8 @@ import {
   selectTicketsPage,
   selectTicketsFilters,
   selectTicketsLoading,
+  fetchHdOptions,
+  selectHdOptions,
 } from '../../store/helpdeskSlice';
 import {
   getTicketsApi,
@@ -55,7 +57,9 @@ import {
 // Constants
 // ---------------------------------------------------------------------------
 
-const STATUS_OPTIONS   = ['open', 'in-progress', 'pending', 'resolved', 'closed'];
+// Fallback only, shown until hd_options loads — the real (admin-configurable,
+// migration 055) list comes from hdOptions.status once fetched.
+const STATUS_OPTIONS_FALLBACK = ['open', 'in-progress', 'pending', 'on-hold', 'resolved', 'closed'];
 const PRIORITY_OPTIONS = ['critical', 'high', 'medium', 'low'];
 const PAGE_SIZE_OPTIONS = [10, 20, 50, 100];
 
@@ -131,6 +135,11 @@ export default function TicketList() {
   const page    = useSelector(selectTicketsPage);
   const filters = useSelector(selectTicketsFilters);
   const loading = useSelector(selectTicketsLoading);
+  const hdOptions = useSelector(selectHdOptions);
+  // Admin-configurable master list (HD Settings), same source CreateTicket.jsx uses —
+  // not a hardcoded list, so it always matches whatever admins have configured.
+  const requestTypeOptions = (hdOptions.request_type || []).map(o => o.name);
+  const STATUS_OPTIONS = hdOptions.status?.length ? hdOptions.status.map(o => o.name) : STATUS_OPTIONS_FALLBACK;
 
   // Local state
   const [pageSize, setPageSize] = useState(20);
@@ -141,6 +150,23 @@ export default function TicketList() {
   const [users,    setUsers]    = useState([]);
   const [projects, setProjects] = useState([]);   // [{ value, label, sub }] — PM projects + unlinked legacy HD projects
   const [teams,    setTeams]    = useState([]);   // GET /helpdesk/teams → managers with direct reports
+
+  // Same role→scope split as both dashboards (helpdeskAuth.js resolveRoleMapping):
+  // scope 'all'   (admin, senior_manager) → sees every team's tickets → the
+  //               org-wide Team/Employee directory is genuinely useful here.
+  // scope 'group' (manager, hr_admin)     → sees only their OWN team's tickets
+  //               → an org-wide Team dropdown is a dead end (picking any other
+  //               team returns an empty list); default straight to their own
+  //               team's roster instead, no Team dropdown at all.
+  // scope 'own'   (employee)              → sees only their own tickets → no
+  //               people-directory filter has anything to narrow; hidden.
+  const ORG_WIDE_TEAM_ROLES = ['admin', 'senior_manager'];
+  const OWN_TEAM_ONLY_ROLES = ['manager', 'hr_admin'];
+  const canSeeOrgWideTeam = ORG_WIDE_TEAM_ROLES.includes(user?.role);
+  const isOwnTeamOnly     = OWN_TEAM_ONLY_ROLES.includes(user?.role);
+  const canSeeTeamFilters = canSeeOrgWideTeam || isOwnTeamOnly;
+  const authUserId        = String(user?._id || user?.id || '');
+  const [ownTeam, setOwnTeam] = useState(null); // { manager:{id,name}, members:[...] } — scope:'group' only
 
   // Row selection
   const [selected, setSelected] = useState([]);
@@ -201,10 +227,22 @@ export default function TicketList() {
   const hasActiveFilters =
     !!filters.search     ||
     !!filters.status     ||
+    !!filters.statusKey  ||
     !!filters.priority   ||
     !!filters.assigneeId ||
     !!filters.projectId  ||
-    !!filters.teamManagerId;
+    !!filters.teamManagerId ||
+    !!filters.category   ||
+    !!filters.requestType ||
+    !!filters.billingType;
+
+  // Request Type options come from HD Settings (admin-configurable), not a
+  // hardcoded list — load once if nothing has fetched them yet this session.
+  useEffect(() => {
+    if (!hdOptions || Object.keys(hdOptions).length === 0) {
+      dispatch(fetchHdOptions());
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // -------------------------------------------------------------------------
   // Load tickets
@@ -220,12 +258,11 @@ export default function TicketList() {
   useEffect(() => { load(); }, [load]);
 
   // Load filter-dropdown data once on mount.
-  // Employee filter: with no Team selected, every active employee (roles that may list
-  // users only — the KPI users endpoint is admin/manager-only); with a Team selected,
-  // that team's members (helpdesk endpoint, available to every role).
-  const canListUsers = ['admin', 'manager', 'senior_manager', 'hr_admin'].includes(user?.role);
+  // Employee filter: scope:'all' → every active employee (org-wide directory);
+  // scope:'group' → just their own team, fetched below via ownTeam; scope:'own'
+  // → hidden entirely (see canSeeTeamFilters).
   useEffect(() => {
-    if (canListUsers) {
+    if (canSeeOrgWideTeam) {
       getUsersApi({ isActive: true, pageSize: 500, limit: 500 })
         .then((res) => {
           const d = res?.data?.data;
@@ -247,21 +284,41 @@ export default function TicketList() {
       }));
       const hdOpts = hd
         .filter((p) => !(p.pmProjectId ?? p.pm_project_id))
-        .map((p) => ({ value: p._id ?? p.id, label: p.name, sub: 'Legacy helpdesk project' }));
+        .map((p) => ({ value: p._id ?? p.id, label: p.name, sub: 'Legacy operations project' }));
       setProjects([...pmOpts, ...hdOpts]);
     });
-  }, [canListUsers]);
+  }, [canSeeOrgWideTeam]);
 
-  // Load teams on mount for the Team filter + bulk assign modal
+  // Load teams on mount for the Team filter — scope:'all' only, an org-wide
+  // directory that's a dead end for anyone who can't actually reach another team.
   useEffect(() => {
+    if (!canSeeOrgWideTeam) return undefined;
     listTeamsApi().then(unwrapList).then(setTeams).catch(() => setTeams([]));
-  }, []);
+    return undefined;
+  }, [canSeeOrgWideTeam]);
+
+  // scope:'group' (manager, hr_admin): their OWN team's roster, used both for
+  // the Employee filter default and for the bulk-assign modal's one valid team.
+  useEffect(() => {
+    if (!isOwnTeamOnly || !authUserId) return undefined;
+    let alive = true;
+    getTeamMembersApi(authUserId)
+      .then((res) => { if (alive) setOwnTeam(res?.data?.data || null); })
+      .catch(() => { if (alive) setOwnTeam(null); });
+    return () => { alive = false; };
+  }, [isOwnTeamOnly, authUserId]);
 
   const teamOptions = teams.map((t) => ({
     value: t._id ?? t.id,
     label: t.name,
     sub:   [t.email, t.memberCount != null ? `${t.memberCount} members` : null].filter(Boolean).join(' · '),
   }));
+  // Bulk-assign's Team select: org-wide list for scope:'all', but a manager/
+  // hr_admin can still only ever assign within their OWN team — one real option,
+  // not the full company directory (which the backend would reject anyway).
+  const bulkAssignTeamOptions = canSeeOrgWideTeam
+    ? teamOptions
+    : (isOwnTeamOnly && ownTeam?.manager ? [{ value: ownTeam.manager.id, label: ownTeam.manager.name }] : []);
 
   // Employee filter options follow the Team filter: team chosen → its members; else all employees.
   const [teamFilterMembers, setTeamFilterMembers] = useState(null); // null = no team selected
@@ -287,35 +344,52 @@ export default function TicketList() {
 
   const employeeOptions = [
     { value: 'unassigned', label: 'Unassigned' },
-    ...(teamFilterMembers ?? users).map((u) => ({
+    ...(teamFilterMembers ?? (isOwnTeamOnly ? (ownTeam?.members || []) : users)).map((u) => ({
       value: u._id ?? u.id,
       label: `${u.name || u.full_name || ''}${u.isManager ? ' (manager)' : ''}`,
       sub:   [u.email, u.designation || u.role].filter(Boolean).join(' · '),
     })),
   ];
-  const showEmployeeFilter = canListUsers || !!filters.teamManagerId;
+  const showEmployeeFilter = canSeeTeamFilters || !!filters.teamManagerId;
 
-  // URL deep-linking: pre-populate filters from query params on first render
+  // URL deep-linking: re-applies every time the URL's query params actually
+  // change (not just on first mount) — React Router reuses this same page
+  // component across navigations to the same route with different query
+  // strings, so a [] dependency array meant every dashboard-card click AFTER
+  // the very first one was silently ignored, leaving stale filters in place.
   useEffect(() => {
     const status     = searchParams.get('status');
+    const statusKey  = searchParams.get('statusKey');
     const priority   = searchParams.get('priority');
     const assigneeId = searchParams.get('assigneeId');
     const search     = searchParams.get('search');
     const teamManagerId = searchParams.get('teamManagerId');
     const projectId  = searchParams.get('projectId');
-    const toApply = {};
+    const category   = searchParams.get('category');
+    const requestType = searchParams.get('requestType');
+    const billingType = searchParams.get('billingType');
+    // A deep link (e.g. a dashboard card) must show exactly what it names — filters
+    // left in the store from an earlier visit would otherwise stack on top of it.
+    const isDeepLink = searchParams.toString() !== '';
+    const toApply = isDeepLink
+      ? { status: '', statusKey: '', priority: '', category: '', requestType: '', teamManagerId: '', groupId: '', projectId: '',
+          assigneeId: '', search: '', dateFrom: '', dateTo: '', billingType: '' }
+      : {};
     if (status)     toApply.status     = status;
+    if (statusKey)  toApply.statusKey  = statusKey;
     if (priority)   toApply.priority   = priority;
     if (assigneeId) toApply.assigneeId = assigneeId;
     if (search)     toApply.search     = search;
     if (teamManagerId) toApply.teamManagerId = teamManagerId;
     if (projectId)  toApply.projectId  = projectId;
+    if (category)   toApply.category   = category;
+    if (requestType) toApply.requestType = requestType;
+    if (billingType) toApply.billingType = billingType;
     if (Object.keys(toApply).length) {
       dispatch(setTicketsFilter(toApply));
-      if (search) setSearchInput(search);
+      setSearchInput(search || '');
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [searchParams, dispatch]);
 
   // Debounced search — dispatches filter update 400 ms after the user stops typing
   useEffect(() => {
@@ -362,10 +436,14 @@ export default function TicketList() {
     dispatch(setTicketsFilter({
       search:     '',
       status:     '',
+      statusKey:  '',
       priority:   '',
       assigneeId:    '',
       projectId:     '',
       teamManagerId: '',
+      category:      '',
+      requestType:   '',
+      billingType:   '',
     }));
   };
 
@@ -431,7 +509,7 @@ export default function TicketList() {
         { label: 'Resolution',      fn: (t) => t.resolution || '' },
         { label: 'Created',         fn: (t) => fmtDate(t.created_at) },
         { label: 'Updated',         fn: (t) => fmtDate(t.updated_at) },
-        { label: 'Closed',          fn: (t) => (t.status === 'closed' || t.status === 'resolved') && t.closed_at ? fmtDate(t.closed_at) : '' },
+        { label: 'Closed',          fn: (t) => (t.status === 'closed' || t.status === 'resolved') && (t.closedAt || t.closed_at) ? fmtDate(t.closedAt || t.closed_at) : '' },
       ];
 
       const header  = cols.map((c) => c.label).join(',');
@@ -491,9 +569,14 @@ export default function TicketList() {
         // Use the first sheet that is NOT a helper sheet (those start with '_')
         const sheetName = wb.SheetNames.find((n) => !n.startsWith('_') && n !== 'Valid Options') || wb.SheetNames[0];
         const ws = wb.Sheets[sheetName];
-        // range:2 skips the header row (row 1) AND the example row (row 2) so
-        // the template's sample data is never sent to the server as a real ticket.
-        rows = XLSX.utils.sheet_to_json(ws, { defval: '', range: 2 });
+        // sheet_to_json with no `range` uses row 1 as headers and starts data at row 2
+        // (Excel's row 2 = the template's example row). `range: 2` looks like it would
+        // skip both the header AND the example row, but it actually re-derives the
+        // header from whatever is at the TOP of that range — i.e. row 3, the first
+        // real data row — silently eating it as headers and sending every column's
+        // VALUES as field names instead. slice(1) drops the example row explicitly
+        // so the true header row (row 1) is what every column name is read from.
+        rows = XLSX.utils.sheet_to_json(ws, { defval: '' }).slice(1);
       } else {
         // CSV parsing
         const text = await bulkFile.text();
@@ -545,7 +628,7 @@ export default function TicketList() {
   // Row selection
   // -------------------------------------------------------------------------
   const handleSelectAll = (e) =>
-    setSelected(e.target.checked ? tickets.map((t) => t._id) : []);
+    setSelected(e.target.checked ? tickets.map((t) => t._id ?? t.id) : []);
 
   const handleSelectOne = (id) =>
     setSelected((prev) =>
@@ -669,7 +752,7 @@ export default function TicketList() {
         // requested for a ticket the server skipped for capacity
         allocation: {
           assigneeId:            baAgentId,
-          assigneeName:          baMembers.find((m) => String(m._id ?? m.id) === String(baAgentId))?.name || 'Agent',
+          assigneeName:          baMembers.find((m) => String(m._id ?? m.id) === String(baAgentId))?.name || 'Employee',
           allocationMode:        baIsTotal ? 'total' : 'per_day',
           allocationHoursPerDay: baHoursNum ?? null,
           allocationTotalHours:  baIsTotal ? baRaw : null,
@@ -749,7 +832,7 @@ export default function TicketList() {
     } catch (e) {
       setBaException(null);
       setOpError(
-        `${e.response?.data?.message || e.response?.data?.error?.message || e.message || 'Could not read the agent’s capacity'}`
+        `${e.response?.data?.message || e.response?.data?.error?.message || e.message || 'Could not read the employee’s capacity'}`
         + ` — could not prepare the exception request for ${d.label}. Open the ticket and request the exception there.`,
       );
     } finally {
@@ -836,20 +919,24 @@ export default function TicketList() {
               Bulk Upload
             </button>
 
-            {/* New Request */}
-            <button
-              onClick={() => navigate('/helpdesk/tickets/new')}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-[#2196f3] text-white rounded-lg hover:bg-[#1976d2] transition-colors text-[11px] font-medium"
-            >
-              <HiOutlinePlus className="w-3.5 h-3.5" />
-              New Request
-            </button>
+            {/* New Request — a plain employee doesn't self-serve; someone with
+                real team/assign visibility raises it on their behalf instead. */}
+            {user?.role !== 'employee' && (
+              <button
+                onClick={() => navigate('/helpdesk/tickets/new')}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-[#2196f3] text-white rounded-lg hover:bg-[#1976d2] transition-colors text-[11px] font-medium"
+              >
+                <HiOutlinePlus className="w-3.5 h-3.5" />
+                New Request
+              </button>
+            )}
           </div>
         </div>
 
-        {/* Filter row */}
-        <div className="flex items-center justify-between px-3 py-1.5 border-t border-gray-100">
-          <div className="flex items-center gap-3">
+        {/* Filter row — wraps onto multiple lines on narrower screens instead of
+            overflowing/getting clipped, now that Request Type adds one more control. */}
+        <div className="flex flex-wrap items-center justify-between gap-y-2 px-3 py-1.5 border-t border-gray-100">
+          <div className="flex flex-wrap items-center gap-3">
             {/* Search */}
             <form onSubmit={handleSearchSubmit} className="relative">
               <HiOutlineSearch className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" />
@@ -862,7 +949,7 @@ export default function TicketList() {
               />
             </form>
 
-            <div className="flex items-center gap-1.5">
+            <div className="flex flex-wrap items-center gap-1.5">
               <HiOutlineFilter className="w-3.5 h-3.5 text-gray-400" />
 
               {/* Status */}
@@ -889,8 +976,24 @@ export default function TicketList() {
                 ))}
               </select>
 
-              {/* Team — manager UUID, sent as ?teamManagerId= */}
-              {teamOptions.length > 0 && (
+              {/* Request Type — fixed list, same as the import template's dropdown */}
+              <select
+                value={filters.requestType || ''}
+                onChange={(e) => handleFilter('requestType', e.target.value)}
+                className="px-2 py-1.5 border border-gray-300 rounded-lg text-[11px] bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="">All Request Types</option>
+                {requestTypeOptions.map((r) => (
+                  <option key={r} value={r}>{r}</option>
+                ))}
+              </select>
+
+              {/* Team — manager UUID, sent as ?teamManagerId=. scope:'all' only —
+                  a manager/hr_admin only ever sees their own team's tickets
+                  regardless of what they'd pick here, so the dropdown is hidden
+                  for them (their Employee filter below defaults to their own
+                  team automatically instead). */}
+              {canSeeOrgWideTeam && teamOptions.length > 0 && (
                 <div className="w-44" title="Filter by Team">
                   <SearchSelect
                     options={teamOptions}
@@ -904,11 +1007,11 @@ export default function TicketList() {
 
               {/* Employee / Assignee — all employees, or the selected team's members */}
               {showEmployeeFilter && (
-                <div className="w-48" title={filters.teamManagerId ? 'Employees in the selected team' : 'All employees'}>
+                <div className="w-48" title={filters.teamManagerId ? 'Employees in the selected team' : (isOwnTeamOnly ? 'Anyone on my team' : 'All employees')}>
                   <SearchSelect
                     options={employeeOptions}
                     value={filters.assigneeId || ''}
-                    placeholder={filters.teamManagerId ? 'All team members' : 'All Employees'}
+                    placeholder={filters.teamManagerId ? 'All team members' : (isOwnTeamOnly ? 'Anyone on my team' : 'All Employees')}
                     onChange={(v) => handleFilter('assigneeId', v || '')}
                     className="rounded-lg border-gray-300 py-1.5 text-[11px]"
                   />
@@ -942,7 +1045,7 @@ export default function TicketList() {
           </div>
 
           {/* Right side: bulk actions + refresh + view toggle */}
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {selected.length > 0 && (
               <>
                 {/* Set Status — only when 2+ rows selected */}
@@ -1064,7 +1167,7 @@ export default function TicketList() {
                 && baResult.skippedDetails.length > 0
                 && baResult.skippedDetails.every(isCapacitySkip) && (
                 <p className="mt-1.5">
-                  Nothing was assigned — the agent would be over capacity for this window.
+                  Nothing was assigned — the employee would be over capacity for this window.
                   Reduce the hours or shorten the window, or open a ticket and request an allocation exception for approval.
                 </p>
               )}
@@ -1101,15 +1204,19 @@ export default function TicketList() {
             </div>
             <h3 className="text-lg font-medium text-gray-800 mb-2">No Requests Yet</h3>
             <p className="text-gray-500 text-sm mb-6 text-center max-w-md">
-              Create your first request to start tracking and managing your support tickets.
+              {user?.role === 'employee'
+                ? 'No tickets have been raised or assigned to you yet.'
+                : 'Create your first request to start tracking and managing your support tickets.'}
             </p>
-            <button
-              onClick={() => navigate('/helpdesk/tickets/new')}
-              className="flex items-center gap-2 px-6 py-3 bg-[#2196f3] text-white rounded-lg hover:bg-[#1976d2] transition-colors font-medium"
-            >
-              <HiOutlinePlus className="w-5 h-5" />
-              Create First Request
-            </button>
+            {user?.role !== 'employee' && (
+              <button
+                onClick={() => navigate('/helpdesk/tickets/new')}
+                className="flex items-center gap-2 px-6 py-3 bg-[#2196f3] text-white rounded-lg hover:bg-[#1976d2] transition-colors font-medium"
+              >
+                <HiOutlinePlus className="w-5 h-5" />
+                Create First Request
+              </button>
+            )}
           </div>
 
         /* Empty state — filters active but no matching results */
@@ -1139,7 +1246,7 @@ export default function TicketList() {
                   <th className="text-left text-[10px] font-semibold text-gray-500 uppercase px-2 py-2 w-[128px]">Team · Raised by</th>
                   <th className="text-left text-[10px] font-semibold text-gray-500 uppercase px-2 py-2 w-[88px]">Status</th>
                   <th className="text-left text-[10px] font-semibold text-gray-500 uppercase px-2 py-2 w-[72px]">Priority</th>
-                  <th className="text-left text-[10px] font-semibold text-gray-500 uppercase px-2 py-2 w-[100px]">Agent</th>
+                  <th className="text-left text-[10px] font-semibold text-gray-500 uppercase px-2 py-2 w-[100px]">Employee</th>
                   <th className="text-left text-[10px] font-semibold text-gray-500 uppercase px-2 py-2 w-[76px]">Created</th>
                   <th className="text-left text-[10px] font-semibold text-gray-500 uppercase px-2 py-2 w-[76px]">Closed</th>
                   <th className="w-8 px-1"></th>
@@ -1148,16 +1255,16 @@ export default function TicketList() {
               <tbody>
                 {tickets.map((t) => (
                   <tr
-                    key={t._id}
+                    key={t._id ?? t.id}
                     className="border-t border-gray-100 hover:bg-blue-50 cursor-pointer"
-                    onClick={() => navigate(`/helpdesk/tickets/${t._id}`)}
+                    onClick={() => navigate(`/helpdesk/tickets/${t._id ?? t.id}`)}
                   >
                     {/* Checkbox */}
                     <td className="px-2 py-1.5 align-middle" onClick={(e) => e.stopPropagation()}>
                       <input
                         type="checkbox"
-                        checked={selected.includes(t._id)}
-                        onChange={() => handleSelectOne(t._id)}
+                        checked={selected.includes(t._id ?? t.id)}
+                        onChange={() => handleSelectOne(t._id ?? t.id)}
                         className="w-3.5 h-3.5 rounded border-gray-300"
                       />
                     </td>
@@ -1239,7 +1346,7 @@ export default function TicketList() {
                     {/* Closed */}
                     <td className="px-2 py-1.5 align-middle">
                       <span className="text-[10px] text-gray-500 whitespace-nowrap">
-                        {(t.status === 'closed' || t.status === 'resolved') ? fmtDate(t.closed_at) : '—'}
+                        {(t.status === 'closed' || t.status === 'resolved') ? fmtDate(t.closedAt || t.closed_at) : '—'}
                       </span>
                     </td>
 
@@ -1300,8 +1407,8 @@ export default function TicketList() {
           <div className="grid grid-cols-3 gap-3">
             {tickets.map((t) => (
               <div
-                key={t._id}
-                onClick={() => navigate(`/helpdesk/tickets/${t._id}`)}
+                key={t._id ?? t.id}
+                onClick={() => navigate(`/helpdesk/tickets/${t._id ?? t.id}`)}
                 className="bg-white rounded-lg border border-gray-200 p-3 hover:shadow-md cursor-pointer transition-shadow text-[11px]"
               >
                 <div className="flex items-start justify-between mb-2">
@@ -1324,7 +1431,7 @@ export default function TicketList() {
                 <div className="mt-2 pt-2 border-t border-gray-100 text-[10px] text-gray-400 space-y-0.5">
                   <div>Created: {fmtDate(t.created_at)}</div>
                   {(t.status === 'closed' || t.status === 'resolved') && (
-                    <div>Closed: {fmtDate(t.closed_at)}</div>
+                    <div>Closed: {fmtDate(t.closedAt || t.closed_at)}</div>
                   )}
                 </div>
               </div>
@@ -1369,7 +1476,7 @@ export default function TicketList() {
               <label className="text-sm font-medium text-gray-700">Team / Manager</label>
               <SearchSelect
                 size="md"
-                options={teamOptions}
+                options={bulkAssignTeamOptions}
                 value={baTeamManagerId}
                 placeholder="— Select team —"
                 disabled={bulkAssigning}
@@ -1429,7 +1536,7 @@ export default function TicketList() {
               />
               {!baHoursValid && <p className="text-[11px] text-red-500">{baIsTotal ? 'Total hours must be at least 0.5 in steps of 0.5' : 'Hours must be between 0.5 and 12 in steps of 0.5'}</p>}
               {!baDatesValid && baFrom && baTo && <p className="text-[11px] text-red-500">Start date must be on or before end date</p>}
-              <p className="text-[11px] text-gray-400">Counts against each agent's capacity alongside their project allocations.</p>
+              <p className="text-[11px] text-gray-400">Counts against each employee's capacity alongside their project allocations.</p>
             </div>
             {opError && <p className="text-sm text-red-600 mb-3">{opError}</p>}
             <div className="flex justify-end gap-2 pt-2">
@@ -1468,6 +1575,9 @@ export default function TicketList() {
             </div>
             <p className="text-sm text-gray-600 mb-4">
               Import tickets from an Excel (.xlsx) or CSV file. Download the template, fill your data, and upload.
+              The <strong>Project</strong> column is a dropdown of existing projects. <strong>Allocation hours</strong> are
+              checked for capacity the same way as Create Ticket — a row that would put the assignee over capacity is
+              skipped with a reason, and the rest of the file still imports.
             </p>
             <div className="flex flex-col gap-4">
               <div className="flex gap-2">

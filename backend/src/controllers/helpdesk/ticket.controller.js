@@ -28,6 +28,7 @@ const Department       = require('../../models/Department');
 const { sendSuccess, sendError } = require('../../utils/response');
 const { NotFoundError, ForbiddenError, ValidationError, AllocationConflictError } = require('../../utils/errors');
 const { sendEmail }    = require('../../utils/emailService');
+const statusResolver   = require('../../services/helpdesk/statusResolver.service');
 
 // Team rule (manager + active direct reports) lives in ONE place. Lazy-required
 // so this controller still loads (and route wiring can be verified) while the
@@ -41,7 +42,7 @@ let _ticketExceptionService;
 const ticketExceptionService = () =>
   (_ticketExceptionService ||= require('../../services/pm/ticketException.service'));
 
-const { TICKET_STATUS, TICKET_PRIORITY, LINK_TYPE } = HdTicket;
+const { TICKET_PRIORITY, LINK_TYPE } = HdTicket;
 
 /** 4xx helper — body carries both `message` and `error.message`. */
 const sendClientError = (res, message, status = 400) =>
@@ -105,6 +106,67 @@ function sameFieldValue(f, a, b) {
   if (DECIMAL_FIELDS.has(f)) return Number(a) === Number(b);
   if (DATE_FIELDS.has(f))    return toDayStr(a) === toDayStr(b);
   return String(a) === String(b);
+}
+
+/**
+ * Projects that a fresh ticket should not be filed against by import — same
+ * rule as GET /helpdesk/pm-projects (pmProjectList.controller.js) and the
+ * Create Ticket form's default view.
+ */
+const CLOSED_PROJECT_STATUSES_FOR_IMPORT = ['completed', 'cancelled', 'closed'];
+
+/**
+ * Build a unique, human dropdown label per project for the Excel import's
+ * Project column. The label is a PICKER AID ONLY — hd_tickets never stores a
+ * project name, only pm_project_id (see splitProjectRef below), so nothing
+ * here is ever written to the database.
+ *   "Name — Client"        when the project has a client on record
+ *   "Name — PM: Manager"   else, when it has a project manager
+ *   "Name"                 else
+ *   "<label> (2)"          appended only to labels that collide, in query order
+ * Called identically at template-download time and at import time, so a label
+ * picked from a freshly downloaded template always resolves — one whose
+ * project list has since changed (renamed, closed, added) may not, which is
+ * why a row that fails this lookup is told to download a fresh template.
+ * @param {Array<{id, name, clientName?, managerName?}>} projects
+ * @returns {{ labels: string[], byLabel: Map<string, string> }} byLabel: label → project id
+ */
+function buildProjectLabels(projects) {
+  const base = projects.map((p) => {
+    const suffix = p.clientName ? ` — ${p.clientName}` : (p.managerName ? ` — PM: ${p.managerName}` : '');
+    return { id: p.id, label: `${p.name}${suffix}` };
+  });
+  const total = new Map();
+  base.forEach((b) => total.set(b.label, (total.get(b.label) || 0) + 1));
+  const seen = new Map();
+  const byLabel = new Map();
+  const labels = [];
+  for (const b of base) {
+    let label = b.label;
+    if (total.get(b.label) > 1) {
+      const n = (seen.get(b.label) || 0) + 1;
+      seen.set(b.label, n);
+      label = `${b.label} (${n})`;
+    }
+    byLabel.set(label, b.id);
+    labels.push(label);
+  }
+  return { labels, byLabel };
+}
+
+/** The active-project list + its dropdown labels, fetched once per call site. */
+async function loadProjectLabels() {
+  const rows = await PmProject.findAll({
+    where: { status: { [Op.notIn]: CLOSED_PROJECT_STATUSES_FOR_IMPORT } },
+    attributes: ['id', 'name', 'clientName', 'managerId'],
+    include: [{ model: User, as: 'projectManager', attributes: ['id', 'name'], required: false }],
+    order: [['name', 'ASC']],
+  });
+  const projects = rows.map((p) => {
+    const r = p.get({ plain: true });
+    return { id: r.id, name: r.name, clientName: r.clientName ?? null, managerName: r.projectManager?.name ?? null };
+  });
+  return buildProjectLabels(projects);
 }
 
 /**
@@ -184,15 +246,26 @@ async function ticketVisibilityWhere(hdUser) {
  * plus the caller's visibility. Filters only ever narrow the visible set.
  */
 async function buildTicketWhere(query, hdUser) {
-  const { status, priority, category, groupId, teamManagerId, projectId, assigneeId, search, dateFrom, dateTo } = query;
+  const { status, statusKey, priority, category, requestType, groupId, teamManagerId, projectId, assigneeId, billingType, search, dateFrom, dateTo } = query;
   const and = [];
 
   const vis = await ticketVisibilityWhere(hdUser);
   if (vis) and.push(vis);
 
-  if (status)        and.push({ status });
+  // statusKey is a permanent built-in identifier (open/in-progress/pending/
+  // on-hold/resolved/closed) — resolves to whatever the CURRENT display name's
+  // id is, so a link built from it (e.g. a dashboard stat card) keeps working
+  // even after that status is renamed. Prefer it over ?status= (a name) when
+  // both a rename-safe link and a name-based filter need to coexist.
+  if (statusKey) {
+    const opt = await statusResolver.getBuiltInStatus(statusKey);
+    and.push({ statusId: opt.id });
+  } else if (status) {
+    and.push({ status });
+  }
   if (priority)      and.push({ priority });
   if (category)      and.push({ category: { [Op.like]: `%${category}%` } });
+  if (requestType)   and.push({ requestType });
   if (teamManagerId) and.push({ teamManagerId: String(teamManagerId) });
   // Legacy filter. A non-numeric value (e.g. ?groupId=all) would become NaN and 500
   // the query, so anything that is not a positive integer matches nothing instead.
@@ -216,6 +289,18 @@ async function buildTicketWhere(query, hdUser) {
     } else {
       and.push({ projectId: ref.projectId });
     }
+  }
+
+  // Billing type lives on the linked PM project, not the ticket — same
+  // direct-or-via-hd_project matching as ?projectId=, kept consistent with
+  // the Operations dashboard's Billing Type filter and its Billing card.
+  if (billingType) {
+    and.push({ [Op.or]: [
+      { pmProjectId: { [Op.in]: sequelize.literal(
+        `(SELECT id FROM pm_projects WHERE billingType = ${sequelize.escape(String(billingType))})`) } },
+      { projectId: { [Op.in]: sequelize.literal(
+        `(SELECT hp.id FROM hd_projects hp JOIN pm_projects pp ON pp.id = hp.pm_project_id WHERE pp.billingType = ${sequelize.escape(String(billingType))})`) } },
+    ] });
   }
 
   if (search) {
@@ -570,6 +655,12 @@ const getTicket = async (req, res, next) => {
  */
 const createTicket = async (req, res, next) => {
   try {
+    // A plain employee (scope 'own' — sees/updates only their own tickets) does
+    // not self-serve a new ticket; someone with real team/assign visibility
+    // (their manager, an agent, admin) raises it on their behalf instead.
+    if (req.hdUser?.scope === 'own') {
+      return sendClientError(res, 'Employees cannot create tickets — ask your manager or an agent to raise one for you', 403);
+    }
     const {
       title, category, description, priority, status,
       projectId, dueDate, assigneeId, teamManagerId,
@@ -612,6 +703,12 @@ const createTicket = async (req, res, next) => {
 
     const raisedByTeam = await deriveRaisedByTeam(requesterEmail, req.hdUser);
 
+    // Resolve status (a name — the current display label, or default 'open')
+    // to its hd_options row so both status AND statusId are set consistently.
+    const statusOpt = status
+      ? await statusResolver.resolveStatusByName(status)
+      : await statusResolver.getBuiltInStatus('open');
+
     let destPath;
     const t = await sequelize.transaction();
     try {
@@ -623,7 +720,8 @@ const createTicket = async (req, res, next) => {
           category:     category     || null,
           description:  description  || null,
           priority:     priority     || TICKET_PRIORITY.MEDIUM,
-          status:       status       || TICKET_STATUS.OPEN,
+          status:       statusOpt.name,
+          statusId:     statusOpt.id,
           projectId:    projRef.projectId,
           pmProjectId:  projRef.pmProjectId,
           dueDate:      dueDate      || null,
@@ -715,22 +813,50 @@ const updateTicket = async (req, res, next) => {
 
     // ── Authorization ─────────────────────────────────────────────────────────
     // Admins and canAssign agents can update any ticket.
-    // Everyone else (e.g. a requester) may only update their own ticket.
+    // The requester may edit their own ticket in full (title, priority, etc).
+    // The assignee — the person actually working it — may change its STATUS
+    // only; everything else about the ticket stays under the requester/agent's
+    // control. Neither → no access at all.
     if (!req.hdUser?.isAdmin && !req.hdUser?.permissions?.canAssign) {
-      if (String(ticket.requesterId) !== String(req.hdUser?.id)) {
+      const isRequester = String(ticket.requesterId) === String(req.hdUser?.id);
+      const isAssignee   = String(ticket.assigneeId)  === String(req.hdUser?.id);
+      if (!isRequester && !isAssignee) {
         return sendClientError(res, 'You do not have permission to update this ticket', 403);
+      }
+      if (isAssignee && !isRequester) {
+        const attemptedFields = Object.keys(req.body || {});
+        const disallowed = attemptedFields.filter((f) => f !== 'status');
+        if (disallowed.length) {
+          return sendClientError(res, `As the assignee you can only update the status. Not allowed: ${disallowed.join(', ')}`, 403);
+        }
       }
     }
 
     const snapshot = {};
     TRACKED_FIELDS.forEach((f) => { snapshot[f] = ticket[f]; });
 
-    const prevStatus = ticket.status;
+    const prevStatus   = ticket.status;
+    const prevStatusId = ticket.statusId;
     const updates    = {};
     TRACKED_FIELDS.forEach((f) => {
       if (hasOwn(req.body, f)) updates[f] = req.body[f];
     });
     // body.groupId is ignored (not in TRACKED_FIELDS) — legacy column is read-only.
+
+    // statusKey (a permanent built-in identifier — e.g. a "Pick Up" or "Close"
+    // quick action) takes priority over status (a display name) when both are
+    // sent, so those actions keep working after a rename without any UI change.
+    if (hasOwn(req.body, 'statusKey')) {
+      const statusOpt = await statusResolver.getBuiltInStatus(req.body.statusKey);
+      updates.status   = statusOpt.name;
+      updates.statusId = statusOpt.id;
+    } else if (hasOwn(updates, 'status')) {
+      // status is a name (the current display label) — resolve it to keep
+      // statusId in sync, so a later rename never orphans this ticket's reference.
+      const statusOpt = await statusResolver.resolveStatusByName(updates.status);
+      updates.status   = statusOpt.name;
+      updates.statusId = statusOpt.id;
+    }
 
     // ── Project reference (B12): body.projectId may be a PM UUID or legacy INT
     if (hasOwn(updates, 'projectId')) {
@@ -853,11 +979,13 @@ const updateTicket = async (req, res, next) => {
 
     Object.assign(ticket, updates);
 
-    // Reopen logic
-    const newStatus = ticket.status;
+    // Reopen logic — resolved by statusId against the built-in keys, not by
+    // comparing the (renamable) status string to a literal.
+    const openStatus = await statusResolver.getBuiltInStatus('open');
+    const closedIds  = await statusResolver.getClosedStatusIds();
     if (
-      [TICKET_STATUS.RESOLVED, TICKET_STATUS.CLOSED].includes(prevStatus) &&
-      newStatus === TICKET_STATUS.OPEN
+      closedIds.includes(prevStatusId) &&
+      ticket.statusId === openStatus.id
     ) {
       ticket.reopenCount += 1;
       ticket.closedAt    = null;
@@ -1174,12 +1302,11 @@ const linkTicket = async (req, res, next) => {
  */
 const bulkUpload = async (req, res, next) => {
   try {
-    // ── Permission guard — require admin or both canAssign AND create access ─
-    // canAssign alone is insufficient; it grants ticket management, not creation.
-    // Until a dedicated canBulkCreate flag exists, restrict to admins only to
-    // prevent privilege escalation via the import endpoint.
-    if (!req.hdUser?.isAdmin) {
-      return sendClientError(res, 'Only admins can bulk upload tickets', 403);
+    // ── Permission guard — admin or canAssign, matching the route's own gate
+    // (tickets.routes.js) exactly, so a manager who passes the route doesn't
+    // then get silently rejected here. canAssign covers manager/senior_manager.
+    if (!req.hdUser?.isAdmin && !req.hdUser?.permissions?.canAssign) {
+      return sendClientError(res, 'You do not have permission to bulk upload tickets', 403);
     }
 
     const { rows } = req.body || {};
@@ -1202,6 +1329,12 @@ const bulkUpload = async (req, res, next) => {
       if (!teamByEmail.has(key)) teamByEmail.set(key, await deriveRaisedByTeam(key, req.hdUser));
       return teamByEmail.get(key);
     };
+
+    // Project labels ("Name — Client"), resolved once against the CURRENT project
+    // list — not whatever was current when the template was downloaded. A label
+    // that no longer resolves (project renamed/closed/added since) fails the row
+    // with "download a fresh template", same idea as a stale assignee email.
+    const { byLabel: projectByLabel } = await loadProjectLabels();
 
     // Case-insensitive email → user lookup (cached per import)
     const userByEmail = new Map();
@@ -1229,7 +1362,7 @@ const bulkUpload = async (req, res, next) => {
 
     // Fix 5 — Enum sets used for validation
     const VALID_PRIORITIES = ['low', 'medium', 'high', 'critical'];
-    const VALID_STATUSES   = ['open', 'in-progress', 'pending', 'resolved', 'closed'];
+    const VALID_STATUSES   = ['open', 'in-progress', 'pending', 'on-hold', 'resolved', 'closed'];
 
     const created = [];
     const errors  = [];
@@ -1254,7 +1387,7 @@ const bulkUpload = async (req, res, next) => {
       }
 
       // Status (optional, defaults to 'open' — resolved/closed not allowed on import)
-      const VALID_IMPORT_STATUSES = ['open', 'in-progress', 'pending'];
+      const VALID_IMPORT_STATUSES = ['open', 'in-progress', 'pending', 'on-hold'];
       const status = (r.status || 'open').toLowerCase().trim();
       if (r.status && !VALID_IMPORT_STATUSES.includes(status)) {
         errors.push({ row: idx + 1, field: 'status', msg: `Invalid status "${r.status}". Allowed: ${VALID_IMPORT_STATUSES.join(', ')}` });
@@ -1334,6 +1467,58 @@ const bulkUpload = async (req, res, next) => {
         continue;
       }
 
+      // Project (optional): dropdown LABEL → id. hd_tickets stores only the id
+      // (splitProjectRef below) — the label is never written to the database.
+      let projectRef = { projectId: null, pmProjectId: null };
+      if (r.project) {
+        const pid = projectByLabel.get(String(r.project).trim());
+        if (!pid) {
+          errors.push({ row: idx + 1, field: 'project', msg: `Project "${r.project}" not found — download a fresh template` });
+          continue;
+        }
+        projectRef = splitProjectRef(pid);
+        if (projectRef.error) { errors.push({ row: idx + 1, field: 'project', msg: projectRef.error }); continue; }
+      }
+
+      // due_date parsed here (not inside the transaction below) — the allocation
+      // check that follows needs it as the fallback end date, same as createTicket.
+      let dueDate = null;
+      if (r.due_date) {
+        const d = new Date(r.due_date);
+        if (!isNaN(d.getTime())) dueDate = d;
+      }
+
+      // Allocation (optional, TOTAL HOURS only — same as the single-ticket Create
+      // form, which always sends allocationMode:'total'). Over capacity SKIPS the
+      // row with a reason; the rest of the file still imports — same rule bulk-assign
+      // already applies on the ticket list's own bulk-assign path.
+      let alloc = { allocationHoursPerDay: null, allocationFrom: null, allocationTo: null, allocationMode: 'total', allocationTotalHours: null };
+      if (r.allocation_total_hours || r.allocation_from || r.allocation_to) {
+        let resolved;
+        try {
+          resolved = await resolveTicketAllocation(
+            {
+              allocationMode: 'total',
+              allocationTotalHours: r.allocation_total_hours,
+              // toDayStr handles both a plain string cell and a Date object (xlsx
+              // coerces a real Excel date to a JS Date) — same helper used for dueDate.
+              allocationFrom: toDayStr(r.allocation_from),
+              allocationTo:   toDayStr(r.allocation_to),
+            },
+            null,
+            { assigneeId, dueDate },
+          );
+        } catch (e) {
+          if (e instanceof AllocationConflictError) {
+            errors.push({ row: idx + 1, field: 'allocation', msg: 'Assignee would be over capacity' });
+            continue;
+          }
+          throw e;
+        }
+        if (resolved.error) { errors.push({ row: idx + 1, field: 'allocation', msg: resolved.error }); continue; }
+        alloc = resolved.values;
+      }
+
       // Wrap each row in its own short-lived transaction so generateReqNumber
       // can use SELECT FOR UPDATE, preventing concurrent-upload collisions.
       let rowTx;
@@ -1347,13 +1532,12 @@ const bulkUpload = async (req, res, next) => {
         const requestType         = VALID_REQUEST_TYPES.includes(rawRequestType.toLowerCase())
           ? rawRequestType
           : null;
+        // dueDate parsed above (before the allocation check, which needs it too)
 
-        // due_date: accept ISO strings or date values coerced by the xlsx parser
-        let dueDate = null;
-        if (r.due_date) {
-          const d = new Date(r.due_date);
-          if (!isNaN(d.getTime())) dueDate = d;
-        }
+        // status here is a built-in KEY (import only allows open/in-progress/
+        // pending/on-hold — see VALID_IMPORT_STATUSES above), not a display
+        // name, so this resolves correctly even if that status was renamed.
+        const statusOpt = await statusResolver.getBuiltInStatus(status);
 
         const ticket = await HdTicket.create({
           reqNumber,
@@ -1363,7 +1547,8 @@ const bulkUpload = async (req, res, next) => {
           priority,
           requestType,
           dueDate,
-          status,
+          status:      statusOpt.name,
+          statusId:    statusOpt.id,
           requesterId: req.hdUser.id,
           mode,
           impact,
@@ -1375,6 +1560,13 @@ const bulkUpload = async (req, res, next) => {
           widgetEmail,
           assigneeId,
           teamManagerId,
+          projectId:    projectRef.projectId,
+          pmProjectId:  projectRef.pmProjectId,
+          allocationHoursPerDay: alloc.allocationHoursPerDay,
+          allocationFrom:        alloc.allocationFrom,
+          allocationTo:          alloc.allocationTo,
+          allocationMode:        alloc.allocationMode,
+          allocationTotalHours:  alloc.allocationTotalHours,
         }, { transaction: rowTx });
 
         await rowTx.commit();
@@ -1413,7 +1605,13 @@ const bulkUpload = async (req, res, next) => {
  * Download an Excel import template with dropdown validation for all manual ticket fields.
  * Columns: title, description, category, priority, request_type, due_date, status,
  * mode, impact, urgency, site, team_manager_email, assignee_email, requester_name,
- * requester_email, billable. (raised_by_team is derived; group_name retired.)
+ * requester_email, billable, project, allocation_total_hours, allocation_from,
+ * allocation_to. (raised_by_team is derived; group_name retired.)
+ * project     — dropdown of "Name — Client" (or "— PM: Manager"); a PICKER LABEL
+ *               only, resolved back to the project's id on import — never stored as text.
+ * allocation_* — optional effort for the assignee, TOTAL HOURS mode only (matching
+ *               the single-ticket Create form); over capacity skips the row, same
+ *               as any other row error — the rest of the file still imports.
  * @type {import('express').RequestHandler}
  */
 const getImportTemplate = async (req, res, next) => {
@@ -1443,6 +1641,11 @@ const getImportTemplate = async (req, res, next) => {
       { header: 'requester_name',  key: 'requester_name',  width: 25 },
       { header: 'requester_email', key: 'requester_email', width: 28 },
       { header: 'billable',        key: 'billable',        width: 18 },
+      // Appended rather than interleaved so every DV column letter above stays valid.
+      { header: 'project',                 key: 'project',                 width: 38 },
+      { header: 'allocation_total_hours',  key: 'allocation_total_hours',  width: 20 },
+      { header: 'allocation_from',         key: 'allocation_from',         width: 16 },
+      { header: 'allocation_to',           key: 'allocation_to',           width: 16 },
     ];
 
     // Style header row
@@ -1459,6 +1662,13 @@ const getImportTemplate = async (req, res, next) => {
     let siteOpts      = [];
     let managerEmails = [];   // active users with ≥1 active direct report (same set as GET /helpdesk/teams)
     let agentEmails   = [];   // active users — for assignee_email & requester_email lookups
+    let projectLabels = [];   // "Name — Client" dropdown text; byLabel resolves it back to an id on import
+
+    try {
+      ({ labels: projectLabels } = await loadProjectLabels());
+    } catch (projErr) {
+      console.warn('[HD Template] Failed to load projects, Project column will be free text:', projErr.message);
+    }
 
     try {
       const HdOption = require('../../models/helpdesk/HdOption');
@@ -1490,7 +1700,7 @@ const getImportTemplate = async (req, res, next) => {
 
     // Fixed lists
     const priorities   = Object.values(TICKET_PRIORITY); // low, medium, high, critical
-    const statuses     = ['open', 'in-progress', 'pending'];
+    const statuses     = ['open', 'in-progress', 'pending', 'on-hold'];
     const requestTypes = ['Incident', 'Service Request'];
     const billableOpts = ['Billable', 'Non-Billable'];
 
@@ -1498,8 +1708,9 @@ const getImportTemplate = async (req, res, next) => {
     // Layout: each column = one field. Dropdowns in Import Template reference this sheet.
     //  A=category  B=priority  C=status  D=request_type  E=mode  F=impact
     //  G=urgency   H=billable  I=site    J=team_manager_email  K=assignee_email / requester_email
+    //  L=project (picker label only — never stored; see buildProjectLabels)
     const dropSheet = wb.addWorksheet('Valid Options');
-    const hdrs = ['category','priority','status','request_type','mode','impact','urgency','billable','site','team_manager_email','user_email (assignee/requester)'];
+    const hdrs = ['category','priority','status','request_type','mode','impact','urgency','billable','site','team_manager_email','user_email (assignee/requester)','project'];
     dropSheet.getRow(1).values = hdrs;
     dropSheet.getRow(1).font  = { bold: true, color: { argb: 'FFFFFFFF' } };
     dropSheet.getRow(1).fill  = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF3B82F6' } };
@@ -1517,6 +1728,7 @@ const getImportTemplate = async (req, res, next) => {
       siteOpts,
       managerEmails,
       agentEmails,
+      projectLabels,
     ];
     optCols.forEach((list, ci) => {
       list.forEach((v, ri) => { dropSheet.getCell(ri + 2, ci + 1).value = v; });
@@ -1541,6 +1753,10 @@ const getImportTemplate = async (req, res, next) => {
       requester_name:     '',
       requester_email:    '',
       billable:           'Non-Billable',
+      project:                '',
+      allocation_total_hours: '',
+      allocation_from:        '',
+      allocation_to:           '',
     });
     const exampleRow = ws.getRow(2);
     exampleRow.font = { italic: true, color: { argb: 'FF6B7280' } };
@@ -1553,6 +1769,7 @@ const getImportTemplate = async (req, res, next) => {
     // Columns: A=title B=description C=category D=priority E=request_type F=due_date
     //          G=status H=mode I=impact J=urgency K=site L=team_manager_email
     //          M=assignee_email N=requester_name(free) O=requester_email P=billable
+    //          Q=project R=allocation_total_hours(free) S=allocation_from(free) T=allocation_to(free)
 
     // Helper: register a DV range referencing a 'Valid Options' column
     const addSheetDV = (range, col, count, title, err) => {
@@ -1603,6 +1820,10 @@ const getImportTemplate = async (req, res, next) => {
     addSheetDV('O2:O502', 'K', agentEmails.length, 'Invalid Email',        'Please select an email from the list');
     // P = billable         → Valid Options col H
     addSheetDV('P2:P502', 'H', billableOpts.length,'Invalid Billable',     'Select: Billable or Non-Billable');
+    // Q = project           → Valid Options col L. Picker label only — see buildProjectLabels.
+    addSheetDV('Q2:Q502', 'L', projectLabels.length,'Invalid Project',     'Please select a project from the list');
+    // R/S/T = allocation_total_hours / allocation_from / allocation_to — free text
+    // (no fixed list, same as due_date's F column above).
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', 'attachment; filename="helpdesk-import-template.xlsx"');
@@ -1702,8 +1923,9 @@ module.exports = {
   getImportTemplate,
   exportTickets,
   requestTicketAllocationException,
-  // Shared rules (used by task.controller / tests)
+  // Shared rules (used by task.controller / hdDashboard.controller / tests)
   ticketVisibilityWhere,
+  splitProjectRef,
   resolveTeam,
   resolveTicketAllocation,
   assertTicketCapacity,

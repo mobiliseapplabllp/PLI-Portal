@@ -246,7 +246,7 @@ function DrillDown({ target, onClose }) {
                   </span>
                 </div>
                 <p className="mt-1 text-xs text-gray-500 tabular-nums">
-                  {fmtHours(totalHours)}h committed · PM {fmtHours(detail.pmHours)}h · Helpdesk {fmtHours(detail.hdHours)}h
+                  {fmtHours(totalHours)}h committed · PM {fmtHours(detail.pmHours)}h · Operations {fmtHours(detail.hdHours)}h
                   {' · '}avg {fmtHours(detail.avgHoursPerDay)}h/day
                 </p>
               </div>
@@ -318,7 +318,7 @@ function DrillDown({ target, onClose }) {
                                     : 'bg-emerald-50 text-emerald-700',
                                 ].join(' ')}
                               >
-                                {l.source === 'helpdesk' ? 'Helpdesk' : 'Project'}
+                                {l.source === 'helpdesk' ? 'Operations' : 'Project'}
                               </span>
                             </td>
                             <td className="px-4 py-2.5">

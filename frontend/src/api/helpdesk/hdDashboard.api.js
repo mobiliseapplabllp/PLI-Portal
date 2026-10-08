@@ -2,8 +2,10 @@ import api from '../axios';
 
 /**
  * Fetch overall helpdesk dashboard statistics (totals, averages, SLA).
+ * @param {{ teamManagerId?: string, assigneeId?: string }} [params] optional
+ *   dashboard filters — narrow within the caller's own visibility, never widen it.
  */
-export const getDashboardStatsApi = () => api.get('/helpdesk/dashboard/stats');
+export const getDashboardStatsApi = (params) => api.get('/helpdesk/dashboard/stats', { params });
 
 /**
  * Fetch ticket counts grouped by status.
@@ -21,7 +23,7 @@ export const getByPriorityApi = () => api.get('/helpdesk/dashboard/by-priority')
  * Legacy rows (tickets without a team manager) have teamManagerId null and
  * teamName like 'Group: <name>' or 'Unassigned'.
  */
-export const getByTeamApi = () => api.get('/helpdesk/dashboard/by-team');
+export const getByTeamApi = (params) => api.get('/helpdesk/dashboard/by-team', { params });
 
 /**
  * Fetch ticket counts grouped by legacy helpdesk group.
@@ -47,7 +49,7 @@ export const getRaisedByTeamApi = () => api.get('/helpdesk/dashboard/raised-by-t
 /**
  * Fetch per-project ticket counts.
  */
-export const getProjectStatsApi = () => api.get('/helpdesk/dashboard/project-stats');
+export const getProjectStatsApi = (params) => api.get('/helpdesk/dashboard/project-stats', { params });
 
 /**
  * Fetch ticket counts assigned to the current user.
@@ -73,3 +75,31 @@ export const getWeeklyTrendApi = () => api.get('/helpdesk/dashboard/weekly-trend
  * Fetch ticket counts broken down by mode field.
  */
 export const getModeStatsApi = () => api.get('/helpdesk/dashboard/mode-stats');
+
+/** Operations dashboard: open tickets by priority only. */
+export const getOpenByPriorityApi = (params) => api.get('/helpdesk/dashboard/by-priority', { params: { open: 1, ...params } });
+
+/** Operations dashboard card → { breached: [...], upcoming: [...] } (open tickets). */
+export const getDeadlinesApi = (params) => api.get('/helpdesk/dashboard/deadlines', { params });
+
+/** Operations dashboard: open tickets split by project billing type → { billable, nonBillable }. */
+export const getBillingTicketsApi = (params) => api.get('/helpdesk/dashboard/billing', { params });
+
+/**
+ * Download the Operations dashboard as a multi-sheet .xlsx (Summary, By Priority,
+ * By Team, By Project, Deadlines, Billing). Same filter params as the dashboard's
+ * own endpoints, so the file always matches what's currently on screen.
+ */
+export const exportDashboardApi = async (params = {}) => {
+  const res     = await api.get('/helpdesk/dashboard/export', { params, responseType: 'blob' });
+  const dateStr = new Date().toISOString().slice(0, 10);
+  const url     = URL.createObjectURL(new Blob([res.data]));
+  const a       = document.createElement('a');
+  a.href        = url;
+  a.download    = `operations-dashboard-${dateStr}.xlsx`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  return res;
+};

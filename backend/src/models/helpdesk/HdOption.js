@@ -47,6 +47,23 @@ const HdOption = sequelize.define('HdOption', {
     defaultValue: 0,
     field:        'sort_order',
   },
+  // Protects the 6 foundational ticket statuses from deletion (migration 055) —
+  // dashboard SLA/aging counts, the approval flow, and the closedAt auto-stamp
+  // hook all key off those exact string values. Admins can still add new ones.
+  isBuiltIn: {
+    type:         DataTypes.BOOLEAN,
+    defaultValue: false,
+    field:        'is_built_in',
+  },
+  // Stable identifier for the 6 foundational statuses (migration 056), never
+  // editable via the admin UI — unlike `name`, which can be freely renamed.
+  // Code that needs to know "which option IS the built-in resolved/closed
+  // slot right now" resolves through this, not through `name`.
+  builtInKey: {
+    type:      DataTypes.STRING(50),
+    allowNull: true,
+    field:     'built_in_key',
+  },
 }, {
   tableName:   'hd_options',
   underscored: true,

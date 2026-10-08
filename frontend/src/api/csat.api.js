@@ -6,6 +6,10 @@ export const getClientOrgApi       = (id)     => api.get(`/csat/client-organisat
 export const createClientOrgApi    = (data)   => api.post('/csat/client-organisations', data);
 export const updateClientOrgApi    = (id, data) => api.put(`/csat/client-organisations/${id}`, data);
 export const deleteClientOrgApi    = (id)     => api.delete(`/csat/client-organisations/${id}`);
+// Excel import — template, validate (preview, writes nothing), commit
+export const getClientOrgImportTemplateApi = () => api.get('/csat/client-organisations/import/template', { responseType: 'blob' });
+export const validateClientOrgImportApi    = (formData) => api.post('/csat/client-organisations/import/validate', formData);
+export const commitClientOrgImportApi      = (rows) => api.post('/csat/client-organisations/import/commit', { rows });
 
 // ── Surveys ───────────────────────────────────────────────────────────────────
 export const getSurveysApi   = (params) => api.get('/csat/surveys', { params });

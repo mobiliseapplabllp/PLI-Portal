@@ -6,7 +6,7 @@ import { checkProjectNameApi } from '../../api/pm/projects.api';
  * The server enforces uniqueness (409); this only warns before Save.
  * Returns { taken, message, checking }.
  */
-export function useProjectNameCheck(name, excludeId) {
+export function useProjectNameCheck(name, excludeId, clientName) {
   const [state, setState] = useState({ taken: false, message: '', checking: false });
   const seq = useRef(0);
 
@@ -16,7 +16,7 @@ export function useProjectNameCheck(name, excludeId) {
     const mine = ++seq.current;
     setState(s => ({ ...s, checking: true }));
     const t = setTimeout(() => {
-      checkProjectNameApi(clean, excludeId)
+      checkProjectNameApi(clean, excludeId, clientName)
         .then(res => {
           if (mine !== seq.current) return;
           const d = res.data?.data ?? {};
@@ -25,7 +25,7 @@ export function useProjectNameCheck(name, excludeId) {
         .catch(() => { if (mine === seq.current) setState({ taken: false, message: '', checking: false }); });
     }, 400);
     return () => clearTimeout(t);
-  }, [name, excludeId]);
+  }, [name, excludeId, clientName]);
 
   return state;
 }

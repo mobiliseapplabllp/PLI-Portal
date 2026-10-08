@@ -1,13 +1,16 @@
-import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useEffect, useState, useRef } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useSelector, useDispatch } from 'react-redux';
 import { fetchProjects } from '../../store/pmSlice';
 import {
   HiOutlinePlus, HiOutlineSearch, HiOutlineFolderOpen,
-  HiOutlineViewGrid, HiOutlineViewList, HiOutlineEye, HiX,
+  HiOutlineViewGrid, HiOutlineViewList, HiOutlineEye, HiX, HiOutlineUpload, HiOutlinePencil,
 } from 'react-icons/hi';
 import api from '../../api/axios';
 import { projectProgress } from '../../utils/pmProgress';
+import BulkImportProjectsModal from '../../components/pm/BulkImportProjectsModal';
+import SearchSelect from '../../components/common/SearchSelect';
+import { listTeamsApi, getTeamMembersApi } from '../../api/helpdesk/teams.api';
 
 // New status names (from pm_statuses config table)
 const STATUS_COLORS = {
@@ -30,6 +33,8 @@ const BILLING_TYPE_OPTIONS = ['', 'Billable', 'Non-Billable'];
 
 // Roles that can create projects — backend enforces allowedCreatorRoles from PMSettings
 const CREATOR_ROLES = ['admin', 'manager', 'senior_manager', 'md', 'director'];
+// Same rule as ProjectDetail.jsx's canManage — manager-tier role, or the project's own manager.
+const MANAGER_ROLES = ['admin', 'manager', 'senior_manager'];
 
 export default function ProjectList() {
   const dispatch = useDispatch();
@@ -39,28 +44,75 @@ export default function ProjectList() {
 
   // ── Filter state (all local, not Redux) ──────────────────────────────────────
   const [search,            setSearch]            = useState('');
-  const [statusFilter,      setStatusFilter]      = useState('');
-  const [billingFilter,     setBillingFilter]     = useState('');
-  const [projectTypeFilter, setProjectTypeFilter] = useState('');
-  const [clientFilter,      setClientFilter]      = useState('');
+  // PM dashboard drill-down links pre-set these (?status=Active&billing=Billable&
+  // client=X&projectType=Y). Read once here only as the very-first-render default —
+  // the effect below keeps them in sync on every later navigation too, since React
+  // Router reuses this same page component across same-route navigations and a
+  // useState initializer only ever runs once.
+  const [searchParams] = useSearchParams();
+  const [statusFilter,      setStatusFilter]      = useState(searchParams.get('status')  || '');
+  const [billingFilter,     setBillingFilter]     = useState(searchParams.get('billing') || '');
+  const [projectTypeFilter, setProjectTypeFilter] = useState(searchParams.get('projectType') || '');
+  const [clientFilter,      setClientFilter]      = useState(searchParams.get('client') || '');
   const [managerFilter,     setManagerFilter]     = useState('');
   const [myProjects,        setMyProjects]        = useState(false);
+  const [showBulkImport,    setShowBulkImport]    = useState(false);
+
+  // ── Team / Employee filters (mirrors PMDashboard.jsx's own Team/Employee
+  // filters, so a dashboard drill-down link lands on a list that can actually
+  // apply the same filter) ──────────────────────────────────────────────────
+  const [teams,          setTeams]          = useState([]);
+  const [teamFilter,     setTeamFilter]     = useState(searchParams.get('teamManagerId') || '');
+  const [teamMemberIds,  setTeamMemberIds]  = useState(null); // Set of ids for the selected team
+  const [teamRoster,     setTeamRoster]     = useState(null);
+  const [employeeFilter, setEmployeeFilter] = useState(searchParams.get('employeeId') || '');
+
+  // When this URL sync is about to change teamFilter, it also sets the correct
+  // employeeFilter in the SAME pass — the team-roster effect further down must
+  // not then wipe that back out just because teamFilter happened to change too.
+  const suppressEmployeeClear = useRef(false);
+
+  // Re-applies every time the URL's query params actually change (a dashboard
+  // card click while this page is already mounted doesn't remount it, so a
+  // one-time useState initializer above would miss every click after the first).
+  // A deep link "must show exactly what it names" — same rule TicketList.jsx
+  // follows — so any filter not present in the URL is cleared, not left stacked.
+  useEffect(() => {
+    if (searchParams.toString() === '') return;
+    setStatusFilter(searchParams.get('status') || '');
+    setBillingFilter(searchParams.get('billing') || '');
+    setProjectTypeFilter(searchParams.get('projectType') || '');
+    setClientFilter(searchParams.get('client') || '');
+    suppressEmployeeClear.current = true;
+    setTeamFilter(searchParams.get('teamManagerId') || '');
+    setEmployeeFilter(searchParams.get('employeeId') || '');
+  }, [searchParams]);
 
   // ── View toggle ──────────────────────────────────────────────────────────────
   const [view,        setView]        = useState('card');
   const [raidSummary, setRaidSummary] = useState({});
 
+  // /pm/projects/raid-summary is admin/manager/senior_manager-only server side.
+  // Fetching it unconditionally 403'd for every other role — including a plain
+  // employee just opening the project list — and the global axios interceptor
+  // toasts every 403 app-wide regardless of this call's own .catch (React 18
+  // StrictMode double-invokes effects in dev, hence two stacked toasts). The
+  // badge it powers (⚠ N RAID on a card) is purely informational; skipping it
+  // for non-managers loses nothing they could act on anyway.
+  const canSeeRaidSummary = ['admin', 'manager', 'senior_manager'].includes(user?.role);
   useEffect(() => {
     dispatch(fetchProjects());
-    api.get('/pm/projects/raid-summary')
-      .then(res => setRaidSummary(res.data?.data ?? {}))
-      .catch(() => {}); // non-fatal — badge just won't show
+    if (canSeeRaidSummary) {
+      api.get('/pm/projects/raid-summary')
+        .then(res => setRaidSummary(res.data?.data ?? {}))
+        .catch(() => {}); // non-fatal — badge just won't show
+    }
     // Restore last view preference from localStorage
     try {
       const saved = localStorage.getItem('pm_projects_view');
       if (saved === 'list' || saved === 'card') setView(saved);
     } catch (_) {}
-  }, [dispatch]);
+  }, [dispatch, canSeeRaidSummary]);
 
   const handleViewChange = (newView) => {
     setView(newView);
@@ -70,31 +122,85 @@ export default function ProjectList() {
   const canCreate = CREATOR_ROLES.includes(user?.role);
   const uid = String(user?._id || user?.id || '');
 
+  // Same gate as canSeeRaidSummary above — avoids the "unconditional call to a
+  // restricted route toasts Access Denied for every role" bug class this app
+  // has hit before; the Team picker is only meaningful for manager-tier roles.
+  useEffect(() => {
+    if (!canSeeRaidSummary) return;
+    listTeamsApi().then(res => setTeams(res.data?.data ?? [])).catch(() => setTeams([]));
+  }, [canSeeRaidSummary]);
+
+  // teamRoster holds the SELECTED team's actual members (employee master, via
+  // getTeamMembersApi) — same source PMDashboard.jsx's Team/Employee filters use.
+  useEffect(() => {
+    let alive = true;
+    // Only clear a previously-picked employee when the USER changes the team
+    // filter directly — not when teamFilter changed as a side effect of the
+    // URL-sync effect above, which already set the correct employeeFilter
+    // itself in that same pass (see suppressEmployeeClear).
+    if (suppressEmployeeClear.current) {
+      suppressEmployeeClear.current = false;
+    } else {
+      setEmployeeFilter('');
+    }
+    if (!teamFilter) { setTeamMemberIds(null); setTeamRoster(null); return undefined; }
+    getTeamMembersApi(teamFilter).then(res => {
+      if (!alive) return;
+      const d = res.data?.data ?? {};
+      const members = d.members || [];
+      setTeamMemberIds(new Set([teamFilter, ...members.map(m => String(m._id ?? m.id))]));
+      setTeamRoster(members.map(m => ({ id: String(m._id ?? m.id), name: m.name })).sort((a, b) => a.name.localeCompare(b.name)));
+    }).catch(() => { if (alive) { setTeamMemberIds(new Set([teamFilter])); setTeamRoster([]); } });
+    return () => { alive = false; };
+  }, [teamFilter]);
+
+  /** Every person attached to a project: PM, owner, account manager, members. */
+  const projectPeople = (p) => [p.managerId, p.ownerId, p.accountManagerId, ...(p.members || []).map(m => m.userId)]
+    .filter(Boolean).map(String);
+
+  // Team-narrowed project set, used for both the Employee dropdown's own
+  // options (picking a team scopes who you can then pick) and the actual filter.
+  const teamOnlyProjects = !teamFilter || !teamMemberIds
+    ? projects
+    : projects.filter(p => projectPeople(p).some(id => teamMemberIds.has(id)));
+
+  const employeeOptions = teamRoster ?? (() => {
+    const seen = new Map();
+    teamOnlyProjects.forEach(p => {
+      [p.projectManager, p.owner, p.accountManager].forEach(u => { if (u) seen.set(String(u._id ?? u.id), u.name); });
+      (p.members || []).forEach(m => { if (m.user) seen.set(String(m.user._id ?? m.user.id), m.user.name); });
+    });
+    return [...seen.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name));
+  })();
+
   // ── Dynamic filter options derived from loaded data ──────────────────────────
   const uniqueStatuses     = [...new Set(projects.map(p => p.status).filter(Boolean))].sort();
   const uniqueProjectTypes = [...new Set(projects.map(p => p.projectType).filter(Boolean))].sort();
   const uniqueClients      = [...new Set(projects.map(p => p.clientOrg?.name || p.clientName).filter(Boolean))].sort();
   const uniqueManagers     = [...new Set(projects.map(p => p.projectManager?.name).filter(Boolean))].sort();
 
+  const normStatus = (s) => String(s || '').trim().toLowerCase().replace(/[_-]+/g, ' ');
+
   // ── Composed filter (AND logic — all active filters must match) ──────────────
   const filtered = projects.filter(p => {
     const matchSearch  = !search            || p.name?.toLowerCase().includes(search.toLowerCase());
-    const matchStatus  = !statusFilter      || p.status === statusFilter;
+    // Legacy rows store 'active' / 'on_hold' / 'completed'; newer ones 'Active' / 'On Hold'.
+    // Compare normalised so the list agrees with the PM dashboard's counts.
+    const matchStatus  = !statusFilter      || normStatus(p.status) === normStatus(statusFilter);
     const matchBilling = !billingFilter     || p.billingType?.toLowerCase() === billingFilter.toLowerCase();
     const matchType    = !projectTypeFilter || p.projectType === projectTypeFilter;
     const matchClient  = !clientFilter      || (p.clientOrg?.name || p.clientName) === clientFilter;
     const matchManager = !managerFilter     || p.projectManager?.name === managerFilter;
-    const matchMine    = !myProjects        || (
-      String(p.managerId)        === uid ||
-      String(p.ownerId)          === uid ||
-      String(p.accountManagerId) === uid ||
-      (p.members || []).some(m => String(m.userId || '') === uid)
-    );
-    return matchSearch && matchStatus && matchBilling && matchType && matchClient && matchManager && matchMine;
+    const matchTeam     = !teamFilter       || !teamMemberIds || projectPeople(p).some(id => teamMemberIds.has(id));
+    const matchEmployee = !employeeFilter   || projectPeople(p).includes(String(employeeFilter));
+    const matchMine    = !myProjects        || projectPeople(p).includes(uid);
+    return matchSearch && matchStatus && matchBilling && matchType && matchClient && matchManager
+      && matchTeam && matchEmployee && matchMine;
   });
 
   const activeFilterCount = [
-    search, statusFilter, billingFilter, projectTypeFilter, clientFilter, managerFilter, myProjects,
+    search, statusFilter, billingFilter, projectTypeFilter, clientFilter, managerFilter,
+    teamFilter, employeeFilter, myProjects,
   ].filter(Boolean).length;
 
   const clearFilters = () => {
@@ -104,6 +210,8 @@ export default function ProjectList() {
     setProjectTypeFilter('');
     setClientFilter('');
     setManagerFilter('');
+    setTeamFilter('');
+    setEmployeeFilter('');
     setMyProjects(false);
   };
 
@@ -117,7 +225,11 @@ export default function ProjectList() {
       {projects.length === 0 ? (
         <>
           <p className="text-gray-500 font-medium">No projects yet</p>
-          <p className="text-xs text-gray-400 mt-1">Get started by creating your first project.</p>
+          <p className="text-xs text-gray-400 mt-1">
+            {canCreate
+              ? 'Get started by creating your first project.'
+              : "You'll see a project here once you're added as a team member on it."}
+          </p>
           {canCreate && (
             <button
               onClick={() => navigate('/pm/projects/create')}
@@ -183,6 +295,17 @@ export default function ProjectList() {
 
           {canCreate && (
             <button
+              onClick={() => setShowBulkImport(true)}
+              title="Bulk-import Operations projects from an Excel sheet"
+              className="flex items-center gap-2 px-4 py-2 border border-gray-200 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors"
+            >
+              <HiOutlineUpload className="w-4 h-4" />
+              Import Projects
+            </button>
+          )}
+
+          {canCreate && (
+            <button
               onClick={() => navigate('/pm/projects/create')}
               className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 transition-colors"
             >
@@ -192,6 +315,12 @@ export default function ProjectList() {
           )}
         </div>
       </div>
+
+      <BulkImportProjectsModal
+        open={showBulkImport}
+        onClose={() => setShowBulkImport(false)}
+        onImported={() => dispatch(fetchProjects())}
+      />
 
       {/* ── Filter bar ───────────────────────────────────────────────────────── */}
       <div className="flex gap-2 flex-wrap items-center">
@@ -243,6 +372,34 @@ export default function ProjectList() {
             <option key={m} value={m}>{m}</option>
           ))}
         </select>
+
+        {/* Team — manager-tier only, same gate as canSeeRaidSummary */}
+        {canSeeRaidSummary && teams.length > 0 && (
+          <div className="w-40" title="Filter by Team">
+            <SearchSelect
+              options={teams.map(t => ({ value: t._id ?? t.id, label: t.name }))}
+              value={teamFilter}
+              placeholder="All Teams"
+              onChange={v => setTeamFilter(v || '')}
+              size="md"
+              className="h-9"
+            />
+          </div>
+        )}
+
+        {/* Employee — scoped to the selected team's roster once one is picked */}
+        {canSeeRaidSummary && (
+          <div className="w-44" title={teamFilter ? "Employees in the selected team" : "All employees"}>
+            <SearchSelect
+              options={employeeOptions.map(o => ({ value: o.id, label: o.name }))}
+              value={employeeFilter}
+              placeholder={teamFilter ? 'All team members' : 'All Employees'}
+              onChange={v => setEmployeeFilter(v || '')}
+              size="md"
+              className="h-9"
+            />
+          </div>
+        )}
 
         {/* Status */}
         <select
@@ -448,6 +605,15 @@ export default function ProjectList() {
                 <div className="flex items-start justify-between mb-3">
                   <h3 className="font-semibold text-gray-900 text-base leading-tight pr-2">{p.name}</h3>
                   <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                    {(MANAGER_ROLES.includes(user?.role) || String(p.managerId) === String(user?._id || user?.id)) && (
+                      <button
+                        onClick={e => { e.stopPropagation(); navigate(`/pm/projects/${pid}?edit=1`); }}
+                        title="Edit project"
+                        className="p-1 rounded text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 transition-colors"
+                      >
+                        <HiOutlinePencil className="w-3.5 h-3.5" />
+                      </button>
+                    )}
                     {/* Status badge */}
                     <span className={`px-2 py-0.5 rounded-full text-xs font-semibold whitespace-nowrap ${STATUS_COLORS[p.status] || 'bg-gray-100 text-gray-700'}`}>
                       {p.status || '—'}

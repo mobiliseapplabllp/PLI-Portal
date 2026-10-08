@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useSelector, useDispatch } from 'react-redux';
 import { fetchProjectById, clearActiveProject } from '../../store/pmSlice';
 import toast from 'react-hot-toast';
@@ -23,6 +23,7 @@ import { getTodayLogApi } from '../../api/pm/dailyLogs.api';
 import { getUsersApi } from '../../api/users.api';
 import { getPmStatusesApi, getMemberRolesApi } from '../../api/pm/config.api';
 import api from '../../api/axios';
+import { getUserUtilisationApi } from '../../api/pm/utilisation.api';
 import { projectProgress } from '../../utils/pmProgress';
 import ResourceAvailabilityCard from '../../components/pm/ResourceAvailabilityCard';
 import AllocationApprovalPanel from '../../components/pm/AllocationApprovalPanel';
@@ -136,7 +137,7 @@ function MonthUtilChip({ cell, loading, month, compact = false }) {
   return (
     <span
       className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border text-xs font-medium whitespace-nowrap ${UTIL_BAND_CLS[band]}`}
-      title={`${monthLabel(month)} — Projects ${fmtH(cell.pmHours)}h · Helpdesk ${fmtH(cell.hdHours)}h`}
+      title={`${monthLabel(month)} — Projects ${fmtH(cell.pmHours)}h · Operations ${fmtH(cell.hdHours)}h`}
     >
       {!compact && <span className="text-[10px] uppercase tracking-wide opacity-70">{monthLabel(month)}</span>}
       <span>{fmtH(cell.totalHours)}h · {Math.round(Number(cell.totalPct) || 0)}%</span>
@@ -396,12 +397,22 @@ function ConflictPanel({ conflict, capacity, onUseRemaining, onApply, onRequestE
 export default function ProjectDetail() {
   const { id }   = useParams();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const dispatch = useDispatch();
   const { activeProject: project, projectLoading, projectError } = useSelector(s => s.pm);
   const { user } = useSelector(s => s.auth);
+  const uid = String(user?._id || user?.id || '');
+  // Declared early (moved up from further down) — a useEffect's dependency
+  // array is evaluated synchronously during render, at its call site, not
+  // inside the (later-executing) effect callback. Referencing canManage in a
+  // dependency array from BEFORE this declaration threw "Cannot access
+  // 'canManage' before initialization" (temporal dead zone), even though
+  // referencing it inside an effect BODY would have been fine via closure.
+  const canManage = MANAGER_ROLES.includes(user?.role) || (project && String(project.managerId) === String(uid));
 
   const [activeTab,     setActiveTab]     = useState('overview');
   const [allUsers,      setAllUsers]      = useState([]);
+  const [clientOrgs,    setClientOrgs]    = useState([]);
   const [pmStatuses,    setPmStatuses]    = useState([]);
   const [memberRoles,   setMemberRoles]   = useState([]);
   const [addingMember,  setAddingMember]  = useState(false);
@@ -497,16 +508,27 @@ export default function ProjectDetail() {
   }, [dispatch, id]);
 
   useEffect(() => {
-    getUsersApi({ isActive: true, limit: 200 })
-      .then(res => setAllUsers(res.data?.data?.users || res.data?.data || []))
-      .catch(() => {});
+    // getUsersApi (org-wide directory) is admin/manager/senior_manager-only server
+    // side — fetching it unconditionally 403'd for every other role, and since the
+    // axios interceptor toasts EVERY 403 app-wide regardless of how the call site
+    // handles the rejection, a plain employee saw an "Access denied" toast on every
+    // project they opened, from the very first tab, for data (the Add Member picker)
+    // they can't even use. allUsers has a safe fallback to project.members elsewhere.
+    if (canManage) {
+      getUsersApi({ isActive: true, limit: 200 })
+        .then(res => setAllUsers(res.data?.data?.users || res.data?.data || []))
+        .catch(() => {});
+      api.get('/pm/config/client-orgs')
+        .then(res => setClientOrgs(res.data?.data ?? []))
+        .catch(() => {});
+    }
     getPmStatusesApi()
       .then(res => setPmStatuses(res.data?.data || []))
       .catch(() => {});
     getMemberRolesApi()
       .then(res => setMemberRoles((res.data?.data || []).filter(r => r.isActive)))
       .catch(() => {});
-  }, []);
+  }, [canManage]);
 
   // ── Load tab-specific data ──────────────────────────────────────────────────
   useEffect(() => {
@@ -581,26 +603,51 @@ export default function ProjectDetail() {
   // for another keeps the count identical but must still trigger a re-fetch.
   }, [id, (project?.members || []).map(m => m.userId).join(',')]);
 
-  // Monthly utilisation for all team members (Team tab only). Re-runs on month
-  // change, member set change, or after any allocation mutation (utilTick).
+  // Monthly utilisation (Team tab only). Re-runs on month change, member set
+  // change, or after any allocation mutation (utilTick).
+  // GET /pm/utilisation (the team-wide grid) is MGMT_ROLES-only server side —
+  // calling it unconditionally 403'd for every other role (an "Access denied"
+  // toast every time an employee opened Team Setup — the axios interceptor
+  // toasts any 403 app-wide regardless of this call's own .catch). A non-manager
+  // gets their OWN utilisation only, via the per-user endpoint every role can
+  // call — which is also exactly "employee sees only their own allocation hours".
   const memberUserIdsKey = (project?.members || []).map(m => m.userId).join(',');
   useEffect(() => {
-    if (activeTab !== 'team' || !id || !memberUserIdsKey) return;
+    if (activeTab !== 'team' || !id) return;
+    if (canManage && !memberUserIdsKey) return;
     let cancelled = false;
     setUtilLoading(true);
-    api.get('/pm/utilisation', { params: { from: utilMonth, to: utilMonth, userIds: memberUserIdsKey } })
-      .then(res => {
+
+    const request = canManage
+      ? api.get('/pm/utilisation', { params: { from: utilMonth, to: utilMonth, userIds: memberUserIdsKey } })
+          .then(res => {
+            const data = res.data?.data || {};
+            const map = {};
+            (data.users || []).forEach(u => { map[String(u.userId)] = u.cells?.[0] || null; });
+            return { map, meta: data.months?.[0] || null };
+          })
+      : getUserUtilisationApi(uid, utilMonth)
+          .then(res => {
+            const r = res.data?.data;
+            if (!r) return { map: {}, meta: null };
+            const cell = {
+              month: utilMonth, totalHours: r.totalHours, totalPct: r.totalPct,
+              pmHours: r.pmHours, hdHours: r.hdHours, peakHoursPerDay: r.peakHoursPerDay,
+              overDays: r.overDays, isOverAllocated: r.isOverAllocated, band: r.band,
+            };
+            return { map: { [uid]: cell }, meta: null }; // no team-wide summary banner for a single person
+          });
+
+    request
+      .then(({ map, meta }) => {
         if (cancelled) return;
-        const data = res.data?.data || {};
-        const map = {};
-        (data.users || []).forEach(u => { map[String(u.userId)] = u.cells?.[0] || null; });
         setTeamUtil(map);
-        setUtilMonthMeta(data.months?.[0] || null);
+        setUtilMonthMeta(meta);
       })
       .catch(() => {}) // non-fatal — chips simply stay hidden
       .finally(() => { if (!cancelled) setUtilLoading(false); });
     return () => { cancelled = true; };
-  }, [activeTab, id, utilMonth, memberUserIdsKey, utilTick]);
+  }, [activeTab, id, utilMonth, memberUserIdsKey, utilTick, canManage, uid]);
 
   // Reload RAID when filter changes
   useEffect(() => {
@@ -610,7 +657,6 @@ export default function ProjectDetail() {
     }
   }, [raidFilter]);
 
-  const canManage = MANAGER_ROLES.includes(user?.role) || (project && String(project.managerId) === String(user?._id || user?.id));
 
   // ── Status update ───────────────────────────────────────────────────────────
   const handleStatusChange = async (status) => {
@@ -859,6 +905,15 @@ export default function ProjectDetail() {
       description:   project.description || '',
       purpose:       project.purpose || '',
       clientName:    project.clientName || '',
+      clientOrgId:   project.clientOrgId || '',
+      // The stored name is "ClientOrg - ProjectName" (same convention as Create
+      // Project) — split it so the edit form can offer the same two-field UX:
+      // a Client dropdown and a short Project Name input, recombined on save.
+      shortName: (() => {
+        const prefix = project.clientName ? `${project.clientName} - ` : null;
+        return prefix && project.name?.startsWith(prefix) ? project.name.slice(prefix.length) : (project.name || '');
+      })(),
+      managerId:     project.managerId || '',
       startDate:        project.startDate        ? project.startDate.slice(0, 10)        : '',
       endDate:          project.endDate          ? project.endDate.slice(0, 10)          : '',
       actualStartDate:  project.actualStartDate  ? project.actualStartDate.slice(0, 10)  : '',
@@ -870,12 +925,30 @@ export default function ProjectDetail() {
     });
     setShowEdit(true);
   };
+
+  // Auto-open Edit when arriving via ?edit=1 (the Project List card's Edit
+  // button) — once project is loaded and the user is actually allowed to edit
+  // it. Strips the param right after so a refresh doesn't reopen the modal.
+  useEffect(() => {
+    if (searchParams.get('edit') === '1' && project && canManage) {
+      openEdit();
+      searchParams.delete('edit');
+      setSearchParams(searchParams, { replace: true });
+    }
+  }, [project, canManage, searchParams]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const handleEditSubmit = async () => {
-    if (!editForm.name?.trim()) return toast.error('Project name is required');
+    if (!editForm.shortName?.trim()) return toast.error('Project name is required');
     setEditSaving(true);
     try {
-      // Exclude startDate / endDate (planned dates are locked after creation)
-      const { startDate, endDate, ...updatePayload } = editForm;
+      // Recombine into "ClientOrg - ProjectName" (same convention as Create
+      // Project) — shortName is a UI-only field, never sent to the API.
+      const fullName = editForm.clientOrgId
+        ? `${editForm.clientName} - ${editForm.shortName.trim()}`
+        : editForm.shortName.trim();
+      // Exclude startDate / endDate (planned dates are locked after creation) and shortName
+      const { startDate, endDate, shortName, ...rest } = editForm;
+      const updatePayload = { ...rest, name: fullName };
       await updateProjectApi(id, updatePayload);
       toast.success('Project updated');
       setShowEdit(false);
@@ -1017,11 +1090,11 @@ export default function ProjectDetail() {
     { id: 'overview',       label: 'Overview',                   icon: HiOutlineChartBar },
     { id: 'team',           label: `Team Setup (${members.length})`, icon: HiOutlineUsers },
     { id: 'project-plan',   label: 'Project Plan',               icon: HiOutlineFlag },
-    { id: 'status-reports', label: 'Status Reports',             icon: HiOutlineExclamationCircle },
-    { id: 'dailylog',       label: 'Daily Log',                  icon: HiOutlineClipboardList },
+    // { id: 'status-reports', label: 'Status Reports',             icon: HiOutlineExclamationCircle },
+    // { id: 'dailylog',       label: 'Daily Log',                  icon: HiOutlineClipboardList },
     { id: 'raid',           label: 'RAID',                       icon: HiOutlineExclamationCircle },
-    { id: 'financial',      label: 'Financial',                  icon: HiOutlineCash },
-    { id: 'closure',        label: 'Closure',                    icon: HiOutlineCheckCircle },
+    // { id: 'financial',      label: 'Financial',                  icon: HiOutlineCash },
+    // { id: 'closure',        label: 'Closure',                    icon: HiOutlineCheckCircle },
     { id: 'documents',      label: `Documents`,                  icon: HiOutlinePaperClip },
   ];
 
@@ -1725,11 +1798,15 @@ export default function ProjectDetail() {
               <button onClick={() => navigate(`/pm/projects/${id}/gantt`)} className="px-3 py-2 border border-gray-200 text-gray-600 rounded-lg text-sm hover:bg-gray-50 transition-colors">
                 Gantt View
               </button>
-              {canManage && (
-                <button onClick={() => navigate(`/pm/projects/${id}/milestones`)} className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 transition-colors">
-                  <HiOutlineFlag className="w-4 h-4" />Manage Milestones
-                </button>
-              )}
+              {/* This "Project Plan" tab is read-only — the actual editable page
+                  (Milestone Board) is what this button opens. Not canManage-gated
+                  any more: a non-manager who's accountable for a sub-milestone (or
+                  just a team member adding/removing subs) needs to reach it too —
+                  milestone.routes.js / milestone.service.js are the real gate on
+                  what they can actually do once there. */}
+              <button onClick={() => navigate(`/pm/projects/${id}/milestones`)} className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 transition-colors">
+                <HiOutlineFlag className="w-4 h-4" />{canManage ? 'Manage Milestones' : 'View Milestones'}
+              </button>
             </div>
           </div>
 
@@ -1737,7 +1814,7 @@ export default function ProjectDetail() {
             <div className="bg-white rounded-xl border border-dashed border-gray-300 p-12 text-center">
               <HiOutlineFlag className="w-10 h-10 text-gray-300 mx-auto mb-3" />
               <p className="text-gray-500 font-medium">No milestones found</p>
-              {canManage && <button onClick={() => navigate(`/pm/projects/${id}/milestones`)} className="mt-3 text-sm text-emerald-600 hover:underline">Open Milestone Manager</button>}
+              <button onClick={() => navigate(`/pm/projects/${id}/milestones`)} className="mt-3 text-sm text-emerald-600 hover:underline">Open Milestone Manager</button>
             </div>
           ) : (
             <div className="space-y-3">
@@ -2719,10 +2796,46 @@ export default function ProjectDetail() {
                 </div>
               </div>
 
-              {/* Name */}
-              <div>
-                <label className="text-xs font-medium text-gray-600 block mb-1">Project Name *</label>
-                <input value={editForm.name || ''} onChange={e => setEditForm(f => ({ ...f, name: e.target.value }))} className={inputCls} />
+              {/* Client Organisation + Project Name — same combined layout as Create Project */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-xs font-medium text-gray-600 block mb-1">Client Organisation</label>
+                  <select
+                    value={editForm.clientOrgId || ''}
+                    onChange={e => {
+                      const orgId = e.target.value;
+                      const org = clientOrgs.find(o => (o._id || o.id) === orgId);
+                      setEditForm(f => ({ ...f, clientOrgId: orgId, clientName: org?.name || '' }));
+                    }}
+                    className={inputCls}
+                  >
+                    <option value="">— None —</option>
+                    {clientOrgs.map(o => (
+                      <option key={o._id || o.id} value={o._id || o.id}>{o.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-gray-600 block mb-1">
+                    Project Name *
+                    {editForm.clientOrgId && (
+                      <span className="ml-1 font-normal text-gray-400">— prefixed with "{editForm.clientName}"</span>
+                    )}
+                  </label>
+                  <div className="flex rounded-lg border border-gray-200 overflow-hidden transition-colors focus-within:ring-2 focus-within:ring-emerald-500/20 focus-within:border-emerald-400">
+                    {editForm.clientOrgId && (
+                      <span className="flex items-center px-3 bg-gray-50 border-r border-gray-200 text-[11px] font-semibold text-gray-500 whitespace-nowrap select-none">
+                        {editForm.clientName} —
+                      </span>
+                    )}
+                    <input
+                      value={editForm.shortName || ''}
+                      onChange={e => setEditForm(f => ({ ...f, shortName: e.target.value }))}
+                      className="flex-1 h-9 px-3 text-sm bg-white text-gray-900 placeholder:text-gray-300 focus:outline-none"
+                      placeholder={editForm.clientOrgId ? 'Project name…' : 'e.g. PLI Portal Redesign 2026'}
+                    />
+                  </div>
+                </div>
               </div>
 
               {/* Description */}
@@ -2781,18 +2894,26 @@ export default function ProjectDetail() {
                 </div>
               </div>
 
-              {/* Client + Status */}
+              {/* Status */}
               <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="text-xs font-medium text-gray-600 block mb-1">Client Name</label>
-                  <input value={editForm.clientName || ''} onChange={e => setEditForm(f => ({ ...f, clientName: e.target.value }))} className={inputCls} />
-                </div>
                 <div>
                   <label className="text-xs font-medium text-gray-600 block mb-1">Status</label>
                   <select value={editForm.status || ''} onChange={e => setEditForm(f => ({ ...f, status: e.target.value }))} className={inputCls}>
                     {statusOptions.map(s => <option key={s} value={s}>{s}</option>)}
                   </select>
                 </div>
+              </div>
+
+              {/* Project Manager */}
+              <div>
+                <label className="text-xs font-medium text-gray-600 block mb-1">Project Manager</label>
+                <select value={editForm.managerId || ''} onChange={e => setEditForm(f => ({ ...f, managerId: e.target.value }))} className={inputCls}>
+                  <option value="">— Unassigned —</option>
+                  {/* Same role check as the KPI module's manager-only actions — role === 'manager' */}
+                  {allUsers.filter(u => u.role === 'manager').map(u => (
+                    <option key={u._id || u.id} value={u._id || u.id}>{u.name}</option>
+                  ))}
+                </select>
               </div>
 
               {/* Notify client */}

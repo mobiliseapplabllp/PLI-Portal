@@ -37,6 +37,7 @@ const AllocationSegment          = require('./pm/AllocationSegment');
 const PmAllocationHistory        = require('./pm/PmAllocationHistory');
 const PmFinancialDetail          = require('./pm/PmFinancialDetail');
 const PmClosure                  = require('./pm/PmClosure');
+const PmImportLog                = require('./pm/PmImportLog');
 
 // ── User ─────────────────────────────────────────────────────────────────────
 User.belongsTo(Department, { foreignKey: 'departmentId', as: 'department' });
@@ -144,6 +145,8 @@ PmRaidItem.belongsTo(User,    { foreignKey: 'ownerId',     as: 'accountableUser'
 
 PmFinancialDetail.belongsTo(Project, { foreignKey: 'projectId', as: 'project', constraints: false });
 
+PmImportLog.belongsTo(User, { foreignKey: 'importedById', as: 'importedBy', constraints: false });
+
 PmMilestoneDateLog.belongsTo(Milestone, { foreignKey: 'milestoneId', as: 'milestone', constraints: false });
 PmMilestoneDateLog.belongsTo(User,      { foreignKey: 'changedById',  as: 'changedBy', constraints: false });
 
@@ -236,6 +239,7 @@ module.exports = {
   PmProjectType, PmStatus, PmMilestoneTemplate, PmMemberRole,
   PmStatusReport, PmRaidItem, PmFinancialDetail, PmClosure,
   PmMilestoneDateLog, PmAllocationApproval, AllocationSegment, PmAllocationHistory,
+  PmImportLog,
   // CSAT
   ClientOrganisation, ClientEmployee, Survey, SurveyQuestion,
   SurveyDispatch, SurveyRecipient, SurveyResponse,

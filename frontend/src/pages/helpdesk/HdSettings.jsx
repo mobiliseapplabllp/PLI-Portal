@@ -58,7 +58,7 @@ const MENU_ITEMS = [
   {
     id: 'customization', label: 'Customization', icon: HiOutlineColorSwatch,
     items: [
-      { id: 'helpdesk',          label: 'Helpdesk' },
+      { id: 'helpdesk',          label: 'Operations' },
       { id: 'additional-fields', label: 'Additional Fields' },
       { id: 'checklists',        label: 'Checklists' },
       { id: 'announcement',      label: 'Announcement' },
@@ -84,7 +84,7 @@ const MENU_ITEMS = [
 
 const OPTION_TABS = [
   { key: 'category',        label: 'Category' },
-  { key: 'status',          label: 'Status',       readOnly: true },  // DB ENUM — cannot be changed via UI
+  { key: 'status',          label: 'Status' },  // admin-configurable (migration 055) — built-in values are protected per-row
   { key: 'level',           label: 'Level' },
   { key: 'mode',            label: 'Mode' },
   { key: 'impact',          label: 'Impact' },
@@ -110,13 +110,13 @@ function InstanceSettings() {
     <div className="space-y-6">
       <div>
         <h2 className="text-base font-semibold text-gray-800">Instance Configuration</h2>
-        <p className="text-sm text-gray-500 mt-1">Current environment details for this PLI Portal helpdesk instance.</p>
+        <p className="text-sm text-gray-500 mt-1">Current environment details for this PLI Portal operations instance.</p>
       </div>
       <div className="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100 text-sm">
         {[
           ['Environment',   'UAT (pli_portal_uat)'],
           ['Backend Port',  '5105'],
-          ['Version',       'PLI Portal Helpdesk v1.0'],
+          ['Version',       'PLI Portal Operations v1.0'],
           ['Database',      'MySQL 8 · pli_portal_uat'],
           ['Auth',          'JWT (PLI Portal users)'],
         ].map(([k, v]) => (
@@ -158,14 +158,14 @@ function MailServerSettings() {
     <div className="space-y-4">
       <div>
         <h2 className="text-base font-semibold text-gray-800">Mail Server Settings</h2>
-        <p className="text-sm text-gray-500 mt-0.5">Outgoing SMTP configuration for helpdesk email notifications.</p>
+        <p className="text-sm text-gray-500 mt-0.5">Outgoing SMTP configuration for operations email notifications.</p>
       </div>
       <form onSubmit={handleSave} className="bg-white rounded-lg border border-gray-200 p-5 space-y-4 max-w-lg">
         {field('SMTP Host',      'host', 'text', 'mail.example.com')}
         {field('SMTP Port',      'port', 'text', '587')}
         {field('Username',       'user', 'text', 'noreply@example.com')}
         {field('Password',       'pass', 'password', '••••••••')}
-        {field('From Address',   'from', 'text', 'Helpdesk <noreply@example.com>')}
+        {field('From Address',   'from', 'text', 'Operations <noreply@example.com>')}
         <div className="flex items-center gap-2">
           <input type="checkbox" checked={!!form.secure} onChange={e => setForm(f => ({ ...f, secure: e.target.checked }))}
             id="smtp-secure" className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500" />
@@ -324,7 +324,7 @@ function HelpdeskCustomization() {
   return (
     <div className="space-y-4">
       <div>
-        <h2 className="text-base font-semibold text-gray-800">Helpdesk Customization</h2>
+        <h2 className="text-base font-semibold text-gray-800">Operations Customization</h2>
         <p className="text-sm text-gray-500 mt-0.5">Manage dropdown options available on ticket forms.</p>
       </div>
       <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
@@ -428,11 +428,16 @@ function HelpdeskCustomization() {
                       <tr key={itemId} className="hover:bg-gray-50 transition-colors">
                         <td className="px-4 py-2 font-medium text-gray-900">
                           <span className="text-gray-400 mr-1.5">▸</span>{item.name}
+                          {item.isBuiltIn && (
+                            <span className="ml-2 text-[9px] text-gray-400 font-normal bg-gray-100 border border-gray-200 px-1.5 py-0.5 rounded-full align-middle">
+                              built-in
+                            </span>
+                          )}
                         </td>
                         <td className="px-4 py-2 text-gray-500">{item.description || '—'}</td>
                         <td className="px-4 py-2">
-                          {isReadOnly ? (
-                            <span className="text-xs text-gray-300">—</span>
+                          {isReadOnly || item.isBuiltIn ? (
+                            <span className="text-xs text-gray-300" title={item.isBuiltIn ? 'Built-in — used by ticket workflow logic, cannot be removed' : undefined}>—</span>
                           ) : (
                             <button onClick={() => handleDelete(itemId, item.name)} disabled={deletingId === itemId}
                               className="text-red-500 hover:text-red-700 disabled:opacity-40">
@@ -631,7 +636,7 @@ function AdvancedPortalSettings() {
     <div className="space-y-4">
       <div>
         <h2 className="text-base font-semibold text-gray-800">Advanced Portal Settings</h2>
-        <p className="text-sm text-gray-500 mt-0.5">Fine-tune helpdesk portal behaviour.</p>
+        <p className="text-sm text-gray-500 mt-0.5">Fine-tune operations portal behaviour.</p>
       </div>
       <div className="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100 max-w-lg">
         {rows.map(([key, label]) => (
@@ -682,7 +687,7 @@ function ZiaSettings() {
     <div className="space-y-4">
       <div>
         <h2 className="text-base font-semibold text-gray-800">Zia — AI Assistant</h2>
-        <p className="text-sm text-gray-500 mt-0.5">Enable AI-powered features to improve helpdesk efficiency.</p>
+        <p className="text-sm text-gray-500 mt-0.5">Enable AI-powered features to improve operations efficiency.</p>
       </div>
       <div className="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100 max-w-lg">
         {rows.map(([key, label]) => (
@@ -711,10 +716,10 @@ function AnnouncementLink() {
     <div className="space-y-4">
       <div>
         <h2 className="text-base font-semibold text-gray-800">Announcements</h2>
-        <p className="text-sm text-gray-500 mt-0.5">Publish notices visible to all helpdesk users.</p>
+        <p className="text-sm text-gray-500 mt-0.5">Publish notices visible to all operations users.</p>
       </div>
       <div className="bg-white rounded-lg border border-gray-200 p-6 flex items-center justify-between max-w-lg">
-        <p className="text-sm text-gray-700">Manage helpdesk announcements</p>
+        <p className="text-sm text-gray-700">Manage operations announcements</p>
         <button onClick={() => navigate('/helpdesk/announcements')}
           className="flex items-center gap-2 px-4 py-2 bg-[#2196f3] text-white rounded-lg text-sm font-medium hover:bg-[#1976d2] transition-colors">
           <HiOutlineExternalLink className="w-4 h-4" /> Open
@@ -856,7 +861,7 @@ export default function HdSettings() {
     return (
       <div className="flex flex-col items-center justify-center py-24 text-center">
         <p className="text-lg font-semibold text-gray-700">Access Denied</p>
-        <p className="text-sm text-gray-400 mt-2">You do not have permission to view Helpdesk Settings.</p>
+        <p className="text-sm text-gray-400 mt-2">You do not have permission to view Operations Settings.</p>
       </div>
     );
   }

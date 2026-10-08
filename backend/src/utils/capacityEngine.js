@@ -102,6 +102,26 @@ function activeOn(alloc, date) {
 }
 
 /**
+ * Hours ONE allocation puts on one working day.
+ * 'total' mode uses the exact total ÷ working days of its window. The stored
+ * hoursPerDay is rounded to 0.1 for display (100h over 38 days → 2.6), and
+ * summing 2.6 × 38 = 98.8 would silently lose 1.2h of what the user typed.
+ * Memoised per allocation object (the window's working-day count is a day loop).
+ */
+const exactDayHours = new WeakMap();
+function dayHoursOf(a, cal) {
+  const total = a.allocationTotalHours == null ? null : Number(a.allocationTotalHours);
+  if (a.allocationMode === 'total' && total > 0 && a.allocationFrom && a.allocationTo) {
+    if (!exactDayHours.has(a)) {
+      const wd = workingDaysBetween(a.allocationFrom, a.allocationTo, cal);
+      exactDayHours.set(a, wd > 0 ? total / wd : Number(a.hoursPerDay));
+    }
+    return exactDayHours.get(a);
+  }
+  return Number(a.hoursPerDay);
+}
+
+/**
  * Daily load across a window, working days only.
  * Returns [{ date, hours, allocations }].
  */
@@ -116,7 +136,7 @@ function dailyLoad(allocations, from, to, calendar) {
     const active = allocations.filter(a => a.hoursPerDay != null && activeOn(a, d));
     out.push({
       date: iso(d),
-      hours: Math.round(active.reduce((s, a) => s + Number(a.hoursPerDay), 0) * 10) / 10,
+      hours: Math.round(active.reduce((s, a) => s + dayHoursOf(a, cal), 0) * 10) / 10,
       allocations: active,
     });
   }
@@ -162,7 +182,7 @@ const MIN_FIT_RUN = 5;
  */
 function suggestFixes(existing, proposed, cal, { load, peak, remaining }) {
   const cap   = cal.hoursPerDay;
-  const hours = Number(proposed.hoursPerDay);
+  const hours = dayHoursOf(proposed, cal);
   const overloadHours = Math.max(0, Math.round((peak - cap) * 10) / 10);
 
   const firstOverIdx = load.findIndex(d => d.hours > cap + 0.001);
@@ -282,7 +302,7 @@ function monthBreakdown(allocations, year, month, calendar) {
     if (!isWorkingDay(d, cal)) continue;
     let dayHours = 0;
     for (const a of active) {
-      if (activeOn(a, d)) { perAlloc.get(a).days++; dayHours += Number(a.hoursPerDay); }
+      if (activeOn(a, d)) { perAlloc.get(a).days++; dayHours += dayHoursOf(a, cal); }
     }
     daily.push({ date: iso(d), hours: Math.round(dayHours * 10) / 10 });
   }
@@ -291,7 +311,7 @@ function monthBreakdown(allocations, year, month, calendar) {
     .map(a => {
       const days = perAlloc.get(a).days;
       if (!days) return null;                                         // not active this month
-      const hours = Math.round(days * Number(a.hoursPerDay) * 10) / 10;
+      const hours = Math.round(days * dayHoursOf(a, cal) * 10) / 10;
       return {
         ...a,
         hoursPerDay: Number(a.hoursPerDay),

@@ -44,7 +44,7 @@ import api from '../../api/axios';
 import {
   getProjectTypesApi, createProjectTypeApi, updateProjectTypeApi, deleteProjectTypeApi,
   getPmStatusesApi, createPmStatusApi, updatePmStatusApi, deletePmStatusApi,
-  getMilestoneTemplatesApi, createMilestoneTemplateApi, updateMilestoneTemplateApi,
+  getMilestoneTemplatesApi, createMilestoneTemplateApi, updateMilestoneTemplateApi, copyMilestoneTemplatesApi,
   deleteMilestoneTemplateApi, validateTemplateRangesApi,
   getMemberRolesApi, createMemberRoleApi, updateMemberRoleApi, deleteMemberRoleApi,
   getCalendarApi, updateCalendarApi, getCalendarPreviewApi,
@@ -53,6 +53,9 @@ import {
 } from '../../api/pm/config.api';
 import {
   getClientOrgsApi, createClientOrgApi, updateClientOrgApi, deleteClientOrgApi,
+} from '../../api/csat.api';
+import ClientOrgImportModal from '../../components/csat/ClientOrgImportModal';
+import {
   getClientEmployeesApi, createClientEmployeeApi, deleteClientEmployeeApi,
 } from '../../api/csat.api';
 import { getUsersApi } from '../../api/users.api';
@@ -67,7 +70,7 @@ const TABS = [
   { label: 'Scheduler',            icon: HiOutlineClock },
   { label: 'Working Calendar',     icon: HiOutlineCalendar },
   { label: 'Client Orgs',          icon: HiOutlineOfficeBuilding },
-  { label: 'Email Alerts',         icon: HiOutlineMail },
+  // { label: 'Email Alerts',         icon: HiOutlineMail },
   { label: 'Member Roles',         icon: HiOutlineUserGroup },
 ];
 
@@ -719,13 +722,53 @@ function MilestoneTemplatesTab() {
   const [templates,     setTemplates]     = useState([]);
   const [projectTypes,  setProjectTypes]  = useState([]);
   const [loading,       setLoading]       = useState(true);
-  const [selectedType,  setSelectedType]  = useState('');
+  // Selection is tracked by ID, not name — a project type's NAME can change (and
+  // its templates follow it via projectTypeId, see migration 052), so filtering
+  // by a name string would silently show nothing the moment that name is stale.
+  // Persisted to localStorage (same pattern as the project list's view toggle) so
+  // switching tabs — which unmounts/remounts this component — doesn't reset back
+  // to "whichever type happens to sort first", which looked like "my templates
+  // disappeared" right after renaming the one you were just looking at.
+  const [selectedTypeId, setSelectedTypeId] = useState(() => {
+    try { return localStorage.getItem('pm_milestone_tpl_selected_type_id') || null; } catch { return null; }
+  });
+  const selectedType = projectTypes.find(pt => String(getId(pt)) === String(selectedTypeId))?.name || '';
+  const setSelectedType = (typeId) => {
+    setSelectedTypeId(typeId);
+    try { localStorage.setItem('pm_milestone_tpl_selected_type_id', typeId || ''); } catch {}
+  };
   const [validation,    setValidation]    = useState({});       // { [typeName]: { valid, message, ... } }
   const [addForm,       setAddForm]       = useState({ projectType: '', name: '', minPct: '', maxPct: '', sortOrder: 0 });
   const [adding,        setAdding]        = useState(false);
   const [editId,        setEditId]        = useState(null);
   const [editData,      setEditData]      = useState({});
   const typeInitialized                   = useRef(false);
+  const { user } = useSelector(s => s.auth);
+  const isAdmin  = user?.role === 'admin';
+  const [copyFrom, setCopyFrom] = useState('');
+  const [copying,  setCopying]  = useState(false);
+
+  // Replace the selected type's template with an exact copy of another type's
+  const handleCopyTemplates = async () => {
+    if (!copyFrom || !selectedType || copyFrom === selectedType) return;
+    const copyFromId = projectTypes.find(pt => pt.name === copyFrom) ? getId(projectTypes.find(pt => pt.name === copyFrom)) : null;
+    const fromCount = templates.filter(t => String(t.projectTypeId) === String(copyFromId)).length;
+    const toCount   = templates.filter(t => String(t.projectTypeId) === String(selectedTypeId)).length;
+    if (!window.confirm(
+      `Replace "${selectedType}" milestones with a copy of "${copyFrom}"?\n\n` +
+      `${toCount} existing milestone(s) of ${selectedType} will be replaced by ${fromCount} from ${copyFrom}.\n` +
+      'Only projects created from now on use the new milestones — existing projects are not changed.'
+    )) return;
+    setCopying(true);
+    try {
+      const res = await copyMilestoneTemplatesApi(copyFrom, selectedType);
+      toast.success(res.data?.message || 'Milestone template copied');
+      setCopyFrom('');
+      await load();
+    } catch (err) {
+      toast.error(err?.response?.data?.message || err?.response?.data?.error?.message || 'Failed to copy template');
+    } finally { setCopying(false); }
+  };
 
   const sensors = useSensors(
     useSensor(PointerSensor),
@@ -738,7 +781,7 @@ function MilestoneTemplatesTab() {
 
     // Build the current ordered list for this type only
     const typeTemplates = templates
-      .filter(t => t.projectType === selectedType)
+      .filter(t => String(t.projectTypeId) === String(selectedTypeId))
       .slice()
       .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
 
@@ -784,13 +827,16 @@ function MilestoneTemplatesTab() {
 
   useEffect(() => { load(); }, [load]);
 
-  // Set default selected type once, after project types load
+  // Set default selected type once, after project types load — prefer a
+  // selection restored from localStorage (still exists as a CURRENT type, since
+  // it's tracked by id) over just picking whichever type happens to sort first.
   useEffect(() => {
     if (!typeInitialized.current && projectTypes.length > 0) {
       typeInitialized.current = true;
-      const firstName = projectTypes[0].name;
-      setSelectedType(firstName);
-      setAddForm(p => ({ ...p, projectType: firstName }));
+      const restored = projectTypes.find(pt => String(getId(pt)) === String(selectedTypeId));
+      const chosen = restored || projectTypes[0];
+      setSelectedType(getId(chosen));
+      setAddForm(p => ({ ...p, projectType: chosen.name }));
     }
   }, [projectTypes]);
 
@@ -811,7 +857,7 @@ function MilestoneTemplatesTab() {
   }, [selectedType, templates, validateType]);
 
   const filteredTemplates = templates
-    .filter(t => t.projectType === selectedType)
+    .filter(t => String(t.projectTypeId) === String(selectedTypeId))
     .slice()
     .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
 
@@ -963,10 +1009,10 @@ function MilestoneTemplatesTab() {
           {projectTypes.map(pt => (
             <button
               key={getId(pt)}
-              onClick={() => setSelectedType(pt.name)}
+              onClick={() => { setSelectedType(getId(pt)); setAddForm(p => ({ ...p, projectType: pt.name })); }}
               className={[
                 'px-3 py-1.5 rounded-lg text-xs font-medium border transition-all',
-                selectedType === pt.name
+                String(selectedTypeId) === String(getId(pt))
                   ? 'border-emerald-500 bg-emerald-50 text-emerald-700'
                   : 'border-gray-200 bg-white text-gray-500 hover:border-gray-300 hover:text-gray-700',
               ].join(' ')}
@@ -978,6 +1024,34 @@ function MilestoneTemplatesTab() {
       )}
 
       {/* Validation badge */}
+      {selectedType && isAdmin && (
+        <div className="flex flex-wrap items-center gap-2 px-4 py-2.5 rounded-xl border border-gray-200 bg-white text-sm w-fit">
+          <span className="text-gray-600">Copy milestones from</span>
+          <select
+            value={copyFrom}
+            onChange={e => setCopyFrom(e.target.value)}
+            className="border border-gray-200 rounded-lg px-2 py-1 text-sm"
+          >
+            <option value="">Select project type…</option>
+            {projectTypes
+              .filter(pt => String(getId(pt)) !== String(selectedTypeId) && templates.some(t => String(t.projectTypeId) === String(getId(pt))))
+              .map(pt => (
+                <option key={pt.name} value={pt.name}>
+                  {pt.name} ({templates.filter(t => String(t.projectTypeId) === String(getId(pt))).length})
+                </option>
+              ))}
+          </select>
+          <span className="text-gray-600">into <strong>{selectedType}</strong></span>
+          <button
+            onClick={handleCopyTemplates}
+            disabled={!copyFrom || copying}
+            className="px-3 py-1 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:opacity-50"
+          >
+            {copying ? 'Copying…' : 'Apply'}
+          </button>
+        </div>
+      )}
+
       {selectedType && (
         <div
           className={[
@@ -1133,12 +1207,14 @@ function SchedulerTab() {
   const [saving,    setSaving]    = useState(false);
   const [triggering,setTriggering]= useState(false);
   const [ccInput,   setCcInput]   = useState('');     // for adding a CC email
+  const [projectTypes, setProjectTypes] = useState([]);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const r = await api.get('/pm/settings');
+      const [r, ptRes] = await Promise.all([api.get('/pm/settings'), getProjectTypesApi()]);
       const s = r.data.data ?? r.data ?? {};
+      setProjectTypes(ptRes.data.data ?? ptRes.data ?? []);
       setForm({
         dailyReportEnabled:         s.dailyReportEnabled         ?? true,
         dailyReportTime:            s.dailyReportTime             ?? '09:00',
@@ -1153,6 +1229,7 @@ function SchedulerTab() {
           ? s.exceptionApproverRoles
           : ['admin'],
         exceptionMaxHoursPerDay:    Number(s.exceptionMaxHoursPerDay) > 0 ? Number(s.exceptionMaxHoursPerDay) : 12,
+        defaultBulkImportProjectTypeId: s.defaultBulkImportProjectTypeId ?? '',
       });
     } catch {
       toast.error('Failed to load scheduler settings');
@@ -1326,22 +1403,22 @@ function SchedulerTab() {
         </div>
       </div>
 
-      {/* Helpdesk Daily Report */}
+      {/* Operations Daily Report */}
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
         <div className="px-5 py-4 border-b border-gray-100 bg-gray-50">
           <h3 className="text-sm font-semibold text-gray-800 flex items-center gap-2">
             <HiOutlineClock className="w-4 h-4 text-emerald-600" />
-            Helpdesk Daily Report
+            Operations Daily Report
           </h3>
           <p className="text-xs text-gray-500 mt-0.5">
-            Automated email with daily helpdesk activity summary.
+            Automated email with daily operations activity summary.
           </p>
         </div>
         <div className="px-5 py-5 space-y-5">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium text-gray-700">Enable Helpdesk Daily Report</p>
-              <p className="text-xs text-gray-400 mt-0.5">Sends a daily helpdesk activity summary</p>
+              <p className="text-sm font-medium text-gray-700">Enable Operations Daily Report</p>
+              <p className="text-xs text-gray-400 mt-0.5">Sends a daily operations activity summary</p>
             </div>
             <Toggle
               checked={form.helpdeskDailyReportEnabled}
@@ -1443,6 +1520,29 @@ function SchedulerTab() {
               {EXCEPTION_CAP_MIN}–{EXCEPTION_CAP_MAX} in 0.5 steps. No exception may request more than this per day.
             </p>
           </div>
+        </div>
+      </div>
+
+      {/* Bulk import defaults */}
+      <div className="bg-white rounded-xl border border-gray-200 p-4">
+        <p className="text-sm font-semibold text-gray-700 mb-3">Bulk Project Import</p>
+        <div>
+          <label className="text-xs font-medium text-gray-600 block mb-1">
+            Default project type for imported (Operations) projects
+          </label>
+          <select
+            value={form.defaultBulkImportProjectTypeId}
+            onChange={e => setF('defaultBulkImportProjectTypeId', e.target.value || null)}
+            className={`${inputCls} w-72`}
+          >
+            <option value="">None</option>
+            {projectTypes.map(pt => (
+              <option key={getId(pt)} value={getId(pt)}>{pt.name}</option>
+            ))}
+          </select>
+          <p className="text-xs text-gray-400 mt-1">
+            Every project created by the "Import Projects" bulk upload is Operations-only and gets tagged with this type.
+          </p>
         </div>
       </div>
 
@@ -2140,6 +2240,7 @@ function ClientOrgsTab() {
   const [orgs,    setOrgs]    = useState([]);
   const [page,    setPage]    = useState(1);
   const [pages,   setPages]   = useState(1);
+  const [showOrgImport, setShowOrgImport] = useState(false);
   const [search,  setSearch]  = useState('');
   const [loading, setLoading] = useState(true);
 
@@ -2161,7 +2262,9 @@ function ClientOrgsTab() {
   const load = useCallback(async (p, q) => {
     setLoading(true);
     try {
-      const r = await getClientOrgsApi({ search: q, page: p, limit: 15, isActive: true });
+      // Show all orgs by default (was 15/page, forcing pagination clicks to see
+      // the rest) — 500 comfortably covers real-world client org counts.
+      const r = await getClientOrgsApi({ search: q, page: p, limit: 500, isActive: true });
       const d = r.data?.data ?? {};
       setOrgs(Array.isArray(d) ? d : (d.rows ?? d.docs ?? []));
       setPages(d.pages ?? d.totalPages ?? 1);
@@ -2295,6 +2398,14 @@ function ClientOrgsTab() {
         />
         {isAdmin && (
           <button
+            onClick={() => setShowOrgImport(true)}
+            className="px-4 py-2 border border-emerald-300 text-emerald-700 text-sm font-medium rounded-lg hover:bg-emerald-50 transition-colors whitespace-nowrap"
+          >
+            Import Excel
+          </button>
+        )}
+        {isAdmin && (
+          <button
             onClick={openCreate}
             className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 text-white text-sm font-medium rounded-lg hover:bg-emerald-700 transition-colors whitespace-nowrap"
           >
@@ -2303,6 +2414,13 @@ function ClientOrgsTab() {
           </button>
         )}
       </div>
+
+      {/* Same client organisations + same importer as CSAT → Client Organisations */}
+      <ClientOrgImportModal
+        open={showOrgImport}
+        onClose={() => setShowOrgImport(false)}
+        onImported={() => { setPage(1); load(1, search); }}
+      />
 
       {/* Table */}
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">

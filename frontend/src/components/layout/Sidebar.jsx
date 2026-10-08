@@ -164,8 +164,8 @@ const kpiNavItems = {
 // ── Shared building blocks ────────────────────────────────────────────────────
 const opsBaseChildren = [
   { to: '/helpdesk/tickets',        label: 'Tickets',        icon: HiOutlineTicket },
-  { to: '/helpdesk/knowledge-base', label: 'Knowledge Base', icon: HiOutlineBookOpen },
-  { to: '/helpdesk/announcements',  label: 'Announcements',  icon: HiOutlineSpeakerphone },
+  // { to: '/helpdesk/knowledge-base', label: 'Knowledge Base', icon: HiOutlineBookOpen },
+  // { to: '/helpdesk/announcements',  label: 'Announcements',  icon: HiOutlineSpeakerphone },
 ];
 const opsFullChildren = [
   ...opsBaseChildren,
@@ -424,11 +424,11 @@ const pmNavItems = {
 
 // ── Helpdesk Nav Items (KPI module only — unchanged) ─────────────────────────
 const hdBaseItems = [
-  { section: 'Helpdesk' },
+  { section: 'Operations Management' },
   { to: '/helpdesk/dashboard',     label: 'Dashboard',     icon: HiOutlineHome },
   { to: '/helpdesk/tickets',        label: 'Tickets',       icon: HiOutlineTicket },
-  { to: '/helpdesk/knowledge-base', label: 'Knowledge Base', icon: HiOutlineBookOpen },
-  { to: '/helpdesk/announcements',  label: 'Announcements', icon: HiOutlineSpeakerphone },
+  // { to: '/helpdesk/knowledge-base', label: 'Knowledge Base', icon: HiOutlineBookOpen },
+  // { to: '/helpdesk/announcements',  label: 'Announcements', icon: HiOutlineSpeakerphone },
 ];
 
 const hdWithGroups = [
@@ -475,16 +475,33 @@ export default function Sidebar({ collapsed, onToggle, onNavClick }) {
     return () => { alive = false; };
   }, [isAdmin]);
 
-  if (!user) return null;
-
   const navMap = activeModule === 'pm' ? pmNavItems : kpiNavItems;
-  const items = navMap[user.role] || navMap.employee || [];
-  const roleConfig = ROLE_CONFIG[user.role] || ROLE_CONFIG.employee;
+  const items = navMap[user?.role] || navMap.employee || [];
+  const roleConfig = ROLE_CONFIG[user?.role] || ROLE_CONFIG.employee;
 
-  const toggleMenu = (label) => setOpenMenus((prev) => ({ ...prev, [label]: !prev[label] }));
+  // Accordion: opening a section replaces openMenus wholesale, so it's the ONLY
+  // entry left standing — every other section closes as a side effect, not by
+  // being individually told to. Clicking the already-open section collapses it
+  // (back to {}, nothing open).
+  const toggleMenu = (label) => setOpenMenus((prev) => (prev[label] ? {} : { [label]: true }));
 
   const isChildActive = (children) =>
     children.some((c) => location.pathname === c.to.split('?')[0]);
+
+  // Whichever section the current route falls under becomes the one open
+  // section — same accordion rule as toggleMenu, so navigating to a link
+  // inside a different section closes whatever was open before, and landing
+  // on a fresh page (reload/deep link) opens the right section automatically.
+  useEffect(() => {
+    const active = items.find((item) => item.children && isChildActive(item.children));
+    // Landing on a plain link (no submenu) still has to collapse whatever
+    // section was open — `active` is undefined then, and doing nothing here
+    // left the PREVIOUS section's state untouched, so it kept showing open.
+    setOpenMenus(active ? { [active.label]: true } : {});
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.pathname, activeModule, user?.role]);
+
+  if (!user) return null;
 
   const linkClass = (isActive) =>
     `flex items-center ${collapsed ? 'justify-center' : 'gap-3'} px-4 py-2.5 rounded-lg text-sm font-medium transition-colors ${

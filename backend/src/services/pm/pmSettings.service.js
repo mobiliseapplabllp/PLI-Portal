@@ -128,6 +128,7 @@ const ALLOWED_FIELDS = [
   'emailAlertOnRaidRaised', 'helpdeskDailyReportEnabled', 'helpdeskDailyReportTime',
   'workingHoursPerDay', 'workingSaturdays',
   'exceptionApproverRoles', 'exceptionMaxHoursPerDay',
+  'defaultBulkImportProjectTypeId',
 ];
 
 const updateSettings = async (data) => {

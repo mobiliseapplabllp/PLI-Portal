@@ -14,6 +14,8 @@ export const deletePmStatusApi           = (id)       => api.delete('/pm/config/
 
 // ── Milestone Templates ───────────────────────────────────────────────────────
 export const getMilestoneTemplatesApi    = ()         => api.get('/pm/config/milestone-templates');
+/** Replace toType's template with an exact copy of fromType's (admin only). */
+export const copyMilestoneTemplatesApi   = (fromType, toType) => api.post('/pm/config/milestone-templates/copy', { fromType, toType });
 export const createMilestoneTemplateApi  = (data)     => api.post('/pm/config/milestone-templates', data);
 export const updateMilestoneTemplateApi  = (id, data) => api.put('/pm/config/milestone-templates/' + id, data);
 export const deleteMilestoneTemplateApi  = (id)       => api.delete('/pm/config/milestone-templates/' + id);

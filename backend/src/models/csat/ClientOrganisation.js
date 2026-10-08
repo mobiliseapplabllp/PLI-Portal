@@ -15,6 +15,8 @@ const ClientOrganisation = sequelize.define(
     managedById: { type: DataTypes.UUID, allowNull: true },
     isActive: { type: DataTypes.BOOLEAN, defaultValue: true },
     createdById: { type: DataTypes.UUID, allowNull: true },
+    // Set only when created by the bulk import feature (migration 054).
+    importBatchId: { type: DataTypes.UUID, allowNull: true },
   },
   {
     tableName: 'client_organisations',

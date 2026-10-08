@@ -11,9 +11,9 @@ const User = require('../../models/User');
 const { sendSuccess, sendError }     = require('../../utils/response');
 const { NotFoundError, ForbiddenError } = require('../../utils/errors');
 const { sendEmail }      = require('../../utils/emailService');
+const statusResolver     = require('../../services/helpdesk/statusResolver.service');
 
 const { APPROVAL_STATUS }       = HdTicketApproval;
-const { TICKET_STATUS }         = HdTicket;
 const PORTAL_BASE_URL           = process.env.PORTAL_BASE_URL || 'http://localhost:3000';
 
 // â”€â”€â”€ Controllers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -128,10 +128,14 @@ const respondApproval = async (req, res, next) => {
     if (approval.status !== APPROVAL_STATUS.PENDING)
       return sendError(res, 'This approval request has already been acted upon', 409);
 
-    // Block if the parent ticket is already closed or resolved
-    const ticketCheck = await HdTicket.findByPk(approval.ticketId, { attributes: ['id', 'status'] });
-    if (ticketCheck && ['closed', 'resolved'].includes(ticketCheck.status)) {
-      return sendError(res, 'The ticket has already been closed', 409);
+    // Block if the parent ticket is already closed or resolved — by statusId
+    // against the built-in keys, not a literal string comparison.
+    const ticketCheck = await HdTicket.findByPk(approval.ticketId, { attributes: ['id', 'statusId'] });
+    if (ticketCheck) {
+      const closedIds = await statusResolver.getClosedStatusIds();
+      if (closedIds.includes(ticketCheck.statusId)) {
+        return sendError(res, 'The ticket has already been closed', 409);
+      }
     }
 
     const newStatus = action === 'approve' ? APPROVAL_STATUS.APPROVED : APPROVAL_STATUS.REJECTED;
@@ -145,11 +149,10 @@ const respondApproval = async (req, res, next) => {
     // Update ticket status accordingly
     const ticket = await HdTicket.findByPk(approval.ticketId);
     if (ticket) {
-      if (newStatus === APPROVAL_STATUS.APPROVED) {
-        ticket.status = TICKET_STATUS.IN_PROGRESS;
-      } else {
-        ticket.status = TICKET_STATUS.PENDING;
-      }
+      const targetKey = newStatus === APPROVAL_STATUS.APPROVED ? 'in-progress' : 'pending';
+      const targetOpt = await statusResolver.getBuiltInStatus(targetKey);
+      ticket.status   = targetOpt.name;
+      ticket.statusId = targetOpt.id;
       await ticket.save();
     }
 

@@ -124,6 +124,7 @@ const EMPTY_FORM = {
   priority:       '',         // stored as PLI lowercase value
   impact:         'Medium',
   urgency:        'Medium',
+  site:           '',         // optional — same field bulk import already accepts
   dueDate:        '',
   requesterName:  '',
   requesterEmail: '',
@@ -267,6 +268,7 @@ export default function CreateTicket() {
   const optRequestType = (hdOptions.request_type|| []).map(o => o.name);
   const optImpact      = (hdOptions.impact      || []).map(o => o.name);
   const optUrgency     = (hdOptions.urgency     || []).map(o => o.name);
+  const optSite        = (hdOptions.site        || []).map(o => o.name);
 
   // ── Data state ──────────────────────────────────────────────────────────────
   const [formData,    setFormData]    = useState(() => {
@@ -289,6 +291,7 @@ export default function CreateTicket() {
       priority:       src.priority     || EMPTY_FORM.priority,
       impact:         src.impact       || EMPTY_FORM.impact,
       urgency:        src.urgency      || EMPTY_FORM.urgency,
+      site:           src.site         || '',
       teamManagerId:  src.teamManagerId || src.teamManager?._id || src.teamManager?.id || '',
       assigneeId:     '',   // do NOT copy assignee — must be re-chosen
       requesterName:  src.requesterName  || src.requesterUser?.name  || selfRequester.requesterName,
@@ -890,6 +893,22 @@ export default function CreateTicket() {
                       </select>
                       {errors.category && <p className={ERR}>{errors.category}</p>}
                     </div>
+                  </div>
+
+                  {/* Site — optional; the same field the Excel bulk import already accepts */}
+                  <div>
+                    <label className={LBL}>Site</label>
+                    <select
+                      name="site"
+                      value={formData.site}
+                      onChange={handleChange}
+                      className={sel()}
+                    >
+                      <option value="">-- Select --</option>
+                      {optSite.map(o => (
+                        <option key={o} value={o}>{o}</option>
+                      ))}
+                    </select>
                   </div>
 
                 </div>

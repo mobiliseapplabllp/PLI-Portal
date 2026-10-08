@@ -127,7 +127,7 @@ export default function HdReports() {
   // Export summary as CSV
   const handleExport = () => {
     const rows = [
-      ['Report', 'Helpdesk Summary', new Date().toLocaleString()],
+      ['Report', 'Operations Summary', new Date().toLocaleString()],
       [],
       ['By Status', 'Count'],
       ...byStatus.map(r => [r.label || r.status || r.name, r.count ?? r.value ?? 0]),
@@ -179,8 +179,8 @@ export default function HdReports() {
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Helpdesk Reports</h1>
-          <p className="text-sm text-gray-500 mt-0.5">Live stats from all helpdesk tickets</p>
+          <h1 className="text-2xl font-bold text-gray-900">Operations Reports</h1>
+          <p className="text-sm text-gray-500 mt-0.5">Live stats from all operations tickets</p>
         </div>
         <div className="flex gap-2">
           <button
@@ -299,12 +299,12 @@ export default function HdReports() {
 
       {/* Agent Stats */}
       {agents.length > 0 && (
-        <Section title="Agent Performance">
+        <Section title="Employee Performance">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-gray-50 text-xs text-gray-500 uppercase tracking-wider">
                 <tr>
-                  <th className="px-4 py-2.5 text-left">Agent</th>
+                  <th className="px-4 py-2.5 text-left">Employee</th>
                   <th className="px-4 py-2.5 text-right">Total</th>
                   <th className="px-4 py-2.5 text-right">Open</th>
                   <th className="px-4 py-2.5 text-right">Closed</th>
@@ -363,7 +363,7 @@ export default function HdReports() {
         <div className="bg-white rounded-xl border border-gray-200 p-12 text-center">
           <HiOutlineTicket className="w-12 h-12 text-gray-300 mx-auto mb-3" />
           <p className="text-gray-500 font-medium">No report data available</p>
-          <p className="text-sm text-gray-400 mt-1">Create some helpdesk tickets to see reports here</p>
+          <p className="text-sm text-gray-400 mt-1">Create some operations tickets to see reports here</p>
         </div>
       )}
 

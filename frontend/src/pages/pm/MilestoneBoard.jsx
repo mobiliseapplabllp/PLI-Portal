@@ -137,7 +137,9 @@ export default function MilestoneBoard() {
   const [saving, setSaving] = useState(false);
 
   // Actual date change modal
-  const [dateChangeModal, setDateChangeModal] = useState(null); // { milestoneId, field, value } | null
+  // { milestoneId, field, value } for one actual date, or
+  // { milestoneId, fields: { plannedStartDate?, plannedEndDate? }, previous } for an unlocked re-baseline
+  const [dateChangeModal, setDateChangeModal] = useState(null);
   const [dateChangeReason, setDateChangeReason] = useState('');
 
   // Sub-milestone inline form
@@ -173,8 +175,14 @@ export default function MilestoneBoard() {
   const [subEditForm,    setSubEditForm]    = useState({ name: '', accountableUserId: '', status: 'not_started', completionPercentage: 0 });
 
   // Derived
+  const uid = String(user?._id || user?.id || '');
   const canManage = MANAGER_ROLES.includes(user?.role) ||
     (project && String(project.managerId) === String(user?._id || user?.id));
+  // A non-manager may change ONLY the status/progress of a SUB-milestone they
+  // are personally accountable for — mirrors milestone.service.js's own rule,
+  // never a parent/phase regardless of who it's assigned to.
+  const canEditSubStatus = (sm) => canManage ||
+    (String(sm?.accountableUser?._id || sm?.accountableUser?.id || '') === uid && uid !== '');
   // Only admin can create / delete / import TOP-LEVEL milestones.
   // Managers can add / edit / delete milestones (not just admin)
   const isAdmin        = user?.role === 'admin';
@@ -223,6 +231,9 @@ export default function MilestoneBoard() {
         const uid = String(user?._id || user?.id || '');
         const isMgr = MANAGER_ROLES.includes(user?.role) ||
           (proj && uid && String(proj.managerId) === uid);
+        // Every "Accountable Person" picker in this page is manager-only —
+        // a non-manager adding a sub-milestone is locked to themselves instead
+        // (see openSubForm) — so the org-wide directory is only ever needed here.
         if (isMgr) {
           getUsersApi({ isActive: true, limit: 200 })
             .then(res => setUsers(res.data?.data?.users || res.data?.data || []))
@@ -425,7 +436,9 @@ export default function MilestoneBoard() {
 
   const openSubForm = (parentId) => {
     setShowSubFormFor(parentId);
-    setSubForm(EMPTY_SUB_FORM);
+    // A non-manager adds a sub-milestone for their OWN work — default (and
+    // lock) accountability to themselves, matching what the backend enforces.
+    setSubForm(canManage ? EMPTY_SUB_FORM : { ...EMPTY_SUB_FORM, accountableUserId: uid });
   };
 
   const handleCreateSubMilestone = async (parentId) => {
@@ -563,14 +576,14 @@ export default function MilestoneBoard() {
 
   const confirmDateChange = async () => {
     if (!dateChangeModal) return;
-    const { milestoneId, field, value } = dateChangeModal;
-    const isActual = field.startsWith('actual');
-    const endpoint = isActual ? 'actual-dates' : 'planned-dates';
+    const { milestoneId, field, value, fields } = dateChangeModal;
+    // A re-baseline sends BOTH changed planned dates in one request — the server
+    // re-locks after the first planned write, so two requests would lose the second.
+    const endpoint = fields || field.startsWith('planned') ? 'planned-dates' : 'actual-dates';
+    const body = fields ? { ...fields, reason: dateChangeReason } : { [field]: value, reason: dateChangeReason };
     try {
-      const res = await api.patch(
-        `/pm/projects/${id}/milestones/${milestoneId}/${endpoint}`,
-        { [field]: value, reason: dateChangeReason },
-      );
+      const res = await api.patch(`/pm/projects/${id}/milestones/${milestoneId}/${endpoint}`, body);
+      if (fields) setPlannedDraftState(prev => { const next = { ...prev }; delete next[milestoneId]; return next; });
       // The API echoes the milestone with a trimmed `subMilestones` include
       // (id/status/actualEndDate only) — spreading it as-is would wipe the
       // fully-loaded sub-milestone rows rendered below the card. Drop it, plus
@@ -592,9 +605,10 @@ export default function MilestoneBoard() {
       if (res.data.data?.alert === 'deadline_near') {
         toast('Deadline approaching — planned end date is within 7 days', { icon: '⚠️' });
       }
+      if (fields) toast.success('Planned dates saved and locked');
       setDateChangeModal(null);
     } catch (err) {
-      toast.error(err.response?.data?.error?.message || 'Failed to update date');
+      toast.error(err.response?.data?.message || err.response?.data?.error?.message || 'Failed to update date');
     }
   };
 
@@ -703,13 +717,87 @@ export default function MilestoneBoard() {
           ),
         };
       }));
-      toast.success('Planned date saved — it is now locked');
+      toast.success('Planned dates locked');
       if (res.data?.data?.alert === 'deadline_near') {
         toast('Deadline approaching — planned end date is within 7 days', { icon: '⚠️' });
       }
+      return true;
     } catch (err) {
-      toast.error(err.response?.data?.error?.message || 'Failed to save planned date');
+      toast.error(err.response?.data?.message || err.response?.data?.error?.message || 'Failed to save planned dates');
+      return false;
     }
+  };
+
+  // Picking a planned date only fills a DRAFT — nothing is saved until the
+  // manager presses Lock, so a wrong click in the calendar is never permanent.
+  const [plannedDraft, setPlannedDraftState] = useState({});   // { [milestoneId]: { start, end } }
+  const [lockingId, setLockingId] = useState(null);
+  const draftOf = (mId) => plannedDraft[mId] || {};
+  const setPlannedDraft = (mId, field, value) =>
+    setPlannedDraftState(prev => ({ ...prev, [mId]: { ...prev[mId], [field]: value } }));
+
+  const lockPlannedDates = async (m, mId) => {
+    const draft    = draftOf(mId);
+    const curStart = m.plannedStartDate ? m.plannedStartDate.slice(0, 10) : '';
+    const curEnd   = m.plannedEndDate   ? m.plannedEndDate.slice(0, 10)   : '';
+    const unlocked = isPlannedUnlocked(m);
+    // Unlocked: the draft overrides the saved date. First entry: saved dates are final.
+    const start = unlocked ? (draft.start || curStart) : (curStart || draft.start);
+    const end   = unlocked ? (draft.end   || curEnd)   : (curEnd   || draft.end);
+    if (!start || !end) return toast.error('Pick both the planned start and end date first');
+    if (end < start)    return toast.error('Planned end date cannot be before the start date');
+
+    if (unlocked) {
+      // Re-baseline: one reason, both changed dates in ONE request
+      const fields = {};
+      if (start !== curStart) fields.plannedStartDate = start;
+      if (end   !== curEnd)   fields.plannedEndDate   = end;
+      if (!Object.keys(fields).length) return toast.error('Change a planned date first');
+      setDateChangeReason('');
+      setDateChangeModal({ milestoneId: mId, fields, previous: { plannedStartDate: curStart, plannedEndDate: curEnd } });
+      return;
+    }
+
+    if (!window.confirm(
+      `Lock planned dates ${fmtDate(start)} → ${fmtDate(end)}?\n\nAfter locking, only an admin can unlock and change them.`
+    )) return;
+
+    setLockingId(mId);
+    const ok = await handlePlannedDateSave(
+      mId,
+      m.plannedStartDate ? null : start,   // only send what is not saved yet
+      m.plannedEndDate   ? null : end,
+    );
+    setLockingId(null);
+    if (ok) setPlannedDraftState(prev => { const next = { ...prev }; delete next[mId]; return next; });
+  };
+
+  /** Lock button — shown to managers until both planned dates are saved. */
+  const renderPlannedLock = (m, mId, compact = false) => {
+    const unlocked = isPlannedUnlocked(m);
+    if (!canManage || (!unlocked && m.plannedStartDate && m.plannedEndDate)) return null;
+    const draft = draftOf(mId);
+    const ready = unlocked
+      ? ((draft.start && draft.start !== (m.plannedStartDate || '').slice(0, 10)) ||
+         (draft.end   && draft.end   !== (m.plannedEndDate   || '').slice(0, 10)))
+      : ((m.plannedStartDate || draft.start) && (m.plannedEndDate || draft.end));
+    const label = unlocked ? 'Save & lock' : 'Lock';
+    return (
+      <button
+        type="button"
+        onClick={() => lockPlannedDates(m, mId)}
+        disabled={!ready || lockingId === mId}
+        title={ready
+          ? 'Save and lock these planned dates'
+          : unlocked ? 'Change a planned date to save it' : 'Pick both planned dates to lock them'}
+        className={`inline-flex items-center gap-1 ${compact ? 'mt-1 px-2 py-0.5 text-[11px]' : 'mt-1 px-2.5 py-1 text-xs'} font-medium rounded-md border transition-colors
+          ${ready
+            ? 'bg-emerald-600 border-emerald-600 text-white hover:bg-emerald-700'
+            : 'bg-white border-gray-200 text-gray-400 cursor-not-allowed'}`}
+      >
+        <LockIcon className="w-3 h-3" /> {lockingId === mId ? 'Locking…' : label}
+      </button>
+    );
   };
 
   // ── Render ──────────────────────────────────────────────────────────────
@@ -1000,9 +1088,9 @@ export default function MilestoneBoard() {
                                   {m.plannedStartDate && isPlannedUnlocked(m) ? (
                                     <input
                                       type="date"
-                                      defaultValue={m.plannedStartDate.slice(0, 10)}
-                                      title="Unlocked — pick a new planned start (you will be asked for a reason)"
-                                      onChange={e => e.target.value && e.target.value !== m.plannedStartDate.slice(0, 10) && handleActualDateChange(mId, 'plannedStartDate', e.target.value)}
+                                      value={draftOf(mId).start || m.plannedStartDate.slice(0, 10)}
+                                      title="Unlocked — pick a new planned start, then press Save & lock"
+                                      onChange={e => setPlannedDraft(mId, 'start', e.target.value)}
                                       className={plannedInputCls + ' border-amber-400'}
                                     />
                                   ) : m.plannedStartDate ? (
@@ -1015,8 +1103,10 @@ export default function MilestoneBoard() {
                                   ) : (
                                     <input
                                       type="date"
-                                      title="Set planned start date (can only be set once)"
-                                      onChange={e => e.target.value && handlePlannedDateSave(mId, e.target.value, null)}
+                                      title="Pick the planned start date, then press Lock"
+                                      value={draftOf(mId).start || ''}
+                                      max={draftOf(mId).end || undefined}
+                                      onChange={e => setPlannedDraft(mId, 'start', e.target.value)}
                                       className={plannedInputCls}
                                     />
                                   )}
@@ -1032,10 +1122,10 @@ export default function MilestoneBoard() {
                                   {m.plannedEndDate && isPlannedUnlocked(m) ? (
                                     <input
                                       type="date"
-                                      defaultValue={m.plannedEndDate.slice(0, 10)}
-                                      min={m.plannedStartDate ? m.plannedStartDate.slice(0, 10) : undefined}
-                                      title="Unlocked — pick a new planned end (you will be asked for a reason)"
-                                      onChange={e => e.target.value && e.target.value !== m.plannedEndDate.slice(0, 10) && handleActualDateChange(mId, 'plannedEndDate', e.target.value)}
+                                      value={draftOf(mId).end || m.plannedEndDate.slice(0, 10)}
+                                      min={draftOf(mId).start || (m.plannedStartDate ? m.plannedStartDate.slice(0, 10) : undefined)}
+                                      title="Unlocked — pick a new planned end, then press Save & lock"
+                                      onChange={e => setPlannedDraft(mId, 'end', e.target.value)}
                                       className={plannedInputCls + ' border-amber-400'}
                                     />
                                   ) : m.plannedEndDate ? (
@@ -1048,9 +1138,10 @@ export default function MilestoneBoard() {
                                   ) : (
                                     <input
                                       type="date"
-                                      min={m.plannedStartDate ? m.plannedStartDate.slice(0, 10) : undefined}
-                                      title="Set planned end date (can only be set once)"
-                                      onChange={e => e.target.value && handlePlannedDateSave(mId, null, e.target.value)}
+                                      min={m.plannedStartDate ? m.plannedStartDate.slice(0, 10) : (draftOf(mId).start || undefined)}
+                                      title="Pick the planned end date, then press Lock"
+                                      value={draftOf(mId).end || ''}
+                                      onChange={e => setPlannedDraft(mId, 'end', e.target.value)}
                                       className={plannedInputCls}
                                     />
                                   )}
@@ -1059,6 +1150,12 @@ export default function MilestoneBoard() {
                                 m.plannedEndDate ? <span className="text-xs text-gray-700">{fmtDate(m.plannedEndDate)}</span> : <span className="text-gray-400">—</span>
                               )}
                             </div>
+                            {renderPlannedLock(m, mId) && (
+                              <div className="flex items-center gap-2">
+                                <span className="w-10 flex-shrink-0" />
+                                {renderPlannedLock(m, mId)}
+                              </div>
+                            )}
                           </div>
                         </div>
 
@@ -1170,8 +1267,12 @@ export default function MilestoneBoard() {
                         <p className="text-xs font-semibold text-emerald-700 mb-3 uppercase tracking-wide">Edit Milestone</p>
                         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
                           <div>
-                            <label className="text-xs font-medium text-gray-600 block mb-1">Name *</label>
-                            <input value={form.name} onChange={e => setF('name', e.target.value)} className={inputCls} />
+                            <label className="text-xs font-medium text-gray-600 block mb-1">
+                              Name *{!isAdmin && <span className="ml-1 font-normal text-gray-400">· Set by admin</span>}
+                            </label>
+                            <input value={form.name} onChange={e => setF('name', e.target.value)} disabled={!isAdmin}
+                              title={isAdmin ? undefined : "Only an admin can change a phase's name"}
+                              className={`${inputCls} ${!isAdmin ? 'bg-gray-50 text-gray-500 cursor-not-allowed' : ''}`} />
                           </div>
                           <div>
                             <label className="text-xs font-medium text-gray-600 block mb-1">Accountable Person</label>
@@ -1191,8 +1292,12 @@ export default function MilestoneBoard() {
                             </select>
                           </div>
                           <div className="sm:col-span-2">
-                            <label className="text-xs font-medium text-gray-600 block mb-1">Description</label>
-                            <textarea value={form.description} onChange={e => setF('description', e.target.value)} rows={2} className={inputCls} />
+                            <label className="text-xs font-medium text-gray-600 block mb-1">
+                              Description{!isAdmin && <span className="ml-1 font-normal text-gray-400">· Set by admin</span>}
+                            </label>
+                            <textarea value={form.description} onChange={e => setF('description', e.target.value)} rows={2} disabled={!isAdmin}
+                              title={isAdmin ? undefined : "Only an admin can change a phase's description"}
+                              className={`${inputCls} ${!isAdmin ? 'bg-gray-50 text-gray-500 cursor-not-allowed' : ''}`} />
                           </div>
                           <div>
                             <label className="text-xs font-medium text-gray-600 block mb-1">
@@ -1241,7 +1346,11 @@ export default function MilestoneBoard() {
                               const smStatus = normalizeStatus(sm.status);
                               const smProgress = Math.round(sm.completionPercentage || 0);
                               const isDelayed = sm.plannedEndDate && sm.plannedEndDate.slice(0, 10) < today && smStatus !== 'completed';
-                              const canLogActual = ['in_progress', 'completed'].includes(smStatus);
+                              // Was status-only before — anyone viewing the row could see an
+                              // editable-looking actual-date input even when they had no
+                              // permission to save it (the backend requires canManage or
+                              // being the sub's accountable person). Gate on both now.
+                              const canLogActual = canEditSubStatus(sm) && ['in_progress', 'completed'].includes(smStatus);
                               const smDueInDays = sm.plannedEndDate
                                 ? Math.ceil((new Date(sm.plannedEndDate) - new Date()) / 86400000)
                                 : null;
@@ -1309,14 +1418,14 @@ export default function MilestoneBoard() {
                                     <div className="space-y-1">
                                       <div className="flex items-center gap-1.5">
                                         <span className="w-7 flex-shrink-0 text-[10px] uppercase tracking-wide text-gray-300">St</span>
-                                        {canManage ? (
+                                        {canEditSubStatus(sm) ? (
                                           <>
                                             {sm.plannedStartDate && isPlannedUnlocked(sm) ? (
                                               <input
                                                 type="date"
-                                                defaultValue={sm.plannedStartDate.slice(0, 10)}
-                                                title="Unlocked — pick a new planned start (you will be asked for a reason)"
-                                                onChange={e => e.target.value && e.target.value !== sm.plannedStartDate.slice(0, 10) && handleActualDateChange(smId, 'plannedStartDate', e.target.value)}
+                                                value={draftOf(smId).start || sm.plannedStartDate.slice(0, 10)}
+                                                title="Unlocked — pick a new planned start, then press Save & lock"
+                                                onChange={e => setPlannedDraft(smId, 'start', e.target.value)}
                                                 className="block text-[11px] border border-amber-400 rounded px-1.5 py-0.5 text-gray-700 bg-white focus:outline-none focus:border-amber-500 w-28"
                                               />
                                             ) : sm.plannedStartDate ? (
@@ -1329,8 +1438,10 @@ export default function MilestoneBoard() {
                                             ) : (
                                               <input
                                                 type="date"
-                                                title="Set planned start date (can only be set once)"
-                                                onChange={e => e.target.value && handlePlannedDateSave(smId, e.target.value, null)}
+                                                title="Pick the planned start date, then press Lock"
+                                                value={draftOf(smId).start || ''}
+                                                max={draftOf(smId).end || undefined}
+                                                onChange={e => setPlannedDraft(smId, 'start', e.target.value)}
                                                 className="block text-[11px] border border-dashed border-gray-300 rounded px-1.5 py-0.5 text-gray-600 focus:outline-none focus:border-emerald-400 w-28"
                                               />
                                             )}
@@ -1341,15 +1452,15 @@ export default function MilestoneBoard() {
                                       </div>
                                       <div className="flex items-center gap-1.5">
                                         <span className="w-7 flex-shrink-0 text-[10px] uppercase tracking-wide text-gray-300">En</span>
-                                        {canManage ? (
+                                        {canEditSubStatus(sm) ? (
                                           <>
                                             {sm.plannedEndDate && isPlannedUnlocked(sm) ? (
                                               <input
                                                 type="date"
-                                                defaultValue={sm.plannedEndDate.slice(0, 10)}
-                                                min={sm.plannedStartDate ? sm.plannedStartDate.slice(0, 10) : undefined}
-                                                title="Unlocked — pick a new planned end (you will be asked for a reason)"
-                                                onChange={e => e.target.value && e.target.value !== sm.plannedEndDate.slice(0, 10) && handleActualDateChange(smId, 'plannedEndDate', e.target.value)}
+                                                value={draftOf(smId).end || sm.plannedEndDate.slice(0, 10)}
+                                                min={draftOf(smId).start || (sm.plannedStartDate ? sm.plannedStartDate.slice(0, 10) : undefined)}
+                                                title="Unlocked — pick a new planned end, then press Save & lock"
+                                                onChange={e => setPlannedDraft(smId, 'end', e.target.value)}
                                                 className="block text-[11px] border border-amber-400 rounded px-1.5 py-0.5 text-gray-700 bg-white focus:outline-none focus:border-amber-500 w-28"
                                               />
                                             ) : sm.plannedEndDate ? (
@@ -1363,9 +1474,10 @@ export default function MilestoneBoard() {
                                             ) : (
                                               <input
                                                 type="date"
-                                                min={sm.plannedStartDate ? sm.plannedStartDate.slice(0, 10) : undefined}
-                                                title="Set planned end date (can only be set once)"
-                                                onChange={e => e.target.value && handlePlannedDateSave(smId, null, e.target.value)}
+                                                min={sm.plannedStartDate ? sm.plannedStartDate.slice(0, 10) : (draftOf(smId).start || undefined)}
+                                                title="Pick the planned end date, then press Lock"
+                                                value={draftOf(smId).end || ''}
+                                                onChange={e => setPlannedDraft(smId, 'end', e.target.value)}
                                                 className="block text-[11px] border border-dashed border-gray-300 rounded px-1.5 py-0.5 text-gray-600 focus:outline-none focus:border-emerald-400 w-28"
                                               />
                                             )}
@@ -1374,6 +1486,12 @@ export default function MilestoneBoard() {
                                           sm.plannedEndDate ? <span className={`text-xs ${isDelayed ? 'text-red-600 font-semibold' : 'text-gray-600'}`}>{fmtDate(sm.plannedEndDate)}</span> : <span className="text-gray-400">—</span>
                                         )}
                                       </div>
+                                      {renderPlannedLock(sm, smId, true) && (
+                                        <div className="flex items-center gap-1.5">
+                                          <span className="w-7 flex-shrink-0" />
+                                          {renderPlannedLock(sm, smId, true)}
+                                        </div>
+                                      )}
                                     </div>
                                   </td>
 
@@ -1413,7 +1531,7 @@ export default function MilestoneBoard() {
 
                                   {/* Status */}
                                   <td className="px-3 py-3 align-top">
-                                    {canManage ? (
+                                    {canEditSubStatus(sm) ? (
                                       <div className="relative inline-block">
                                         <select
                                           value={smStatus || 'not_started'}
@@ -1439,7 +1557,7 @@ export default function MilestoneBoard() {
 
                                   {/* Progress */}
                                   <td className="px-3 py-3 align-top">
-                                    {canManage ? (
+                                    {canEditSubStatus(sm) ? (
                                       <div className="flex items-center gap-2">
                                         <input
                                           type="range" min="0" max="100" step="5"
@@ -1480,15 +1598,16 @@ export default function MilestoneBoard() {
                                           <HiOutlinePencil className="w-3.5 h-3.5" />
                                         </button>
                                       )}
-                                      {canManage && (
-                                        <button
-                                          onClick={() => handleDelete(smId)}
-                                          className="p-1.5 rounded-md text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors"
-                                          title="Delete sub-milestone"
-                                        >
-                                          <HiOutlineTrash className="w-3.5 h-3.5" />
-                                        </button>
-                                      )}
+                                      {/* Any visible team member can remove a sub-milestone —
+                                          deleteMilestone() only requires canManage for a TOP-LEVEL
+                                          phase, not a sub. */}
+                                      <button
+                                        onClick={() => handleDelete(smId)}
+                                        className="p-1.5 rounded-md text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors"
+                                        title="Delete sub-milestone"
+                                      >
+                                        <HiOutlineTrash className="w-3.5 h-3.5" />
+                                      </button>
                                     </div>
                                   </td>
                                 </tr>
@@ -1563,7 +1682,7 @@ export default function MilestoneBoard() {
                     ) : (
                       <div className="px-6 py-6 text-center">
                         <p className="text-xs text-gray-400">No sub-milestones yet.</p>
-                        {canManage && showSubFormFor !== mId && (
+                        {showSubFormFor !== mId && (
                           <button
                             onClick={() => openSubForm(mId)}
                             className="mt-2 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-50 rounded-lg border border-dashed border-emerald-300 transition-colors"
@@ -1600,10 +1719,16 @@ export default function MilestoneBoard() {
                           </div>
                           <div>
                             <label className="text-xs font-medium text-gray-600 block mb-1">Accountable Person</label>
-                            <select value={subForm.accountableUserId} onChange={e => setSF('accountableUserId', e.target.value)} className={inputCls}>
-                              <option value="">Select person</option>
-                              {users.map(u => <option key={u._id || u.id} value={u._id || u.id}>{u.name}</option>)}
-                            </select>
+                            {canManage ? (
+                              <select value={subForm.accountableUserId} onChange={e => setSF('accountableUserId', e.target.value)} className={inputCls}>
+                                <option value="">Select person</option>
+                                {users.map(u => <option key={u._id || u.id} value={u._id || u.id}>{u.name}</option>)}
+                              </select>
+                            ) : (
+                              <div className={`${inputCls} bg-gray-50 text-gray-500`} title="You add a sub-milestone as accountable for yourself — a manager can reassign it later">
+                                You ({user?.name || 'yourself'})
+                              </div>
+                            )}
                           </div>
                           <div>
                             <label className="text-xs font-medium text-gray-600 block mb-1">Weight</label>
@@ -1646,8 +1771,10 @@ export default function MilestoneBoard() {
                       </div>
                     )}
 
-                    {/* Card footer — Add Sub-milestone trigger */}
-                    {canManage && showSubFormFor !== mId && subs.length > 0 && (
+                    {/* Card footer — Add Sub-milestone trigger. Any visible team
+                        member can add a sub-milestone (backend: createSubMilestone
+                        only requires project visibility, not canManage). */}
+                    {showSubFormFor !== mId && subs.length > 0 && (
                       <div className="px-5 pb-4 pt-0 border-t border-gray-100 bg-gray-50/40">
                         <button
                           onClick={() => openSubForm(mId)}
@@ -1725,8 +1852,10 @@ export default function MilestoneBoard() {
                                 ) : (
                                   <input
                                     type="date"
-                                    title="Set planned start date (can only be set once)"
-                                    onChange={e => e.target.value && handlePlannedDateSave(mId, e.target.value, null)}
+                                    title="Pick the planned start date, then press Lock"
+                                    value={draftOf(mId).start || ''}
+                                    max={draftOf(mId).end || undefined}
+                                    onChange={e => setPlannedDraft(mId, 'start', e.target.value)}
                                     className="text-xs border border-gray-200 rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-blue-400"
                                   />
                                 )}
@@ -1746,12 +1875,14 @@ export default function MilestoneBoard() {
                                 ) : (
                                   <input
                                     type="date"
-                                    min={m.plannedStartDate ? m.plannedStartDate.slice(0, 10) : undefined}
-                                    title="Set planned end date (can only be set once)"
-                                    onChange={e => e.target.value && handlePlannedDateSave(mId, null, e.target.value)}
+                                    min={m.plannedStartDate ? m.plannedStartDate.slice(0, 10) : (draftOf(mId).start || undefined)}
+                                    title="Pick the planned end date, then press Lock"
+                                    value={draftOf(mId).end || ''}
+                                    onChange={e => setPlannedDraft(mId, 'end', e.target.value)}
                                     className="text-xs border border-gray-200 rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-blue-400"
                                   />
                                 )}
+                                {renderPlannedLock(m, mId, true) && <div>{renderPlannedLock(m, mId, true)}</div>}
                               </>
                             ) : (
                               m.plannedEndDate ? <span className={`text-xs ${isDelayed ? 'text-red-600 font-semibold' : 'text-gray-500'}`}>{fmtDate(m.plannedEndDate)}{isDelayed && <span className="text-red-500 font-bold ml-1" title="Overdue">⚠</span>}</span> : <span className="text-gray-400">—</span>
@@ -1990,13 +2121,26 @@ export default function MilestoneBoard() {
         <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50">
           <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-md">
             <h3 className="text-base font-semibold text-gray-800 mb-1">
-              {dateChangeModal.field.startsWith('planned') ? 'Reason for Re-baselining' : 'Reason for Date Change'}
+              {dateChangeModal.fields || dateChangeModal.field?.startsWith('planned') ? 'Reason for Re-baselining' : 'Reason for Date Change'}
             </h3>
-            <p className="text-sm text-gray-500 mb-4">
-              {dateChangeModal.field.startsWith('planned')
-                ? 'You are changing a planned (baseline) date. The dates will lock again after this save. This reason is written to the audit log.'
+            <p className="text-sm text-gray-500 mb-3">
+              {dateChangeModal.fields || dateChangeModal.field?.startsWith('planned')
+                ? 'You are changing the planned (baseline) dates. They lock again after this save. This reason is written to the audit log.'
                 : 'Please provide a reason for changing this date.'}
             </p>
+            {dateChangeModal.fields && (
+              <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-gray-700 space-y-1">
+                {[['plannedStartDate', 'Start'], ['plannedEndDate', 'End']]
+                  .filter(([k]) => dateChangeModal.fields[k])
+                  .map(([k, label]) => (
+                    <div key={k} className="flex gap-2">
+                      <span className="w-10 text-gray-500">{label}</span>
+                      <span className="text-gray-400 line-through">{dateChangeModal.previous?.[k] ? fmtDate(dateChangeModal.previous[k]) : '—'}</span>
+                      <span>→ <strong>{fmtDate(dateChangeModal.fields[k])}</strong></span>
+                    </div>
+                  ))}
+              </div>
+            )}
             <textarea
               value={dateChangeReason}
               onChange={e => setDateChangeReason(e.target.value)}
@@ -2013,7 +2157,7 @@ export default function MilestoneBoard() {
                 disabled={!dateChangeReason.trim()}
                 className="px-4 py-2 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50"
               >
-                Confirm Change
+                {dateChangeModal.fields ? 'Save & lock' : 'Confirm Change'}
               </button>
             </div>
           </div>

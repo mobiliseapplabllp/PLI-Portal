@@ -22,5 +22,8 @@ router.get('/unassigned-count', dashCtrl.getUnassignedCount);
 router.get('/sla-stats',        dashCtrl.getSlaStats);
 router.get('/weekly-trend',     dashCtrl.getWeeklyTrend);
 router.get('/mode-stats',       dashCtrl.getModeStats);
+router.get('/deadlines',        dashCtrl.getDeadlines);   // Breached | Upcoming (14 days) card
+router.get('/billing',          dashCtrl.getBillingTickets); // Billable | Non-Billable open tickets
+router.get('/export',           dashCtrl.exportDashboard);   // Download Excel — same filters as the dashboard on screen
 
 module.exports = router;

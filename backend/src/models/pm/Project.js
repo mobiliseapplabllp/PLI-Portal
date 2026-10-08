@@ -16,6 +16,10 @@ const Project = sequelize.define(
 
     clientName:      { type: DataTypes.STRING(255), allowNull: true },
     clientEmail:     { type: DataTypes.STRING(255), allowNull: true },
+    // FK to client_organisations — application-level integrity (see column
+    // comment in the DB). Was a real DB column with no Sequelize field until
+    // the bulk-import feature (migration 054) needed to write it.
+    clientOrgId:     { type: DataTypes.UUID, allowNull: true },
     notifyClient:    { type: DataTypes.BOOLEAN, defaultValue: false },
     managerId:       { type: DataTypes.UUID, allowNull: true },
 
@@ -30,7 +34,14 @@ const Project = sequelize.define(
     },
 
     // ── projectType now stores project category (Signed/Unsigned/Contract/Demo) ─
+    // projectType stays a synced display copy; projectTypeId (migration 053) is
+    // the real reference — same pattern as PmMilestoneTemplate (migration 052).
     projectType:     { type: DataTypes.STRING(100), allowNull: true },
+    projectTypeId:   { type: DataTypes.INTEGER, allowNull: true },
+
+    // Set only on projects created by the bulk import feature (migration 054) —
+    // ties every row from one import run together so a bad import can be undone.
+    importBatchId:   { type: DataTypes.UUID, allowNull: true },
 
     // Usage flags (migration 046) — independent, both may be true.
     // isProduct: planned in Project Management; default milestones are created on

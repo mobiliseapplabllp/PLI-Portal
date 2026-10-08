@@ -214,15 +214,19 @@ const initialState = {
     status: '',
     priority: '',
     category: '',
+    statusKey: '',         // permanent built-in status key (dashboard deep-links) — forwarded as ?statusKey=
+    requestType: '',      // 'Incident' | 'Service Request' — forwarded as ?requestType=
     teamManagerId: '',   // team = reporting manager (users.id); forwarded as ?teamManagerId=
     groupId: '',         // legacy helpdesk group filter, kept for compatibility
     projectId: '',
+    billingType: '',      // 'Billable' | 'Non-Billable' — forwarded as ?billingType=
     search: '',
     dateFrom: '',
     dateTo: '',
   },
   ticketsLoading: false,
   ticketsError: null,
+  ticketsRequestId: null,   // id of the newest fetchTickets — older answers are ignored
 
   // Single ticket detail
   currentTicket: null,
@@ -297,11 +301,17 @@ const helpdeskSlice = createSlice({
       // ------------------------------------------------------------------
       // fetchTickets
       // ------------------------------------------------------------------
-      .addCase(fetchTickets.pending, (state) => {
+      // Only the LATEST request may write the list. When filters change quickly
+      // (e.g. a dashboard link applies ?status=open right after the page's first
+      // fetch), two requests are in flight; without this, a slower, broader answer
+      // arriving last overwrote the filtered list (in-progress tickets under "Open").
+      .addCase(fetchTickets.pending, (state, action) => {
         state.ticketsLoading = true;
         state.ticketsError = null;
+        state.ticketsRequestId = action.meta.requestId;
       })
       .addCase(fetchTickets.fulfilled, (state, action) => {
+        if (action.meta.requestId !== state.ticketsRequestId) return;   // stale answer
         state.ticketsLoading = false;
         state.tickets = action.payload.tickets || [];
         state.ticketsTotal = action.payload.total ?? 0;
@@ -309,6 +319,7 @@ const helpdeskSlice = createSlice({
         state.ticketsPageSize = action.payload.pageSize ?? state.ticketsPageSize;
       })
       .addCase(fetchTickets.rejected, (state, action) => {
+        if (action.meta.requestId !== state.ticketsRequestId) return;   // stale answer
         state.ticketsLoading = false;
         state.ticketsError = action.payload;
       })

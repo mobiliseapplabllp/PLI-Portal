@@ -2,7 +2,7 @@
  * HdTicket — Core helpdesk ticket model.
  * Table: hd_tickets
  *
- * Statuses:   open → in-progress → pending → resolved → closed
+ * Statuses:   open → in-progress → pending/on-hold → resolved → closed
  * Priorities: low | medium | high | critical
  */
 const { DataTypes } = require('sequelize');
@@ -13,6 +13,7 @@ const TICKET_STATUS = Object.freeze({
   OPEN:        'open',
   IN_PROGRESS: 'in-progress',
   PENDING:     'pending',
+  ON_HOLD:     'on-hold',
   RESOLVED:    'resolved',
   CLOSED:      'closed',
 });
@@ -82,10 +83,20 @@ const HdTicket = sequelize.define('HdTicket', {
     type:      DataTypes.TEXT,
     allowNull: true,
   },
+  // VARCHAR, not ENUM (migration 055) — status is admin-configurable via
+  // hd_options (type='status'). Kept as a synced DISPLAY copy of the current
+  // status option's name; statusId (below) is the real reference every write
+  // path must also set — see statusResolver.service.js.
   status: {
-    type:         DataTypes.ENUM(...Object.values(TICKET_STATUS)),
+    type:         DataTypes.STRING(50),
     allowNull:    false,
     defaultValue: TICKET_STATUS.OPEN,
+  },
+  // Real FK (migration 056) — resolves rename-safely, unlike the string above.
+  statusId: {
+    type:      DataTypes.INTEGER,
+    allowNull: true,
+    field:     'status_id',
   },
   priority: {
     type:         DataTypes.ENUM(...Object.values(TICKET_PRIORITY)),
@@ -267,14 +278,18 @@ const HdTicket = sequelize.define('HdTicket', {
   hooks: {
     /**
      * Auto-stamp closedAt when status transitions to resolved or closed.
+     * Resolved by statusId against the built-in resolved/closed keys (migration
+     * 056) — NOT by comparing ticket.status to a literal string — so renaming
+     * those statuses in HD Settings can never silently break this.
      */
-    beforeUpdate(ticket) {
-      if (
-        ticket.changed('status') &&
-        [TICKET_STATUS.RESOLVED, TICKET_STATUS.CLOSED].includes(ticket.status) &&
-        !ticket.closedAt
-      ) {
-        ticket.closedAt = new Date();
+    async beforeUpdate(ticket) {
+      if ((ticket.changed('statusId') || ticket.changed('status')) && !ticket.closedAt) {
+        const { getClosedStatusIds, resolveStatusByName } = require('../../services/helpdesk/statusResolver.service');
+        const closedIds = await getClosedStatusIds();
+        const currentStatusId = ticket.statusId ?? (await resolveStatusByName(ticket.status)).id;
+        if (closedIds.includes(currentStatusId)) {
+          ticket.closedAt = new Date();
+        }
       }
     },
   },

@@ -24,7 +24,7 @@ const createProject = async (req, res, next) => {
 // GET /pm/projects/name-available?name=…&excludeId=… — live check for the create forms
 const checkProjectName = async (req, res, next) => {
   try {
-    await projectService.assertNameIsFree(req.query.name, req.query.excludeId || null);
+    await projectService.assertNameIsFree(req.query.name, req.query.excludeId || null, req.query.clientName || null);
     sendSuccess(res, { available: true }, 'Name is available');
   } catch (e) {
     if (e instanceof AppError && e.statusCode === 409) {

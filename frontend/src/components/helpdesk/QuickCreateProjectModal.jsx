@@ -21,6 +21,7 @@ import Modal from '../common/Modal';
 import api from '../../api/axios';
 import { createProjectApi } from '../../api/pm/projects.api';
 import ProjectUsageChecks, { useProjectNameCheck } from '../pm/ProjectUsageChecks';
+import SearchSelect from '../common/SearchSelect';
 import { getProjectTypesApi, getPmStatusesApi } from '../../api/pm/config.api';
 
 const EMPTY_FORM = {
@@ -96,9 +97,13 @@ export default function QuickCreateProjectModal({ open, onClose, onCreated }) {
 
   const set = (field, val) => setForm(f => ({ ...f, [field]: val }));
   const selectedOrg = clientOrgs.find(o => (o._id ?? o.id) === form.clientOrgId) || null;
-  // Duplicate-name check against the full name the server will receive
+  // Duplicate-name check against the full name the server will receive — also
+  // scoped by clientName, since a bulk-imported project stores that field, and
+  // without sending it here the check can't tell "same client" from "no client".
   const nameCheck = useProjectNameCheck(
-    selectedOrg && form.name.trim() ? `${selectedOrg.name} - ${form.name.trim()}` : form.name
+    selectedOrg && form.name.trim() ? `${selectedOrg.name} - ${form.name.trim()}` : form.name,
+    undefined,
+    selectedOrg?.name
   );
 
   const handleSubmit = async (e) => {
@@ -162,16 +167,14 @@ export default function QuickCreateProjectModal({ open, onClose, onCreated }) {
           <div className="grid grid-cols-2 gap-5">
             <div>
               <Lbl>Client Organisation</Lbl>
-              <select
+              <SearchSelect
+                options={clientOrgs.map(org => ({ value: org._id ?? org.id, label: org.name }))}
                 value={form.clientOrgId || ''}
-                onChange={e => set('clientOrgId', e.target.value || null)}
-                className={inp}
-              >
-                <option value="">— None —</option>
-                {clientOrgs.map(org => (
-                  <option key={org._id ?? org.id} value={org._id ?? org.id}>{org.name}</option>
-                ))}
-              </select>
+                onChange={v => set('clientOrgId', v || null)}
+                placeholder="— None —"
+                size="md"
+                className="h-9"
+              />
             </div>
             <div>
               <Lbl required>

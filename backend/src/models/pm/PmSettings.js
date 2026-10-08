@@ -41,6 +41,9 @@ const PmSettings = sequelize.define(
       defaultValue: 12.0,
       get() { const v = Number(this.getDataValue('exceptionMaxHoursPerDay')); return Number.isFinite(v) && v > 0 ? v : 12; },
     },
+    // Project type applied to every project created by the bulk import feature
+    // (migration 054) — admin-editable so it never needs a code change.
+    defaultBulkImportProjectTypeId: { type: DataTypes.INTEGER, allowNull: true },
   },
   { tableName: 'pm_settings' }
 );

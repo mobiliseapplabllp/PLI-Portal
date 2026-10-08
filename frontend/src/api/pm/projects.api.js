@@ -1,9 +1,9 @@
 import api from '../axios';
 
 export const getProjectsApi = (params) => api.get('/pm/projects', { params });
-/** Live duplicate-name check → { available, message? } */
-export const checkProjectNameApi = (name, excludeId) =>
-  api.get('/pm/projects/name-available', { params: { name, ...(excludeId ? { excludeId } : {}) } });
+/** Live duplicate-name check, scoped by client → { available, message? } */
+export const checkProjectNameApi = (name, excludeId, clientName) =>
+  api.get('/pm/projects/name-available', { params: { name, ...(excludeId ? { excludeId } : {}), ...(clientName ? { clientName } : {}) } });
 export const getProjectByIdApi = (id) => api.get(`/pm/projects/${id}`);
 export const getProjectSummaryApi = (id) => api.get(`/pm/projects/${id}/summary`);
 export const createProjectApi = (data) => api.post('/pm/projects', data);

@@ -1,16 +1,13 @@
 /**
- * HdDashboard.jsx
- * 6-tab Helpdesk Dashboard for PLI Portal.
- * Tabs: Dashboard | Scheduler | Team Availability | Tasks | Reminders | Announcements
+ * HdDashboard.jsx — Operations dashboard.
+ * Same shape as the PM dashboard: stat cards → open-ticket breakdown
+ * (priority / team / project) → full-width "Breached | Upcoming Deadlines" card.
  */
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useSelector } from 'react-redux';
 import toast from 'react-hot-toast';
-import {
-  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
-  CartesianGrid, PieChart, Pie, Cell, Legend,
-} from 'recharts';
+import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import {
   HiOutlineTicket,
   HiOutlineFolderOpen,
@@ -18,69 +15,45 @@ import {
   HiOutlineExclamation,
   HiOutlineCheckCircle,
   HiOutlineXCircle,
-  HiOutlineArrowRight,
-  HiOutlinePlus,
-  HiOutlineChevronLeft,
-  HiOutlineChevronRight,
-  HiOutlineChevronDown,
-  HiOutlineChevronUp,
-  HiOutlineBell,
-  HiOutlineX,
-  HiOutlineSpeakerphone,
-  HiOutlineClipboardList,
-  HiOutlineUsers,
-  HiOutlineLocationMarker,
-  HiOutlineFilter,
-  HiOutlineExclamationCircle,
-  HiOutlineDocumentText,
-  HiOutlineTrash,
+  HiOutlineDownload,
 } from 'react-icons/hi';
 import {
   getDashboardStatsApi,
-  getByStatusApi,
-  getByPriorityApi,
   getByTeamApi,
-  getMonthlyTrendApi,
+  getProjectStatsApi,
+  getOpenByPriorityApi,
+  getDeadlinesApi,
+  getBillingTicketsApi,
+  exportDashboardApi,
 } from '../../api/helpdesk/hdDashboard.api';
-import { getTicketsApi } from '../../api/helpdesk/tickets.api';
-import {
-  getAnnouncementsApi,
-  createAnnouncementApi,
-  deleteAnnouncementApi,
-} from '../../api/helpdesk/announcements.api';
-import api from '../../api/axios';
-import { getUsersApi } from '../../api/users.api';
+import { listTeamsApi, getTeamMembersApi } from '../../api/helpdesk/teams.api';
+import { getHdOptionsApi } from '../../api/helpdesk/helpdesk.api';
+import SearchSelect from '../../components/common/SearchSelect';
+
+/** Same "this is actively filtering" cue as the PM dashboard. Ring, not border —
+ * SearchSelect sets its own border-color internally and Tailwind does not
+ * guarantee a later class wins a same-property conflict. */
+const searchSelectActiveCls = (active) => active ? 'ring-2 ring-indigo-400' : '';
+const filterBoxCls = (active) => `text-sm border rounded-lg px-3 py-2 bg-white text-gray-700 disabled:opacity-50 ${
+  active ? 'border-indigo-400 ring-1 ring-indigo-100' : 'border-gray-200'}`;
+
+/** Team/Employee options come from an org-wide directory endpoint (every team,
+ * every member — not scoped to the caller). Mirrors the backend's own role→scope
+ * mapping (helpdeskAuth.js resolveRoleMapping) so the FILTER OPTIONS a role sees
+ * match what its ticket visibility can actually use them for:
+ *   scope 'all'   (admin, senior_manager) → sees every team's tickets → full
+ *                 org-wide Team/Employee directory is genuinely useful.
+ *   scope 'group' (manager, hr_admin)     → sees only their OWN team's tickets
+ *                 → an org-wide Team dropdown is a dead end (picking any other
+ *                 team returns an empty dashboard); show just their own team's
+ *                 roster as the Employee filter, no Team dropdown at all.
+ *   scope 'own'   (employee)              → sees only their own tickets → no
+ *                 people-directory filter has anything to narrow; hidden.
+ */
+const ORG_WIDE_TEAM_ROLES = ['admin', 'senior_manager'];
+const OWN_TEAM_ONLY_ROLES = ['manager', 'hr_admin'];
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-
-const TABS = [
-  { id: 'dashboard',     label: 'Dashboard' },
-  { id: 'scheduler',     label: 'Scheduler' },
-  { id: 'availability',  label: 'Team Availability' },
-  { id: 'tasks',         label: 'Tasks' },
-  { id: 'reminders',     label: 'Reminders' },
-  { id: 'announcements', label: 'Announcements' },
-];
-
-const ADMIN_ROLES = ['admin', 'manager', 'senior_manager'];
-
-// Roles allowed to call GET /pm/utilisation (Agent Workload card)
-const WORKLOAD_ROLES = ['admin', 'manager', 'senior_manager', 'md', 'director'];
-
-const BAND_BAR_COLORS = {
-  over: 'bg-red-500',
-  high: 'bg-amber-500',
-  ok:   'bg-emerald-500',
-  free: 'bg-slate-300',
-};
-
-const STATUS_COLORS = {
-  open:        'bg-blue-100 text-blue-700',
-  in_progress: 'bg-amber-100 text-amber-700',
-  pending:     'bg-purple-100 text-purple-700',
-  resolved:    'bg-emerald-100 text-emerald-700',
-  closed:      'bg-gray-100 text-gray-600',
-};
 
 const PRIORITY_COLORS = {
   critical: 'bg-red-100 text-red-700',
@@ -89,38 +62,7 @@ const PRIORITY_COLORS = {
   low:      'bg-emerald-100 text-emerald-700',
 };
 
-const PRIORITY_BORDER = {
-  Critical: '#ef4444',
-  High:     '#f59e0b',
-  Medium:   '#3b82f6',
-  Low:      '#22c55e',
-};
-
-const MONTH_NAMES = [
-  'January','February','March','April','May','June',
-  'July','August','September','October','November','December',
-];
-
-const AVATAR_COLORS = [
-  'bg-blue-500', 'bg-emerald-500', 'bg-violet-500',
-  'bg-amber-500', 'bg-rose-500', 'bg-teal-500',
-];
-
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-
-const fmtDate = (d) => {
-  if (!d) return '—';
-  const dt = new Date(d);
-  return isNaN(dt.getTime()) ? '—' : dt.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
-};
-
-const fmtDateShort = (d) => {
-  if (!d) return '—';
-  const dt = new Date(d);
-  return isNaN(dt.getTime()) ? '—' : `${dt.getDate()}/${dt.getMonth() + 1}`;
-};
-
-const pad = (n) => String(n).padStart(2, '0');
 
 const extractData = (res) => res?.data?.data ?? res?.data ?? res ?? null;
 
@@ -134,7 +76,7 @@ function Spinner() {
   );
 }
 
-function StatCard({ label, value, icon: Icon, color, loading }) {
+function StatCard({ label, value, icon: Icon, color, loading, onClick }) {
   if (loading) {
     return (
       <div className="bg-white rounded-xl border border-gray-200 p-5 flex items-center gap-4 animate-pulse">
@@ -147,7 +89,12 @@ function StatCard({ label, value, icon: Icon, color, loading }) {
     );
   }
   return (
-    <div className="bg-white rounded-xl border border-gray-200 p-5 flex items-center gap-4">
+    <div
+      onClick={onClick}
+      role={onClick ? 'button' : undefined}
+      title={onClick ? `Show ${label.toLowerCase()}` : undefined}
+      className={`bg-white rounded-xl border border-gray-200 p-5 flex items-center gap-4 ${onClick ? 'cursor-pointer hover:border-indigo-300 hover:shadow-sm transition' : ''}`}
+    >
       <div className={`p-3 rounded-xl ${color}`}><Icon className="w-6 h-6" /></div>
       <div>
         <p className="text-2xl font-bold text-gray-900">{value ?? 0}</p>
@@ -157,1719 +104,589 @@ function StatCard({ label, value, icon: Icon, color, loading }) {
   );
 }
 
-function CssBarChart({ title, data, colorFn }) {
-  const max = Math.max(...data.map(d => d.count), 1);
-  return (
-    <div className="bg-white rounded-xl border border-gray-200 p-5">
-      <h3 className="font-semibold text-gray-900 mb-4">{title}</h3>
-      <div className="space-y-3">
-        {data.map(({ label, count }) => (
-          <div key={label} className="flex items-center gap-3">
-            <span className="text-xs text-gray-600 w-28 flex-shrink-0 capitalize">{String(label).replace(/_/g, ' ')}</span>
-            <div className="flex-1 h-5 bg-gray-100 rounded-full overflow-hidden">
-              <div
-                className={`h-5 rounded-full transition-all ${colorFn(label)}`}
-                style={{ width: `${(count / max) * 100}%` }}
-              />
-            </div>
-            <span className="text-xs font-semibold text-gray-700 w-6 text-right">{count}</span>
-          </div>
-        ))}
-        {data.length === 0 && <p className="text-sm text-gray-400 text-center py-4">No data</p>}
-      </div>
-    </div>
-  );
-}
-
-/**
- * Agent Workload card — current-month utilisation across projects + tickets.
- * Contract: GET /pm/utilisation?from=YYYY-MM&to=YYYY-MM →
- *   { months:[{ month, workingDays, totalHours, summary:{ avgPct, overCount, highCount } }],
- *     users:[{ userId, name, role, cells:[{ month, totalHours, totalPct, pmHours, hdHours, isOverAllocated, band }] }] }
- */
-function AgentWorkloadCard({ data, monthKey }) {
-  const navigate = useNavigate();
-  if (!data) return null;
-  const monthMeta = (data.months || []).find(m => m.month === monthKey) || data.months?.[0];
-  if (!monthMeta) return null;
-  const summary = monthMeta.summary || {};
-
-  const rows = (data.users || [])
-    .map(u => {
-      const cell = (u.cells || []).find(c => c.month === monthKey) || u.cells?.[0] || {};
-      return { userId: u.userId, name: u.name, role: u.role, ...cell };
-    })
-    .sort((a, b) => (b.totalPct ?? 0) - (a.totalPct ?? 0))
-    .slice(0, 10);
-
-  const [y, m] = monthKey.split('-').map(Number);
-  const title = `Agent Workload — ${MONTH_NAMES[(m || 1) - 1]} ${y}`;
-
-  return (
-    <div className="bg-white rounded-xl border border-gray-200 p-4">
-      <div className="flex items-start justify-between gap-3 mb-3">
-        <div>
-          <h3 className="font-semibold text-sm text-gray-900">{title}</h3>
-          <p className="text-[11px] text-gray-500 mt-0.5">
-            {monthMeta.workingDays} working days · {monthMeta.totalHours}h capacity
-          </p>
-        </div>
-        <div className="flex items-center gap-1.5 flex-wrap justify-end">
-          <span className="text-[11px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-700">Avg {summary.avgPct ?? 0}%</span>
-          <span className="text-[11px] px-2 py-0.5 rounded-full bg-red-50 text-red-700">{summary.overCount ?? 0} over</span>
-          <span className="text-[11px] px-2 py-0.5 rounded-full bg-amber-50 text-amber-700">{summary.highCount ?? 0} high</span>
-          <button
-            onClick={() => navigate('/pm/utilisation')}
-            className="text-[11px] text-blue-600 hover:underline ml-1"
-          >
-            View all →
-          </button>
-        </div>
-      </div>
-
-      {rows.length === 0 ? (
-        <p className="py-4 text-center text-gray-300 text-xs">No allocation data</p>
-      ) : (
-        <div className="space-y-2">
-          {rows.map(r => {
-            const pct   = Number(r.totalPct ?? 0);
-            const width = Math.min(pct, 100);
-            const bar   = BAND_BAR_COLORS[r.band] || 'bg-emerald-500';
-            return (
-              <div key={r.userId} className="grid grid-cols-[minmax(0,180px)_1fr_auto] items-center gap-3">
-                <div className="min-w-0 flex items-center gap-1.5">
-                  {r.isOverAllocated && (
-                    <span
-                      className="w-2 h-2 rounded-full bg-red-500 flex-shrink-0"
-                      title={`Over-allocated on ${r.overDays ?? 'some'} day(s)`}
-                    />
-                  )}
-                  <div className="min-w-0">
-                    <p className="text-xs font-medium text-gray-800 truncate">{r.name}</p>
-                    <p className="text-[10px] text-gray-400 capitalize truncate">{String(r.role || '').replace(/_/g, ' ')}</p>
-                  </div>
-                </div>
-                <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
-                  <div className={`h-full rounded-full ${bar}`} style={{ width: `${width}%` }} />
-                </div>
-                <div className="text-right w-28">
-                  <p className="text-xs font-semibold text-gray-800">{pct}%</p>
-                  <p className="text-[10px] text-gray-400">{r.pmHours ?? 0}h proj · {r.hdHours ?? 0}h tickets</p>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
-/** Scrollable table box with up/down arrow controls — mirrors original Dashboard.jsx */
-function ScrollableStatBox({ title, children }) {
-  const scrollRef = useRef(null);
-  const [canUp, setCanUp]     = useState(false);
-  const [canDown, setCanDown] = useState(false);
-
-  const checkScroll = () => {
-    const el = scrollRef.current;
-    if (!el) return;
-    setCanUp(el.scrollTop > 0);
-    setCanDown(el.scrollTop + el.clientHeight < el.scrollHeight - 1);
-  };
-
-  useEffect(() => { checkScroll(); }, [children]);
-
-  const scroll = (dir) => {
-    const el = scrollRef.current;
-    if (el) el.scrollBy({ top: dir * 60, behavior: 'smooth' });
-  };
-
-  return (
-    <div className="bg-white rounded-xl border border-gray-200 p-4 flex flex-col" style={{ height: '200px' }}>
-      <div className="flex items-center justify-between mb-2 flex-shrink-0">
-        <h3 className="font-semibold text-sm text-gray-900">{title}</h3>
-        <div className="flex items-center gap-0.5">
-          <button
-            onClick={() => scroll(-1)}
-            disabled={!canUp}
-            className={`p-0.5 rounded transition-colors ${canUp ? 'text-gray-500 hover:bg-gray-100' : 'text-gray-300 cursor-default'}`}
-          >
-            <HiOutlineChevronUp className="w-3.5 h-3.5" />
-          </button>
-          <span className="text-[10px] text-gray-400 font-medium px-0.5">SCROLL</span>
-          <button
-            onClick={() => scroll(1)}
-            disabled={!canDown}
-            className={`p-0.5 rounded transition-colors ${canDown ? 'text-gray-500 hover:bg-gray-100' : 'text-gray-300 cursor-default'}`}
-          >
-            <HiOutlineChevronDown className="w-3.5 h-3.5" />
-          </button>
-        </div>
-      </div>
-      <div
-        ref={scrollRef}
-        onScroll={checkScroll}
-        className="flex-1 overflow-y-auto min-h-0"
-        style={{ scrollbarWidth: 'thin' }}
-      >
-        {children}
-      </div>
-    </div>
-  );
-}
-
-/** Half-donut SVG gauge — mirrors original Dashboard.jsx */
-function GaugeChart({ title, value, total, color, onClick }) {
-  const pct = total > 0 ? Math.min((value / total) * 100, 100) : 0;
-  return (
-    <div
-      className={`bg-white rounded-xl border border-gray-200 p-4 ${onClick ? 'cursor-pointer hover:shadow-md transition-shadow' : ''}`}
-      onClick={onClick}
-      role={onClick ? 'button' : undefined}
-    >
-      <h3 className="font-medium text-xs mb-2">{title}</h3>
-      <div className="relative h-16">
-        <svg viewBox="0 0 100 50" className="w-full h-full">
-          <path d="M 10 45 A 40 40 0 0 1 90 45" fill="none" stroke="#e5e7eb" strokeWidth="8" />
-          <path
-            d="M 10 45 A 40 40 0 0 1 90 45"
-            fill="none"
-            stroke={color}
-            strokeWidth="8"
-            strokeDasharray={`${pct * 1.26} 126`}
-          />
-        </svg>
-        <div className="absolute bottom-0 left-1/2 -translate-x-1/2 text-center">
-          <span className="text-xl font-bold">{value}</span>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // ─── Tab 1: Dashboard ─────────────────────────────────────────────────────────
+// Same shape as the PM dashboard: stat cards → breakdown row → one full-width
+// "Breached | Upcoming Deadlines" card.
+
+const PRIORITY_PIE_COLORS = { critical: '#ef4444', high: '#f97316', medium: '#3b82f6', low: '#10b981' };
+
+function BreakdownList({ title, tone, rows, empty, onRowClick }) {
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      <div className={`px-4 py-3 border-b border-gray-100 ${tone}`}>
+        <h2 className="font-semibold text-sm">{title}</h2>
+      </div>
+      <div className="divide-y divide-gray-50 max-h-48 overflow-auto">
+        {rows.length === 0
+          ? <div className="p-4 text-center text-gray-400 text-xs">{empty}</div>
+          : rows.map((r, i) => (
+              <div
+                key={r.key ?? i}
+                onClick={r.clickable ? () => onRowClick(r) : undefined}
+                className={`px-4 py-2.5 flex justify-between items-center text-xs ${r.clickable ? 'hover:bg-gray-50 cursor-pointer' : ''}`}
+              >
+                <span className={`font-medium truncate ${r.clickable ? 'text-gray-800' : 'text-gray-500'}`}>{r.label}</span>
+                <span className="ml-2 shrink-0 font-semibold text-amber-600" title="Open tickets">{r.count}</span>
+              </div>
+            ))}
+      </div>
+    </div>
+  );
+}
+
+/** A list of open tickets (REQ # + title + project) — the Billable / Non-Billable cards. */
+function TicketListCard({ title, tone, tickets, onOpen }) {
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      <div className={`px-4 py-3 border-b border-gray-100 ${tone}`}>
+        <h2 className="font-semibold text-sm">{title}</h2>
+      </div>
+      <div className="divide-y divide-gray-50 max-h-48 overflow-auto">
+        {tickets.length === 0
+          ? <div className="p-4 text-center text-gray-400 text-xs">None</div>
+          : tickets.map(t => {
+              const tid = t._id ?? t.id;
+              return (
+                <div key={tid} onClick={() => onOpen(tid)} className="px-4 py-2.5 hover:bg-gray-50 cursor-pointer text-xs">
+                  <p className="font-medium text-gray-800 truncate">
+                    <span className="font-mono text-gray-400 mr-1.5">{t.reqNumber ?? `#${tid}`}</span>
+                    {t.title}
+                  </p>
+                  <p className="text-gray-400 truncate">{t.projectName || '—'}</p>
+                </div>
+              );
+            })}
+      </div>
+    </div>
+  );
+}
+
+function DeadlineBadge({ row, basis }) {
+  if (basis === 'breached') {
+    const overdue = row.daysLeft != null && row.daysLeft < 0 ? -row.daysLeft : null;
+    return (
+      <span className="text-xs font-semibold px-2 py-0.5 rounded-full flex-shrink-0 bg-red-100 text-red-700">
+        {overdue ? `${overdue}d overdue` : 'SLA breached'}
+      </span>
+    );
+  }
+  const d = row.daysLeft;
+  const cls = d <= 2 ? 'bg-red-100 text-red-700' : d <= 5 ? 'bg-yellow-100 text-yellow-700' : 'bg-blue-100 text-blue-700';
+  return (
+    <span className={`text-xs font-semibold px-2 py-0.5 rounded-full flex-shrink-0 ${cls}`}>
+      {d === 0 ? 'Today' : `${d}d`}
+    </span>
+  );
+}
+
+/** 'YYYY-MM-DD' (already in business timezone) → "19 Sep" without a timezone shift. */
+const fmtDay = (ymd) => {
+  if (!ymd) return '—';
+  const [y, m, d] = String(ymd).slice(0, 10).split('-').map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
+};
 
 function DashboardTab() {
   const navigate = useNavigate();
-  const { user } = useSelector(s => s.auth);
+  const { user: authUser } = useSelector(s => s.auth);
+  const authUserId        = String(authUser?._id || authUser?.id || '');
+  const canSeeOrgWideTeam = ORG_WIDE_TEAM_ROLES.includes(authUser?.role);
+  const isOwnTeamOnly     = OWN_TEAM_ONLY_ROLES.includes(authUser?.role);
+  const canSeeTeamFilters = canSeeOrgWideTeam || isOwnTeamOnly;
 
-  // Existing stats
   const [loading, setLoading]       = useState(true);
   const [stats, setStats]           = useState(null);
-  const [byStatus, setByStatus]     = useState([]);
   const [byPriority, setByPriority] = useState([]);
   const [byTeam, setByTeam]         = useState([]);
-  const [trend, setTrend]           = useState([]);
-  const [tickets, setTickets]       = useState([]);
-  const [ticketsLoading, setTicketsLoading] = useState(true);
+  const [byProject, setByProject]   = useState([]);
+  const [deadlines, setDeadlines]   = useState({ breached: [], upcoming: [] });
+  const [billing, setBilling]       = useState({ billable: [], nonBillable: [] });
+  const [basis, setBasis]           = useState('breached');   // 'breached' | 'upcoming'
 
-  // New dashboard widgets
-  const [agentStats, setAgentStats]     = useState([]);
-  const [teamData, setTeamData]         = useState([]);
-  const [projectStats, setProjectStats] = useState([]);
-  const [myStats, setMyStats]           = useState({ open: 0, total: 0 });
-  const [unassignedCount, setUnassignedCount] = useState(0);
-  const [slaStats, setSlaStats]         = useState({ breached: 0, total: 0 });
-  const [weeklyTrend, setWeeklyTrend]   = useState([]);
-  const [newLoading, setNewLoading]     = useState(true);
+  // ── Team / Employee filters — narrow the whole dashboard, never widen it: the
+  // server ANDs these onto the caller's own visibility, so a manager already
+  // scoped to their own team can't reach into another's data via this dropdown. ──
+  const [teams, setTeams]                 = useState([]);
+  const [teamFilter, setTeamFilter]       = useState('');   // teamManagerId or ''
+  const [employeeOptions, setEmployeeOptions] = useState([]); // people to pick from
+  const [employeeFilter, setEmployeeFilter]   = useState('');   // userId or ''
 
-  // Phase 3 — Agent Workload (current month utilisation); privileged roles only
-  const canSeeWorkload = WORKLOAD_ROLES.includes(user?.role);
-  const now = new Date();
-  const currentMonth = `${now.getFullYear()}-${pad(now.getMonth() + 1)}`;
-  const [workload, setWorkload] = useState(null);
+  // Team list, loaded once — the same "manager + active direct reports" list used
+  // everywhere else (Create Ticket, KPI, Approval Workbench). Only fetched for
+  // scope:'all' roles — the endpoint is org-wide, not scoped to the caller, and a
+  // scope:'group' role (manager/hr_admin) can only ever see their OWN team's
+  // tickets anyway, so this dropdown would be nothing but dead-end options.
+  useEffect(() => {
+    if (!canSeeOrgWideTeam) return undefined;
+    let alive = true;
+    listTeamsApi().then(res => {
+      if (!alive) return;
+      const d = extractData(res);
+      setTeams(Array.isArray(d) ? d : []);
+    }).catch(() => setTeams([]));
+    return () => { alive = false; };
+  }, [canSeeOrgWideTeam]);
+
+  // Employee dropdown scoped to the selected team (manager + their reports);
+  // with no team picked, offer every team's people so the dropdown never sits empty.
+  // scope:'all' only — scope:'group' gets its own roster-only effect below.
+  useEffect(() => {
+    if (!canSeeOrgWideTeam) return undefined;
+    let alive = true;
+    setEmployeeFilter('');   // changing the team invalidates a person picked under the old one
+    (async () => {
+      if (teamFilter) {
+        try {
+          const res = await getTeamMembersApi(teamFilter);
+          const d = extractData(res) || {};
+          if (alive) setEmployeeOptions(d.members || []);
+        } catch { if (alive) setEmployeeOptions([]); }
+        return;
+      }
+      if (!teams.length) { setEmployeeOptions([]); return; }
+      const seen = new Map();
+      const lists = await Promise.allSettled(teams.map(t => getTeamMembersApi(t._id ?? t.id)));
+      lists.forEach(r => {
+        if (r.status !== 'fulfilled') return;
+        (extractData(r.value)?.members || []).forEach(m => seen.set(m._id ?? m.id, m));
+      });
+      if (alive) setEmployeeOptions([...seen.values()].sort((a, b) => a.name.localeCompare(b.name)));
+    })();
+    return () => { alive = false; };
+  }, [teamFilter, teams, canSeeOrgWideTeam]);
+
+  // scope:'group' (manager, hr_admin): no Team dropdown — there's only ever one
+  // valid choice (their own team), so the Employee filter goes straight to their
+  // own roster via the SAME "manager + reports" lookup, keyed by their own id.
+  useEffect(() => {
+    if (!isOwnTeamOnly || !authUserId) return undefined;
+    let alive = true;
+    getTeamMembersApi(authUserId).then(res => {
+      if (!alive) return;
+      const d = extractData(res) || {};
+      setEmployeeOptions(d.members || []);
+    }).catch(() => { if (alive) setEmployeeOptions([]); });
+    return () => { alive = false; };
+  }, [isOwnTeamOnly, authUserId]);
+
+  // ── Project / Category / Billing Type filters — same "narrow only" rule as Team/Employee. ──
+  const [categoryOptions, setCategoryOptions] = useState([]);
+  const [categoryFilter, setCategoryFilter]   = useState('');
+  const [projectOptions, setProjectOptions]   = useState([]);
+  const [projectFilter, setProjectFilter]     = useState('');
+  const [billingTypeFilter, setBillingTypeFilter] = useState(''); // '', 'Billable', 'Non-Billable'
+
+  // Category list is a fixed admin-managed catalog — doesn't need to shrink/grow
+  // with other filters, loaded once (same convention as Create Ticket's dropdowns).
+  useEffect(() => {
+    let alive = true;
+    getHdOptionsApi('category').then(res => {
+      if (!alive) return;
+      const d = extractData(res);
+      setCategoryOptions((Array.isArray(d) ? d : []).map(o => o.name).filter(Boolean));
+    }).catch(() => setCategoryOptions([]));
+    return () => { alive = false; };
+  }, []);
+
+  // Project dropdown OPTIONS deliberately exclude the project filter itself from
+  // their own query — otherwise picking a project would collapse this list down
+  // to the one already picked, and there'd be no way to switch. Narrowed by
+  // Team/Employee/Category/Billing Type, same idea as Employee being narrowed by Team.
+  useEffect(() => {
+    let alive = true;
+    const params = {
+      ...(teamFilter ? { teamManagerId: teamFilter } : {}),
+      ...(employeeFilter ? { assigneeId: employeeFilter } : {}),
+      ...(categoryFilter ? { category: categoryFilter } : {}),
+      ...(billingTypeFilter ? { billingType: billingTypeFilter } : {}),
+    };
+    getProjectStatsApi(params).then(res => {
+      if (!alive) return;
+      const d = extractData(res);
+      setProjectOptions(Array.isArray(d) ? d.filter(r => r.pmProjectId) : []);
+    }).catch(() => setProjectOptions([]));
+    return () => { alive = false; };
+  }, [teamFilter, employeeFilter, categoryFilter, billingTypeFilter]);
+
+  // Shared by the data-fetch effect below AND the Download Excel button, so the
+  // exported file always matches exactly what's currently on screen.
+  const buildFilterParams = () => ({
+    ...(teamFilter ? { teamManagerId: teamFilter } : {}),
+    ...(employeeFilter ? { assigneeId: employeeFilter } : {}),
+    ...(categoryFilter ? { category: categoryFilter } : {}),
+    ...(projectFilter ? { projectId: projectFilter } : {}),
+    ...(billingTypeFilter ? { billingType: billingTypeFilter } : {}),
+  });
+
+  const [exporting, setExporting] = useState(false);
+  const handleExport = async () => {
+    setExporting(true);
+    try {
+      await exportDashboardApi(buildFilterParams());
+    } catch {
+      toast.error('Failed to export dashboard');
+    } finally {
+      setExporting(false);
+    }
+  };
 
   useEffect(() => {
     let alive = true;
-
-    // Existing API calls
     (async () => {
       setLoading(true);
+      const filterParams = buildFilterParams();
       try {
-        const [sRes, stRes, prRes, tmRes, trRes] = await Promise.allSettled([
-          getDashboardStatsApi(),
-          getByStatusApi(),
-          getByPriorityApi(),
-          getByTeamApi(),
-          getMonthlyTrendApi(),
+        const [sRes, prRes, tmRes, pjRes, dlRes, blRes] = await Promise.allSettled([
+          getDashboardStatsApi(filterParams),
+          getOpenByPriorityApi(filterParams),
+          getByTeamApi(filterParams),
+          getProjectStatsApi(filterParams),
+          getDeadlinesApi(filterParams),
+          getBillingTicketsApi(filterParams),
         ]);
+        if (alive && blRes.status === 'fulfilled') {
+          const d = extractData(blRes.value) || {};
+          setBilling({ billable: d.billable || [], nonBillable: d.nonBillable || [] });
+        }
         if (!alive) return;
-
-        if (sRes.status  === 'fulfilled') setStats(extractData(sRes.value));
-        if (stRes.status === 'fulfilled') {
-          const raw = extractData(stRes.value);
-          setByStatus(Array.isArray(raw) ? raw : Object.entries(raw || {}).map(([label, count]) => ({ label, count })));
-        }
-        if (prRes.status === 'fulfilled') {
-          const raw = extractData(prRes.value);
-          setByPriority(Array.isArray(raw) ? raw : Object.entries(raw || {}).map(([label, count]) => ({ label, count })));
-        }
-        if (tmRes.status === 'fulfilled') {
-          const raw = extractData(tmRes.value);
-          setByTeam(Array.isArray(raw) ? raw : []);
-        }
-        if (trRes.status === 'fulfilled') {
-          const raw = extractData(trRes.value);
-          setTrend(Array.isArray(raw) ? raw : []);
+        if (sRes.status === 'fulfilled')  setStats(extractData(sRes.value));
+        if (prRes.status === 'fulfilled') { const d = extractData(prRes.value); setByPriority(Array.isArray(d) ? d : []); }
+        if (tmRes.status === 'fulfilled') { const d = extractData(tmRes.value); setByTeam(Array.isArray(d) ? d : []); }
+        if (pjRes.status === 'fulfilled') { const d = extractData(pjRes.value); setByProject(Array.isArray(d) ? d : []); }
+        if (dlRes.status === 'fulfilled') {
+          const d = extractData(dlRes.value) || {};
+          setDeadlines({ breached: d.breached || [], upcoming: d.upcoming || [] });
         }
       } finally {
         if (alive) setLoading(false);
       }
     })();
-
-    // Recent tickets
-    (async () => {
-      setTicketsLoading(true);
-      try {
-        const res  = await getTicketsApi({ pageSize: 10, sort: '-created_at' });
-        const data = extractData(res);
-        if (alive) setTickets(data?.tickets ?? []);
-      } catch {
-        if (alive) setTickets([]);
-      } finally {
-        if (alive) setTicketsLoading(false);
-      }
-    })();
-
-    // New widget API calls
-    (async () => {
-      setNewLoading(true);
-      try {
-        const [agentRes, teamRes, projRes, myRes, unassRes, slaRes, weekRes] = await Promise.allSettled([
-          api.get('/helpdesk/dashboard/agent-stats'),
-          api.get('/helpdesk/dashboard/raised-by-team'),
-          api.get('/helpdesk/dashboard/project-stats'),
-          api.get('/helpdesk/dashboard/my-stats'),
-          api.get('/helpdesk/dashboard/unassigned-count'),
-          api.get('/helpdesk/dashboard/sla-stats'),
-          api.get('/helpdesk/dashboard/weekly-trend'),
-        ]);
-        if (!alive) return;
-
-        if (agentRes.status === 'fulfilled') {
-          const d = extractData(agentRes.value);
-          setAgentStats(Array.isArray(d) ? d : []);
-        }
-        if (teamRes.status === 'fulfilled') {
-          const d = extractData(teamRes.value);
-          setTeamData(Array.isArray(d) ? d : []);
-        }
-        if (projRes.status === 'fulfilled') {
-          const d = extractData(projRes.value);
-          setProjectStats(Array.isArray(d) ? d : []);
-        }
-        if (myRes.status === 'fulfilled') {
-          const d = extractData(myRes.value);
-          if (d) setMyStats({ open: d.open ?? 0, total: d.total ?? 0, agentName: d.agentName });
-        }
-        if (unassRes.status === 'fulfilled') {
-          const d = extractData(unassRes.value);
-          setUnassignedCount(typeof d === 'number' ? d : (d?.count ?? 0));
-        }
-        if (slaRes.status === 'fulfilled') {
-          const d = extractData(slaRes.value);
-          if (d) setSlaStats({ breached: d.breached ?? d.violated ?? 0, total: d.total ?? 0 });
-        }
-        if (weekRes.status === 'fulfilled') {
-          const d = extractData(weekRes.value);
-          if (Array.isArray(d)) {
-            setWeeklyTrend(d.map(t => ({
-              label: t.date ? fmtDateShort(t.date) : '',
-              received:  Number(t.created ?? t.received ?? 0),
-              completed: Number(t.closed  ?? t.completed ?? 0),
-            })));
-          }
-        }
-      } finally {
-        if (alive) setNewLoading(false);
-      }
-    })();
-
-    // Agent Workload — hidden silently on 403 / error
-    if (canSeeWorkload) {
-      (async () => {
-        const [wlRes] = await Promise.allSettled([
-          api.get('/pm/utilisation', { params: { from: currentMonth, to: currentMonth } }),
-        ]);
-        if (!alive) return;
-        if (wlRes.status === 'fulfilled') {
-          const d = extractData(wlRes.value);
-          setWorkload(d && Array.isArray(d.users) ? d : null);
-        } else {
-          setWorkload(null);
-        }
-      })();
-    }
-
     return () => { alive = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [teamFilter, employeeFilter, categoryFilter, projectFilter, billingTypeFilter]);
 
-  // Fallback 7-day skeleton when API returns nothing
-  const last7Days = weeklyTrend.length > 0 ? weeklyTrend : Array.from({ length: 7 }, (_, i) => {
-    const d = new Date();
-    d.setDate(d.getDate() - (6 - i));
-    return { label: `${d.getDate()}/${d.getMonth() + 1}`, received: 0, completed: 0 };
-  });
+  // /stats returns flat keys (open, inProgress…); older shapes nested them under byStatus
+  const s = stats || {};
+  const count = (flat, nested) => s[flat] ?? s.byStatus?.[nested];
 
-  const statusBarColor = (s) => ({
-    open: 'bg-blue-500', in_progress: 'bg-amber-500',
-    pending: 'bg-purple-500', resolved: 'bg-emerald-500', closed: 'bg-gray-400',
-  }[String(s).toLowerCase()] || 'bg-gray-400');
+  const pieData = byPriority
+    .map(r => {
+      const label = String(r.priority ?? r.label ?? '').toLowerCase();
+      return { name: label || 'none', value: Number(r.count) || 0, color: PRIORITY_PIE_COLORS[label] || '#9ca3af' };
+    })
+    .filter(d => d.value > 0);
 
-  const priorityBarColor = (p) => ({
-    critical: 'bg-red-500', high: 'bg-orange-500',
-    medium: 'bg-blue-500', low: 'bg-emerald-500',
-  }[String(p).toLowerCase()] || 'bg-gray-400');
+  const teamRows = byTeam
+    .map((t, i) => ({
+      key: t.teamManagerId ?? `t-${i}`, label: t.teamName ?? '—', count: Number(t.pending) || 0,
+      clickable: !!t.teamManagerId, teamManagerId: t.teamManagerId,
+    }))
+    .filter(r => r.count > 0)
+    .sort((a, b) => b.count - a.count);
 
-  const statusData = byStatus.length ? byStatus : [
-    { label: 'open',        count: stats?.byStatus?.open        ?? 0 },
-    { label: 'in_progress', count: stats?.byStatus?.in_progress ?? 0 },
-    { label: 'pending',     count: stats?.byStatus?.pending     ?? 0 },
-    { label: 'resolved',    count: stats?.byStatus?.resolved    ?? 0 },
-    { label: 'closed',      count: stats?.byStatus?.closed      ?? 0 },
-  ];
+  const projectRows = byProject
+    .map((p, i) => ({
+      key: p.pmProjectId ?? `p-${i}`, label: p.projectName ?? '—', count: Number(p.pending) || 0,
+      clickable: !!p.pmProjectId, pmProjectId: p.pmProjectId,
+    }))
+    .filter(r => r.count > 0)
+    .sort((a, b) => b.count - a.count);
 
-  const priorityData = byPriority.length ? byPriority : [
-    { label: 'critical', count: stats?.byPriority?.critical ?? 0 },
-    { label: 'high',     count: stats?.byPriority?.high     ?? 0 },
-    { label: 'medium',   count: stats?.byPriority?.medium   ?? 0 },
-    { label: 'low',      count: stats?.byPriority?.low      ?? 0 },
-  ];
+  const billingPie = [
+    { name: 'Billable',     value: billing.billable.length,    color: '#10b981' },
+    { name: 'Non-Billable', value: billing.nonBillable.length, color: '#6b7280' },
+  ].filter(d => d.value > 0);
 
-  const totalTickets = stats?.total ?? 0;
-  const isEmpty = !loading && !newLoading && totalTickets === 0 && agentStats.length === 0;
+  const rows = basis === 'breached' ? deadlines.breached : deadlines.upcoming;
 
-  // Quick Stats derived values
-  const quickTotal      = stats?.total ?? 0;
-  const quickPending    = stats?.tasks?.pending ?? 0;
-  const quickResolved   = stats?.byStatus?.resolved ?? 0;
-  const quickAssignees  = agentStats.length;
+  // The ticket list has no "breached" filter — the Breached card below IS that list
+  const showBreached = () => {
+    setBasis('breached');
+    document.getElementById('hd-deadlines')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
 
-  // Priority pie chart data (matches original colors)
-  const priorityPieData = priorityData.map(d => {
-    const lbl   = String(d.label ?? d.priority ?? '').toLowerCase();
-    const color = lbl === 'low' ? '#4caf50' : lbl === 'medium' ? '#607d8b' : lbl === 'high' ? '#ff9800' : '#f44336';
-    return { priority: d.label ?? d.priority, count: d.count, color };
-  });
+  // Every drill-through link carries the dashboard's active Team/Employee filter
+  // forward, so the ticket list it opens always matches the count that was clicked
+  // — the same "card must match the list" rule the earlier stale-request fix relies on.
+  const ticketListUrl = (extra = {}) => {
+    const params = new URLSearchParams({
+      ...(teamFilter ? { teamManagerId: teamFilter } : {}),
+      ...(employeeFilter ? { assigneeId: employeeFilter } : {}),
+      ...(categoryFilter ? { category: categoryFilter } : {}),
+      ...(projectFilter ? { projectId: projectFilter } : {}),
+      ...(billingTypeFilter ? { billingType: billingTypeFilter } : {}),
+      ...extra,
+    });
+    return `/helpdesk/tickets?${params.toString()}`;
+  };
+  const isEmpty = !loading && (s.total ?? 0) === 0;
 
   return (
     <div className="space-y-6">
-      {/* ── Dashboard header with filter buttons ── */}
-      <div className="flex items-center justify-between mb-5">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 bg-gradient-to-br from-emerald-500 to-teal-600 rounded-xl flex items-center justify-center shadow-lg shadow-emerald-500/20">
-            <HiOutlineDocumentText className="w-5 h-5 text-white" />
-          </div>
-          <div>
-            <h1 className="text-base font-bold text-slate-800">Helpdesk Dashboard</h1>
-            <p className="text-[11px] text-slate-500">Overview of requests and metrics</p>
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          <button className="flex items-center gap-1.5 px-2.5 py-1.5 border border-slate-200 rounded-xl text-xs text-slate-600 hover:bg-slate-50 hover:border-slate-300 transition-colors">
-            <HiOutlineLocationMarker className="w-4 h-4" /> All Sites
-          </button>
-          <button className="flex items-center gap-1.5 px-2.5 py-1.5 border border-slate-200 rounded-xl text-xs text-slate-600 hover:bg-slate-50 hover:border-slate-300 transition-colors">
-            <HiOutlineUsers className="w-4 h-4" /> All Teams
-          </button>
-          <button
-            onClick={() => navigate('/helpdesk/tickets/new')}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-medium shadow-md shadow-indigo-500/25 transition-all"
-          >
-            <HiOutlinePlus className="w-4 h-4" /> New Request
-          </button>
-        </div>
-      </div>
-
-      {/* ── Global empty state ── */}
-      {isEmpty ? (
-        <div className="bg-white rounded-xl border border-gray-200 p-12 text-center">
-          <HiOutlineTicket className="w-16 h-16 text-gray-300 mx-auto mb-4" />
-          <h3 className="text-lg font-semibold text-gray-700 mb-2">No tickets yet. Create the first one.</h3>
-          <p className="text-gray-400 mb-6 text-sm">Once tickets are created, dashboard analytics will appear here.</p>
-          <button
-            onClick={() => navigate('/helpdesk/tickets/new')}
-            className="inline-flex items-center gap-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors"
-          >
-            <HiOutlinePlus className="w-4 h-4" /> New Request
-          </button>
-        </div>
-      ) : (
-        <>
-          {/* ── Row 1: Scrollable stat boxes ── */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <ScrollableStatBox title="Agent Statistics">
-              {newLoading ? (
-                <div className="flex items-center justify-center h-24">
-                  <div className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
-                </div>
-              ) : (
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr className="text-gray-400 border-b border-gray-100">
-                      <th className="text-left py-1.5 font-medium">Agent Name</th>
-                      <th className="text-right py-1.5 font-medium">Total</th>
-                      <th className="text-right py-1.5 font-medium">Pending</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {agentStats.map((a, i) => (
-                      <tr key={i} className="border-b border-gray-50 last:border-0">
-                        <td className="py-1.5">
-                          <button
-                            onClick={() => navigate(
-                              a.name === 'Unassigned'
-                                ? '/helpdesk/tickets?assigneeId=unassigned'
-                                : `/helpdesk/tickets?technician=${encodeURIComponent(a.name)}`
-                            )}
-                            className="text-blue-600 hover:underline font-medium"
-                          >
-                            {a.name}
-                          </button>
-                        </td>
-                        <td className="text-right py-1.5 text-gray-700">{a.total}</td>
-                        <td className="text-right py-1.5 font-medium text-amber-600">{a.pending}</td>
-                      </tr>
-                    ))}
-                    {agentStats.length === 0 && (
-                      <tr><td colSpan={3} className="py-4 text-center text-gray-300 text-xs">No agent data</td></tr>
-                    )}
-                  </tbody>
-                </table>
-              )}
-            </ScrollableStatBox>
-
-            <ScrollableStatBox title="Raised by Team">
-              {newLoading ? (
-                <div className="flex items-center justify-center h-24">
-                  <div className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
-                </div>
-              ) : (
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr className="text-gray-400 border-b border-gray-100">
-                      <th className="text-left py-1.5 font-medium">Team</th>
-                      <th className="text-right py-1.5 font-medium">Count</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {teamData.map((t, i) => (
-                      <tr key={i} className="border-b border-gray-50 last:border-0">
-                        <td className="py-1.5 text-gray-700">{t.team ?? t.name ?? '—'}</td>
-                        <td className="text-right py-1.5 font-semibold text-gray-900">{t.count ?? 0}</td>
-                      </tr>
-                    ))}
-                    {teamData.length === 0 && (
-                      <tr><td colSpan={2} className="py-4 text-center text-gray-300 text-xs">No team data</td></tr>
-                    )}
-                  </tbody>
-                </table>
-              )}
-            </ScrollableStatBox>
-
-            <ScrollableStatBox title="Projects (Total / Pending)">
-              {newLoading ? (
-                <div className="flex items-center justify-center h-24">
-                  <div className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
-                </div>
-              ) : (
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr className="text-gray-400 border-b border-gray-100">
-                      <th className="text-left py-1.5 font-medium">Project</th>
-                      <th className="text-right py-1.5 font-medium">Total</th>
-                      <th className="text-right py-1.5 font-medium">Pending</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {projectStats.map((p, i) => (
-                      <tr key={i} className="border-b border-gray-50 last:border-0">
-                        <td className="py-1.5 truncate max-w-[130px] text-gray-700" title={p.name}>{p.name ?? '—'}</td>
-                        <td className="text-right py-1.5 text-gray-700">{p.total ?? 0}</td>
-                        <td className="text-right py-1.5 font-medium text-amber-600">{p.pending ?? 0}</td>
-                      </tr>
-                    ))}
-                    {projectStats.length === 0 && (
-                      <tr><td colSpan={3} className="py-4 text-center text-gray-300 text-xs">No project data</td></tr>
-                    )}
-                  </tbody>
-                </table>
-              )}
-            </ScrollableStatBox>
-          </div>
-
-          {/* ── Agent Workload (Phase 3) — privileged roles only ── */}
-          {canSeeWorkload && workload && (
-            <AgentWorkloadCard data={workload} monthKey={currentMonth} />
-          )}
-
-          {/* ── Row 2: Gauge charts + Priority pie ── */}
-          <div className="grid grid-cols-4 gap-4">
-            <GaugeChart
-              title="SLA Violated"
-              value={slaStats.breached}
-              total={Math.max(slaStats.total, 1)}
-              color="#f44336"
-            />
-            <GaugeChart
-              title="Open Point (Self only)"
-              value={myStats.open}
-              total={Math.max(myStats.total, 1)}
-              color="#2196f3"
-              onClick={() => navigate(`/helpdesk/tickets?technician=${encodeURIComponent(myStats.agentName ?? user?.name ?? '')}`)}
-            />
-            <GaugeChart
-              title="Unassigned"
-              value={unassignedCount}
-              total={Math.max(totalTickets, 1)}
-              color="#607d8b"
-              onClick={() => navigate('/helpdesk/tickets?assigneeId=unassigned')}
-            />
-            <div className="bg-white rounded-xl border border-gray-200 p-4">
-              <h3 className="font-medium text-xs mb-2">Priority</h3>
-              <ResponsiveContainer width="100%" height={100}>
-                <PieChart>
-                  <Pie data={priorityPieData} cx="50%" cy="50%" outerRadius={40} dataKey="count">
-                    {priorityPieData.map((entry, index) => (
-                      <Cell key={index} fill={entry.color} />
-                    ))}
-                  </Pie>
-                </PieChart>
-              </ResponsiveContainer>
-              <div className="flex flex-wrap gap-2 text-[10px] mt-2">
-                {priorityPieData.map((item, i) => (
-                  <div key={i} className="flex items-center gap-1">
-                    <div className="w-2 h-2 rounded" style={{ backgroundColor: item.color }} />
-                    <span>{item.priority}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          {/* ── Row 3: Weekly Bar Chart + Quick Stats ── */}
-          <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-            <div className="bg-white rounded-xl border border-gray-200 p-4">
-              <h3 className="font-medium text-xs mb-3">Requests Last Week</h3>
-              <ResponsiveContainer width="100%" height={150}>
-                <BarChart data={last7Days}>
-                  <XAxis dataKey="label" tick={{ fontSize: 9 }} />
-                  <YAxis tick={{ fontSize: 9 }} />
-                  <Tooltip />
-                  <Legend wrapperStyle={{ fontSize: 9 }} />
-                  <Bar dataKey="received"  name="Received"  fill="#4caf50" />
-                  <Bar dataKey="completed" name="Completed" fill="#2196f3" />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-
-            <div className="bg-white rounded-xl border border-gray-200 p-4">
-              <h3 className="font-medium text-xs mb-3">Quick Stats</h3>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="p-3 bg-blue-50 rounded-lg">
-                  <p className="text-xl font-bold text-blue-600">{quickTotal}</p>
-                  <p className="text-sm text-gray-600">Total Request</p>
-                </div>
-                <div className="p-3 bg-yellow-50 rounded-lg">
-                  <p className="text-xl font-bold text-yellow-600">{quickPending}</p>
-                  <p className="text-sm text-gray-600">Pending Task</p>
-                </div>
-                <div className="p-3 bg-green-50 rounded-lg">
-                  <p className="text-xl font-bold text-green-600">{quickResolved}</p>
-                  <p className="text-sm text-gray-600">Resolved</p>
-                </div>
-                <div className="p-3 bg-purple-50 rounded-lg">
-                  <p className="text-xl font-bold text-purple-600">{quickAssignees}</p>
-                  <p className="text-sm text-gray-600">Active Tech</p>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* ── Row 4: Existing stat cards ── */}
-          <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
-            <StatCard label="Total Tickets"  value={stats?.total}                  icon={HiOutlineTicket}      color="bg-blue-100 text-blue-600"      loading={loading} />
-            <StatCard label="Open"           value={stats?.byStatus?.open}         icon={HiOutlineFolderOpen}  color="bg-sky-100 text-sky-600"        loading={loading} />
-            <StatCard label="In Progress"    value={stats?.byStatus?.in_progress}  icon={HiOutlineClock}       color="bg-amber-100 text-amber-600"    loading={loading} />
-            <StatCard label="SLA Breached"   value={stats?.slaBreached}            icon={HiOutlineExclamation} color="bg-red-100 text-red-600"        loading={loading} />
-            <StatCard label="Resolved"       value={stats?.byStatus?.resolved}     icon={HiOutlineCheckCircle} color="bg-emerald-100 text-emerald-600" loading={loading} />
-            <StatCard label="Closed"         value={stats?.byStatus?.closed}       icon={HiOutlineXCircle}     color="bg-gray-100 text-gray-600"      loading={loading} />
-          </div>
-
-          {/* ── Row 5: Status + Priority charts ── */}
-          <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-            {loading
-              ? <div className="bg-white rounded-xl border border-gray-200 p-5"><Spinner /></div>
-              : <CssBarChart title="Tickets by Status"   data={statusData}   colorFn={statusBarColor}   />
-            }
-            {loading
-              ? <div className="bg-white rounded-xl border border-gray-200 p-5"><Spinner /></div>
-              : <CssBarChart title="Tickets by Priority" data={priorityData} colorFn={priorityBarColor} />
-            }
-          </div>
-
-          {/* ── Row 6: Team table + Monthly trend ── */}
-          <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-            <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-              <div className="px-5 py-4 border-b border-gray-100">
-                <h3 className="font-semibold text-gray-900">Tickets by Team</h3>
-              </div>
-              {loading ? <Spinner /> : (
-                <table className="w-full text-sm">
-                  <thead className="bg-gray-50 text-xs text-gray-500 uppercase tracking-wider">
-                    <tr>
-                      <th className="px-5 py-3 text-left">Team</th>
-                      <th className="px-5 py-3 text-right">Tickets</th>
-                      <th className="px-5 py-3 text-right">Pending</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-50">
-                    {byTeam.length === 0
-                      ? <tr><td colSpan={3} className="px-5 py-6 text-center text-gray-400 text-sm">No team data</td></tr>
-                      : byTeam.map((t, i) => (
-                          <tr key={t.teamManagerId ?? `legacy-${i}`} className="hover:bg-gray-50">
-                            <td className="px-5 py-3 text-gray-800">
-                              {t.teamManagerId ? (
-                                <button
-                                  onClick={() => navigate(`/helpdesk/tickets?teamManagerId=${encodeURIComponent(t.teamManagerId)}`)}
-                                  className="text-blue-600 hover:underline font-medium"
-                                >
-                                  {t.teamName ?? '—'}
-                                </button>
-                              ) : (
-                                <span className="text-gray-500">{t.teamName ?? '—'}</span>
-                              )}
-                            </td>
-                            <td className="px-5 py-3 text-right font-semibold text-gray-900">{t.total ?? 0}</td>
-                            <td className="px-5 py-3 text-right font-medium text-amber-600">{t.pending ?? 0}</td>
-                          </tr>
-                        ))
-                    }
-                  </tbody>
-                </table>
-              )}
-            </div>
-
-            <div className="bg-white rounded-xl border border-gray-200 p-5">
-              <h3 className="font-semibold text-gray-900 mb-4">Monthly Trend</h3>
-              {loading ? <Spinner /> : trend.length === 0 ? (
-                <p className="text-sm text-gray-400 text-center py-8">No trend data</p>
-              ) : (() => {
-                const trendMax = Math.max(...trend.map(t => Math.max(t.created ?? t.count ?? 0, t.closed ?? 0)), 1);
-                return (
-                  <div className="space-y-3">
-                    {trend.slice(-8).map((t, i) => {
-                      const created = t.created ?? t.count ?? 0;
-                      const closed  = t.closed  ?? 0;
-                      const label   = t.month   ?? t.date ?? t.label ?? `M${i + 1}`;
-                      return (
-                        <div key={i}>
-                          <div className="flex justify-between text-xs text-gray-500 mb-1">
-                            <span className="capitalize">{String(label).slice(0, 7)}</span>
-                            <span className="font-medium text-gray-700">+{created} / -{closed}</span>
-                          </div>
-                          <div className="flex gap-1">
-                            <div className="h-3 rounded-full bg-blue-400" style={{ width: `${(created / trendMax) * 50}%`, minWidth: created > 0 ? '4px' : '0' }} />
-                            <div className="h-3 rounded-full bg-emerald-400" style={{ width: `${(closed / trendMax) * 50}%`, minWidth: closed > 0 ? '4px' : '0' }} />
-                          </div>
-                        </div>
-                      );
-                    })}
-                    <div className="flex gap-4 mt-2 text-xs text-gray-500">
-                      <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-blue-400 inline-block" /> Created</span>
-                      <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-emerald-400 inline-block" /> Closed</span>
-                    </div>
-                  </div>
-                );
-              })()}
-            </div>
-          </div>
-
-          {/* ── Row 7: Recent tickets ── */}
-          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-            <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
-              <h2 className="font-semibold text-gray-900">Recent Tickets</h2>
-              <button
-                onClick={() => navigate('/helpdesk/tickets')}
-                className="text-xs text-blue-600 hover:underline flex items-center gap-1"
-              >
-                View All <HiOutlineArrowRight className="w-3 h-3" />
-              </button>
-            </div>
-            {ticketsLoading ? <Spinner /> : tickets.length === 0 ? (
-              <div className="p-8 text-center text-gray-400 text-sm">No tickets yet</div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead className="bg-gray-50 text-xs text-gray-500 uppercase tracking-wider">
-                    <tr>
-                      <th className="px-5 py-3 text-left">REQ #</th>
-                      <th className="px-5 py-3 text-left">Title</th>
-                      <th className="px-5 py-3 text-left">Status</th>
-                      <th className="px-5 py-3 text-left">Priority</th>
-                      <th className="px-5 py-3 text-left">Assignee</th>
-                      <th className="px-5 py-3 text-left">Created</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-50">
-                    {tickets.slice(0, 10).map(t => (
-                      <tr
-                        key={t.id}
-                        onClick={() => navigate(`/helpdesk/tickets/${t.id}`)}
-                        className="hover:bg-gray-50 cursor-pointer transition-colors"
-                      >
-                        <td className="px-5 py-3 text-xs font-mono text-gray-500">{t.reqNumber ?? t.ticket_number ?? `#${t.id}`}</td>
-                        <td className="px-5 py-3 font-medium text-gray-900 max-w-xs truncate">{t.title ?? t.subject}</td>
-                        <td className="px-5 py-3">
-                          <span className={`px-2 py-0.5 rounded-full text-xs font-semibold capitalize ${STATUS_COLORS[t.status] || 'bg-gray-100 text-gray-700'}`}>
-                            {String(t.status ?? '').replace(/_/g, ' ')}
-                          </span>
-                        </td>
-                        <td className="px-5 py-3">
-                          <span className={`px-2 py-0.5 rounded-full text-xs font-semibold capitalize ${PRIORITY_COLORS[String(t.priority ?? '').toLowerCase()] || 'bg-gray-100 text-gray-700'}`}>
-                            {t.priority}
-                          </span>
-                        </td>
-                        <td className="px-5 py-3 text-gray-600">{t.assignee?.name ?? t.assigned_to?.name ?? '—'}</td>
-                        <td className="px-5 py-3 text-gray-500 text-xs">{fmtDate(t.created_at)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-// ─── Tab 2: Scheduler ─────────────────────────────────────────────────────────
-
-function SchedulerTab() {
-  const navigate = useNavigate();
-  const [currentDate, setCurrentDate] = useState(new Date());
-  const [ticketsByDay, setTicketsByDay] = useState({});
-  const [loading, setLoading]           = useState(true);
-  const [selectedDay, setSelectedDay]   = useState(null);
-
-  const year        = currentDate.getFullYear();
-  const month       = currentDate.getMonth();
-  const firstDow    = new Date(year, month, 1).getDay();
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
-
-  const cells = [];
-  for (let i = 0; i < firstDow; i++) cells.push(null);
-  for (let i = 1; i <= daysInMonth; i++) cells.push(i);
-
-  const today  = new Date();
-  const isToday = (d) => d === today.getDate() && month === today.getMonth() && year === today.getFullYear();
-  const dayKey  = (d) => `${year}-${pad(month + 1)}-${pad(d)}`;
-
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      setLoading(true);
-      try {
-        const res  = await getTicketsApi({ pageSize: 500 });
-        const data = extractData(res);
-        const list = data?.tickets ?? [];
-        const map  = {};
-        for (const t of list) {
-          const raw = t.due_date ?? t.dueDate;
-          if (!raw) continue;
-          const dt = new Date(raw);
-          if (isNaN(dt.getTime())) continue;
-          const key = `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}`;
-          if (!map[key]) map[key] = [];
-          map[key].push(t);
-        }
-        if (alive) setTicketsByDay(map);
-      } catch {
-        if (alive) setTicketsByDay({});
-      } finally {
-        if (alive) setLoading(false);
-      }
-    })();
-    return () => { alive = false; };
-  }, []);
-
-  const prioColor = (p) =>
-    PRIORITY_BORDER[p] ??
-    PRIORITY_BORDER[Object.keys(PRIORITY_BORDER).find(k => k.toLowerCase() === String(p ?? '').toLowerCase())] ??
-    '#94a3b8';
-
-  const statusBadge = (s) =>
-    `px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${STATUS_COLORS[String(s ?? '').toLowerCase()] || 'bg-gray-100 text-gray-700'}`;
-
-  const panelLabel = () => {
-    if (!selectedDay) return '';
-    const [y, m, d] = selectedDay.split('-').map(Number);
-    return `${d} ${MONTH_NAMES[m - 1]} ${y}`;
-  };
-  const selectedList = (selectedDay && ticketsByDay[selectedDay]) || [];
-
-  return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setCurrentDate(new Date(year, month - 1))}
-            className="p-1 hover:bg-gray-200 rounded"
-          >
-            <HiOutlineChevronLeft className="w-5 h-5" />
-          </button>
-          <button
-            onClick={() => setCurrentDate(new Date(year, month + 1))}
-            className="p-1 hover:bg-gray-200 rounded"
-          >
-            <HiOutlineChevronRight className="w-5 h-5" />
-          </button>
-          <h2 className="text-lg font-semibold">{MONTH_NAMES[month]} {year}</h2>
-          <button
-            onClick={() => setCurrentDate(new Date())}
-            className="ml-2 px-3 py-1 text-xs font-medium border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
-          >
-            Today
-          </button>
-        </div>
-        <p className="text-xs text-gray-500">
-          {loading ? 'Loading tickets…' : 'Tickets on their due date — click a day for details'}
-        </p>
-      </div>
-
-      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-        <div className="grid grid-cols-7">
-          {['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'].map(d => (
-            <div key={d} className="p-3 text-center text-sm font-medium bg-gray-50 border-b">{d}</div>
-          ))}
-        </div>
-        <div className="grid grid-cols-7">
-          {cells.map((day, idx) => {
-            const list      = day ? (ticketsByDay[dayKey(day)] || []) : [];
-            const todayCell = isToday(day);
-            return (
-              <div
-                key={idx}
-                onClick={() => day && setSelectedDay(dayKey(day))}
-                className={`min-h-[100px] p-2 border-b border-r align-top ${day ? 'cursor-pointer hover:bg-gray-50' : ''} ${todayCell ? 'bg-blue-50' : ''}`}
-              >
-                {day && (
-                  <>
-                    <span className={`inline-flex items-center justify-center w-7 h-7 rounded-full text-sm ${todayCell ? 'bg-[#2196f3] text-white' : ''}`}>
-                      {day}
-                    </span>
-                    <div className="mt-1 space-y-0.5">
-                      {list.slice(0, 3).map(t => (
-                        <div
-                          key={t.id}
-                          title={`${t.reqNumber ?? t.ticket_number ?? '#' + t.id} · ${t.title ?? t.subject}`}
-                          className="truncate text-[10px] pl-1.5 pr-1 py-0.5 rounded bg-gray-50 text-gray-700 border-l-2"
-                          style={{ borderColor: prioColor(t.priority) }}
-                        >
-                          {t.reqNumber ?? t.ticket_number ?? `#${t.id}`} · {t.title ?? t.subject}
-                        </div>
-                      ))}
-                      {list.length > 3 && (
-                        <div className="text-[9px] text-gray-500 pl-1.5">+{list.length - 3} more</div>
-                      )}
-                    </div>
-                  </>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      <div className="flex gap-4 text-xs text-gray-500">
-        {Object.entries(PRIORITY_BORDER).map(([p, c]) => (
-          <span key={p} className="flex items-center gap-1">
-            <span className="w-3 h-1.5 rounded" style={{ backgroundColor: c }} />
-            {p}
-          </span>
-        ))}
-      </div>
-
-      {selectedDay && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={() => setSelectedDay(null)}>
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md mx-4 max-h-[80vh] flex flex-col" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
-              <h3 className="font-semibold text-gray-900">Tickets due · {panelLabel()}</h3>
-              <button onClick={() => setSelectedDay(null)} className="p-1 rounded-lg hover:bg-gray-100">
-                <HiOutlineX className="w-5 h-5 text-gray-500" />
-              </button>
-            </div>
-            <div className="p-4 space-y-2 overflow-y-auto">
-              {selectedList.length === 0 ? (
-                <p className="text-sm text-gray-500 text-center py-8">No tickets due on this day.</p>
-              ) : selectedList.map(t => (
-                <button
-                  key={t.id}
-                  onClick={() => { setSelectedDay(null); navigate(`/helpdesk/tickets/${t.id}`); }}
-                  className="w-full text-left p-3 rounded-lg border border-gray-200 hover:bg-gray-50 hover:border-blue-300 transition-colors"
-                >
-                  <div className="flex items-center justify-between gap-2 mb-1">
-                    <span className="text-blue-600 font-mono text-xs font-semibold">
-                      {t.reqNumber ?? t.ticket_number ?? `#${t.id}`}
-                    </span>
-                    <span className={statusBadge(t.status)}>{String(t.status ?? '').replace(/_/g, ' ')}</span>
-                  </div>
-                  <p className="text-sm text-gray-900 font-medium truncate">{t.title ?? t.subject}</p>
-                  <div className="flex items-center gap-2 mt-1">
-                    <span
-                      className="text-[10px] px-1.5 py-0.5 rounded-full font-semibold"
-                      style={{ backgroundColor: prioColor(t.priority) + '22', color: prioColor(t.priority) }}
-                    >
-                      {t.priority}
-                    </span>
-                    <span className="text-[11px] text-gray-500">{t.assignee?.name ?? t.assigned_to?.name ?? 'Unassigned'}</span>
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ─── Tab 3: Team Availability (NEW) ──────────────────────────────────────────
-
-function AvailabilityTab() {
-  const { user: currentUser } = useSelector(s => s.auth);
-  const [users, setUsers]     = useState([]);
-  const [loading, setLoading] = useState(true);
-  // localAvailability: Map of userId (string) → boolean (true = available)
-  const [localAvailability, setLocalAvailability] = useState(new Map());
-
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      setLoading(true);
-      try {
-        const res  = await getUsersApi({ pageSize: 50 });
-        const data = extractData(res);
-        const list = Array.isArray(data) ? data : (data?.users ?? data?.data ?? []);
-        if (alive) {
-          setUsers(list);
-          // Default all users to available
-          const map = new Map();
-          list.forEach(u => map.set(String(u.id), true));
-          setLocalAvailability(map);
-        }
-      } catch {
-        if (alive) setUsers([]);
-      } finally {
-        if (alive) setLoading(false);
-      }
-    })();
-    return () => { alive = false; };
-  }, []);
-
-  const toggleAvailability = (userId) => {
-    setLocalAvailability(prev => {
-      const next = new Map(prev);
-      next.set(String(userId), !prev.get(String(userId)));
-      return next;
-    });
-  };
-
-  const isAvailable = (userId) => localAvailability.get(String(userId)) !== false;
-  const isMe = (userId) => String(userId) === String(currentUser?.id);
-
-  const initials = (name) => {
-    if (!name) return '?';
-    const parts = String(name).split(' ').filter(Boolean);
-    return parts.length >= 2
-      ? (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
-      : String(name).slice(0, 2).toUpperCase();
-  };
-
-  const avatarColor = (id) => AVATAR_COLORS[Math.abs(Number(id) || 0) % AVATAR_COLORS.length];
-
-  if (loading) return <Spinner />;
-
-  return (
-    <div className="space-y-4">
-      <div className="flex items-center gap-3">
-        <div className="w-10 h-10 bg-blue-100 rounded-xl flex items-center justify-center">
-          <HiOutlineUsers className="w-5 h-5 text-blue-600" />
-        </div>
+      <div className="flex items-start justify-between gap-4">
         <div>
-          <h2 className="text-xl font-bold text-gray-900">Team Availability</h2>
-          <p className="text-sm text-gray-500 mt-0.5">
-            {users.length} team member{users.length !== 1 ? 's' : ''} — toggle availability below
-          </p>
+          <h1 className="text-2xl font-bold text-gray-900">Operations</h1>
+          <p className="text-sm text-gray-500 mt-1">Overview of tickets, SLA breaches and deadlines</p>
         </div>
-      </div>
-
-      <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-xs text-amber-700 flex items-center gap-2">
-        <HiOutlineExclamation className="w-4 h-4 flex-shrink-0" />
-        Availability is tracked locally in this session only. No API persistence yet.
-      </div>
-
-      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-        <table className="w-full text-sm">
-          <thead className="bg-gray-50 text-xs text-gray-500 uppercase tracking-wider">
-            <tr>
-              <th className="px-5 py-3 text-left">Member</th>
-              <th className="px-5 py-3 text-left">Role</th>
-              <th className="px-5 py-3 text-left">Department</th>
-              <th className="px-5 py-3 text-left">Availability</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-50">
-            {users.length === 0 ? (
-              <tr>
-                <td colSpan={4} className="px-5 py-10 text-center text-gray-400">No team members found</td>
-              </tr>
-            ) : users.map(u => {
-              const available = isAvailable(u.id);
-              const mine      = isMe(u.id);
-              return (
-                <tr
-                  key={u.id}
-                  className={`transition-colors ${mine ? 'border-l-4 border-l-blue-500 bg-blue-50/30 hover:bg-blue-50/50' : 'hover:bg-gray-50'}`}
-                >
-                  <td className="px-5 py-3">
-                    <div className="flex items-center gap-3">
-                      <div className={`w-9 h-9 rounded-full flex items-center justify-center text-white text-sm font-bold flex-shrink-0 ${avatarColor(u.id)}`}>
-                        {initials(u.name ?? u.full_name)}
-                      </div>
-                      <div>
-                        <p className="font-medium text-gray-900">
-                          {u.name ?? u.full_name ?? '—'}
-                          {mine && <span className="ml-1.5 text-[10px] bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded-full font-semibold">You</span>}
-                        </p>
-                        <p className="text-xs text-gray-400">{u.email ?? ''}</p>
-                      </div>
-                    </div>
-                  </td>
-                  <td className="px-5 py-3">
-                    <span className="inline-block px-2 py-0.5 bg-gray-100 text-gray-600 rounded-full text-xs capitalize">
-                      {String(u.role ?? '').replace(/_/g, ' ') || '—'}
-                    </span>
-                  </td>
-                  <td className="px-5 py-3 text-gray-600 text-sm">
-                    {typeof u.department?.name === 'string' && u.department.name
-                      ? u.department.name
-                      : typeof u.department === 'string' && u.department
-                      ? u.department
-                      : typeof u.departmentName === 'string' && u.departmentName
-                      ? u.departmentName
-                      : '—'}
-                  </td>
-                  <td className="px-5 py-3">
-                    <button
-                      onClick={() => toggleAvailability(u.id)}
-                      title="Availability is tracked locally"
-                      className={`px-3 py-1 rounded-full text-xs font-semibold transition-colors ${
-                        available
-                          ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
-                          : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
-                      }`}
-                    >
-                      {available ? 'Available' : 'Unavailable'}
-                    </button>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
-// ─── Tab 4: Tasks ─────────────────────────────────────────────────────────────
-
-function TasksTab() {
-  const { user }                              = useSelector(s => s.auth);
-  const [tasks, setTasks]                     = useState([]);
-  const [showAddForm, setShowAddForm]         = useState(false);
-  const [newTask, setNewTask]                 = useState({ title: '', module: 'General', priority: 'High' });
-  const [loading, setLoading]                 = useState(true);
-
-  useEffect(() => { loadTasks(); }, []);
-
-  const loadTasks = async () => {
-    try {
-      const res  = await api.get('/helpdesk/tasks');
-      const data = extractData(res);
-      setTasks(Array.isArray(data) ? data : []);
-    } catch (err) {
-      console.error('Failed to load tasks:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleAddTask = async (e) => {
-    e.preventDefault();
-    if (!newTask.title.trim()) return;
-    try {
-      await api.post('/helpdesk/tasks', { ...newTask, createdBy: user?.name || 'User' });
-      setNewTask({ title: '', module: 'General', priority: 'High' });
-      setShowAddForm(false);
-      loadTasks();
-    } catch (err) {
-      console.error('Failed to create task:', err);
-    }
-  };
-
-  const handleToggleStatus = async (id, currentStatus) => {
-    try {
-      await api.put(`/helpdesk/tickets/tasks/${id}`, { status: currentStatus === 'completed' ? 'pending' : 'completed' });
-      loadTasks();
-    } catch (err) {
-      console.error('Failed to update task:', err);
-    }
-  };
-
-  const handleDeleteTask = async (id) => {
-    try {
-      await api.delete(`/helpdesk/tickets/tasks/${id}`);
-      loadTasks();
-    } catch (err) {
-      console.error('Failed to delete task:', err);
-    }
-  };
-
-  if (loading) return <Spinner />;
-
-  return (
-    <div className="p-4">
-      <div className="bg-white rounded-lg border">
-        <div className="flex items-center justify-between p-3 border-b">
-          <div className="flex items-center gap-2">
-            <h2 className="font-medium">All Tasks</h2>
-            <HiOutlineFilter className="w-4 h-4 text-gray-400 ml-2" />
-          </div>
-          <button
-            onClick={() => setShowAddForm(true)}
-            className="flex items-center gap-1 px-3 py-1.5 bg-green-500 text-white rounded text-sm"
-          >
-            <HiOutlinePlus className="w-4 h-4" /> Quick Add
-          </button>
-        </div>
-
-        {showAddForm && (
-          <div className="p-4 border-b bg-gray-50">
-            <form onSubmit={handleAddTask} className="flex gap-3">
-              <input
-                type="text"
-                value={newTask.title}
-                onChange={(e) => setNewTask({ ...newTask, title: e.target.value })}
-                placeholder="Task title"
-                className="flex-1 px-3 py-2 border rounded text-sm"
-                autoFocus
-              />
-              <select
-                value={newTask.module}
-                onChange={(e) => setNewTask({ ...newTask, module: e.target.value })}
-                className="px-3 py-2 border rounded text-sm"
-              >
-                <option>General</option>
-                <option>Request</option>
-              </select>
-              <select
-                value={newTask.priority}
-                onChange={(e) => setNewTask({ ...newTask, priority: e.target.value })}
-                className="px-3 py-2 border rounded text-sm"
-              >
-                <option>High</option>
-                <option>Medium</option>
-                <option>Low</option>
-              </select>
-              <button type="submit" className="px-4 py-2 bg-[#2196f3] text-white rounded text-sm">Add</button>
-              <button type="button" onClick={() => setShowAddForm(false)} className="px-4 py-2 border rounded text-sm">Cancel</button>
-            </form>
-          </div>
-        )}
-
-        <table className="w-full text-xs">
-          <thead className="bg-gray-50">
-            <tr>
-              <th className="w-8 p-3"><input type="checkbox" /></th>
-              <th className="w-8 p-3"></th>
-              <th className="text-left p-3">Tasks</th>
-              <th className="text-left p-3">Module</th>
-              <th className="text-left p-3">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {tasks.length === 0 ? (
-              <tr>
-                <td colSpan={5} className="text-center py-8 text-gray-500">No tasks. Click &quot;Quick Add&quot; to create one.</td>
-              </tr>
-            ) : (
-              tasks.map(task => (
-                <tr key={task.id} className="border-t hover:bg-gray-50">
-                  <td className="p-3"><input type="checkbox" /></td>
-                  <td className="p-3">
-                    <div className="w-8 h-8 bg-yellow-100 rounded flex items-center justify-center">
-                      <HiOutlineDocumentText className="w-4 h-4 text-yellow-600" />
-                    </div>
-                  </td>
-                  <td className="p-3">
-                    <p className={`font-medium ${task.status === 'completed' ? 'line-through text-gray-400' : ''}`}>{task.title}</p>
-                    <p className="text-xs text-gray-500">
-                      Status: <span className="text-blue-600">{task.status}</span> | Priority:{' '}
-                      <span className={task.priority === 'High' ? 'text-red-600' : 'text-gray-600'}>{task.priority}</span>
-                    </p>
-                  </td>
-                  <td className="p-3">{task.module || 'General'}</td>
-                  <td className="p-3">
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => handleToggleStatus(task.id, task.status)}
-                        className="text-blue-500 hover:underline text-xs"
-                      >
-                        {task.status === 'completed' ? 'Reopen' : 'Complete'}
-                      </button>
-                      <button
-                        onClick={() => handleDeleteTask(task.id)}
-                        className="text-red-500 hover:underline text-xs"
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
-// ─── Tab 5: Reminders ─────────────────────────────────────────────────────────
-
-function RemindersTab() {
-  const navigate                              = useNavigate();
-  const [reminders, setReminders]             = useState([]);
-  const [smart, setSmart]                     = useState([]);
-  const [showAddForm, setShowAddForm]         = useState(false);
-  const [newReminder, setNewReminder]         = useState({ title: '', reminderDatetime: '' });
-  const [loading, setLoading]                 = useState(true);
-
-  useEffect(() => { loadAll(); }, []);
-
-  const loadAll = async () => {
-    try {
-      const [remRes, smRes] = await Promise.allSettled([
-        api.get('/helpdesk/reminders'),
-        api.get('/helpdesk/reminders/smart'),
-      ]);
-      const rem = remRes.status === 'fulfilled' ? (extractData(remRes.value) ?? []) : [];
-      const sm  = smRes.status  === 'fulfilled' ? (extractData(smRes.value)  ?? []) : [];
-      setReminders(Array.isArray(rem) ? rem : []);
-      setSmart(Array.isArray(sm) ? sm : []);
-    } catch (err) {
-      console.error('Failed to load reminders:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleAddReminder = async (e) => {
-    e.preventDefault();
-    if (!newReminder.title.trim() || !newReminder.reminderDatetime) return;
-    try {
-      await api.post('/helpdesk/reminders', { title: newReminder.title, reminder_datetime: newReminder.reminderDatetime });
-      setNewReminder({ title: '', reminderDatetime: '' });
-      setShowAddForm(false);
-      loadAll();
-    } catch (err) {
-      console.error('Failed to create reminder:', err);
-    }
-  };
-
-  const handleDeleteReminder = async (id) => {
-    try {
-      await api.delete(`/helpdesk/reminders/${id}`);
-      loadAll();
-    } catch (err) {
-      console.error('Failed to delete reminder:', err);
-    }
-  };
-
-  const handleDismissSmart = async (key) => {
-    setSmart(prev => prev.filter(s => s.key !== key));
-    try {
-      await api.patch(`/helpdesk/reminders/smart/${key}/dismiss`);
-    } catch (err) {
-      console.error('Failed to dismiss reminder:', err);
-      loadAll();
-    }
-  };
-
-  const fmtDateTime = (d) => {
-    if (!d) return '';
-    const dt = new Date(d);
-    return isNaN(dt.getTime()) ? String(d) : dt.toLocaleString();
-  };
-
-  if (loading) return <Spinner />;
-
-  const isEmpty = smart.length === 0 && reminders.length === 0;
-
-  return (
-    <div className="p-4">
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="text-lg font-semibold">Reminders</h2>
         <button
-          onClick={() => setShowAddForm(true)}
-          className="flex items-center gap-2 px-4 py-2 bg-[#2196f3] text-white rounded text-sm"
+          type="button"
+          onClick={handleExport}
+          disabled={exporting}
+          title="Download this dashboard (with the filters currently applied) as an Excel file"
+          className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          <HiOutlinePlus className="w-4 h-4" /> Add Reminder
+          <HiOutlineDownload className={`w-4 h-4 ${exporting ? 'animate-pulse' : ''}`} />
+          {exporting ? 'Exporting…' : 'Download Excel'}
         </button>
       </div>
 
-      {showAddForm && (
-        <div className="bg-white rounded-lg border p-4 mb-4">
-          <form onSubmit={handleAddReminder} className="space-y-3">
-            <input
-              type="text"
-              value={newReminder.title}
-              onChange={(e) => setNewReminder({ ...newReminder, title: e.target.value })}
-              placeholder="Reminder title"
-              className="w-full px-3 py-2 border rounded text-sm"
-            />
-            <input
-              type="datetime-local"
-              value={newReminder.reminderDatetime}
-              onChange={(e) => setNewReminder({ ...newReminder, reminderDatetime: e.target.value })}
-              className="w-full px-3 py-2 border rounded text-sm"
-            />
-            <div className="flex gap-2">
-              <button type="submit" className="px-4 py-2 bg-[#2196f3] text-white rounded text-sm">Add</button>
-              <button type="button" onClick={() => setShowAddForm(false)} className="px-4 py-2 border rounded text-sm">Cancel</button>
-            </div>
-          </form>
+      {/* Dashboard filters — narrow the WHOLE dashboard below, from the stat cards
+          down to the deadlines card. Narrows only: the server enforces this on top
+          of what the signed-in role already sees. Full page width (not squeezed
+          beside the title) so the grid below wraps evenly instead of leaving
+          ragged, unevenly-filled rows. */}
+      <div className="bg-white border border-gray-200 rounded-xl p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <span className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold">Dashboard filters</span>
+          {(teamFilter || employeeFilter || categoryFilter || projectFilter || billingTypeFilter) && (
+            <button
+              type="button"
+              onClick={() => { setTeamFilter(''); setEmployeeFilter(''); setCategoryFilter(''); setProjectFilter(''); setBillingTypeFilter(''); }}
+              className="text-xs text-gray-500 hover:text-gray-800 underline"
+            >
+              Clear
+            </button>
+          )}
         </div>
-      )}
+
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
+          {canSeeOrgWideTeam && (
+            <SearchSelect
+              options={teams.map(t => ({ value: t._id ?? t.id, label: `${t.name} (${t.memberCount ?? 0})` }))}
+              value={teamFilter}
+              onChange={v => setTeamFilter(v || '')}
+              placeholder="All teams"
+              disabled={teams.length === 0}
+              size="sm"
+              className={searchSelectActiveCls(!!teamFilter)}
+            />
+          )}
+          {canSeeTeamFilters && (
+            <SearchSelect
+              options={employeeOptions.map(m => ({ value: m._id ?? m.id, label: m.name }))}
+              value={employeeFilter}
+              onChange={v => setEmployeeFilter(v || '')}
+              placeholder={canSeeOrgWideTeam ? `All employees${teamFilter ? ' in this team' : ''}` : 'Anyone on my team'}
+              disabled={employeeOptions.length === 0}
+              size="sm"
+              className={searchSelectActiveCls(!!employeeFilter)}
+            />
+          )}
+          <SearchSelect
+            options={projectOptions.map(p => ({ value: p.pmProjectId, label: p.projectName }))}
+            value={projectFilter}
+            onChange={v => setProjectFilter(v || '')}
+            placeholder="All projects"
+            size="sm"
+            className={searchSelectActiveCls(!!projectFilter)}
+          />
+          <select
+            value={categoryFilter}
+            onChange={e => setCategoryFilter(e.target.value)}
+            className={filterBoxCls(!!categoryFilter)}
+            title="Show only this category"
+          >
+            <option value="">All categories</option>
+            {categoryOptions.map(c => (
+              <option key={c} value={c}>{c}</option>
+            ))}
+          </select>
+          <select
+            value={billingTypeFilter}
+            onChange={e => setBillingTypeFilter(e.target.value)}
+            className={filterBoxCls(!!billingTypeFilter)}
+            title="Show only tickets on billable / non-billable projects"
+          >
+            <option value="">All billing types</option>
+            <option value="Billable">Billable</option>
+            <option value="Non-Billable">Non-Billable</option>
+          </select>
+        </div>
+      </div>
+
+      {/* Stat cards */}
+      <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
+        <StatCard label="Total Tickets" value={s.total}                          icon={HiOutlineTicket}      color="bg-blue-100 text-blue-600"       loading={loading} onClick={() => navigate(ticketListUrl({ view: 'all' }))} />
+        <StatCard label="Open"          value={count('open', 'open')}             icon={HiOutlineFolderOpen}  color="bg-sky-100 text-sky-600"         loading={loading} onClick={() => navigate(ticketListUrl({ statusKey: 'open' }))} />
+        <StatCard label="In Progress"   value={count('inProgress', 'in_progress')} icon={HiOutlineClock}      color="bg-amber-100 text-amber-600"     loading={loading} onClick={() => navigate(ticketListUrl({ statusKey: 'in-progress' }))} />
+        <StatCard label="SLA Breached"  value={s.slaBreached}                     icon={HiOutlineExclamation} color="bg-red-100 text-red-600"         loading={loading} onClick={showBreached} />
+        <StatCard label="Resolved"      value={count('resolved', 'resolved')}     icon={HiOutlineCheckCircle} color="bg-emerald-100 text-emerald-600" loading={loading} onClick={() => navigate(ticketListUrl({ statusKey: 'resolved' }))} />
+        <StatCard label="Closed"        value={count('closed', 'closed')}         icon={HiOutlineXCircle}     color="bg-gray-100 text-gray-600"       loading={loading} onClick={() => navigate(ticketListUrl({ statusKey: 'closed' }))} />
+      </div>
 
       {isEmpty ? (
-        <div className="bg-white rounded-lg border p-12 text-center">
-          <HiOutlineBell className="w-12 h-12 text-gray-300 mx-auto mb-4" />
-          <p className="text-gray-500">No reminders — overdue or newly-assigned tickets will appear here automatically.</p>
+        <div className="bg-white rounded-xl border border-gray-200 p-12 text-center">
+          <HiOutlineTicket className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+          <h3 className="text-lg font-semibold text-gray-700">No tickets yet</h3>
         </div>
       ) : (
-        <div className="space-y-2">
-          {smart.map((s) => {
-            const overdue = s.type === 'overdue';
-            return (
-              <div
-                key={s.key}
-                className={`rounded-lg border p-4 flex items-center justify-between ${overdue ? 'bg-red-50 border-red-200' : 'bg-blue-50 border-blue-200'}`}
-              >
-                <button
-                  onClick={() => navigate(`/helpdesk/tickets/${s.id}`)}
-                  className="flex items-center gap-3 text-left min-w-0 flex-1"
-                >
-                  <span className={`shrink-0 w-9 h-9 rounded-full flex items-center justify-center ${overdue ? 'bg-red-100' : 'bg-blue-100'}`}>
-                    {overdue
-                      ? <HiOutlineClock className="w-5 h-5 text-red-600" />
-                      : <HiOutlineBell className="w-5 h-5 text-blue-600" />
-                    }
-                  </span>
-                  <div className="min-w-0">
-                    <p className="font-medium truncate">{overdue ? 'Overdue: ' : 'Assigned: '}{s.ticket_id} · {s.subject}</p>
-                    <p className="text-sm text-gray-500 truncate">
-                      {overdue ? `Due ${fmtDateTime(s.due_date)} — missed` : 'New ticket assigned to you'} · {s.priority} · {s.requester_name || '—'}
-                    </p>
-                  </div>
-                </button>
-                <button
-                  onClick={() => handleDismissSmart(s.key)}
-                  title="Dismiss"
-                  className="shrink-0 ml-2 p-2 hover:bg-white/60 rounded text-gray-400 hover:text-gray-700"
-                >
-                  <HiOutlineX className="w-4 h-4" />
-                </button>
-              </div>
-            );
-          })}
-
-          {reminders.map((reminder) => (
-            <div key={reminder.id} className="bg-white rounded-lg border p-4 flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <HiOutlineBell className="w-5 h-5 text-blue-500" />
-                <div>
-                  <p className="font-medium">{reminder.title}</p>
-                  <p className="text-sm text-gray-500">{fmtDateTime(reminder.reminder_datetime)}</p>
-                </div>
-              </div>
-              <button
-                onClick={() => handleDeleteReminder(reminder.id)}
-                title="Remove"
-                className="p-2 hover:bg-red-50 rounded text-gray-400 hover:text-red-500"
-              >
-                <HiOutlineTrash className="w-4 h-4" />
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ─── Tab 6: Announcements ─────────────────────────────────────────────────────
-
-function AnnouncementsTab() {
-  const { user }    = useSelector(s => s.auth);
-  const canManage   = ADMIN_ROLES.includes(user?.role);
-
-  const [announcements, setAnnouncements] = useState([]);
-  const [loading, setLoading]             = useState(true);
-  const [showForm, setShowForm]           = useState(false);
-  const [submitting, setSubmitting]       = useState(false);
-  const [form, setForm] = useState({ title: '', body: '', expiresAt: '' });
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const res  = await getAnnouncementsApi();
-      const data = extractData(res);
-      setAnnouncements(Array.isArray(data) ? data : []);
-    } catch {
-      toast.error('Failed to load announcements');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => { load(); }, [load]);
-
-  const handleCreate = async (e) => {
-    e.preventDefault();
-    if (!form.title.trim() || !form.body.trim()) { toast.error('Title and body are required'); return; }
-    setSubmitting(true);
-    try {
-      await createAnnouncementApi({
-        title: form.title.trim(),
-        body:  form.body.trim(),
-        ...(form.expiresAt ? { expires_at: form.expiresAt } : {}),
-      });
-      toast.success('Announcement posted');
-      setForm({ title: '', body: '', expiresAt: '' });
-      setShowForm(false);
-      load();
-    } catch {
-      toast.error('Failed to post announcement');
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const handleDelete = async (id) => {
-    if (!window.confirm('Delete this announcement?')) return;
-    try {
-      await deleteAnnouncementApi(id);
-      toast.success('Announcement deleted');
-      load();
-    } catch {
-      toast.error('Failed to delete announcement');
-    }
-  };
-
-  const now     = new Date();
-  const active  = announcements.filter(a => !a.expires_at || new Date(a.expires_at) >= now);
-  const expired = announcements.filter(a =>  a.expires_at && new Date(a.expires_at) <  now);
-
-  return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-xl font-bold text-gray-900">Announcements</h2>
-          <p className="text-sm text-gray-500 mt-0.5">
-            {loading ? '…' : `${active.length} active · ${expired.length} expired`}
-          </p>
-        </div>
-        {canManage && (
-          <button
-            onClick={() => setShowForm(s => !s)}
-            className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors"
-          >
-            <HiOutlinePlus className="w-4 h-4" /> New Announcement
-          </button>
-        )}
-      </div>
-
-      {canManage && showForm && (
-        <div className="bg-white rounded-xl border border-gray-200 p-5">
-          <h3 className="font-semibold text-gray-900 mb-4">New Announcement</h3>
-          <form onSubmit={handleCreate} className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Title <span className="text-red-500">*</span></label>
-              <input
-                type="text"
-                value={form.title}
-                onChange={e => setForm(f => ({ ...f, title: e.target.value }))}
-                placeholder="Announcement title"
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                required
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Body <span className="text-red-500">*</span></label>
-              <textarea
-                value={form.body}
-                onChange={e => setForm(f => ({ ...f, body: e.target.value }))}
-                placeholder="Announcement details…"
-                rows={3}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
-                required
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Expires At <span className="text-gray-400 font-normal">(optional)</span>
-              </label>
-              <input
-                type="datetime-local"
-                value={form.expiresAt}
-                onChange={e => setForm(f => ({ ...f, expiresAt: e.target.value }))}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-            </div>
-            <div className="flex gap-2 pt-1">
-              <button
-                type="submit"
-                disabled={submitting}
-                className="px-5 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white text-sm font-medium rounded-lg transition-colors"
-              >
-                {submitting ? 'Posting…' : 'Post'}
-              </button>
-              <button
-                type="button"
-                onClick={() => { setShowForm(false); setForm({ title: '', body: '', expiresAt: '' }); }}
-                className="px-5 py-2 border border-gray-300 hover:bg-gray-50 text-sm font-medium rounded-lg transition-colors"
-              >
-                Cancel
-              </button>
-            </div>
-          </form>
-        </div>
-      )}
-
-      {loading ? <Spinner /> : (
         <>
-          {active.length === 0 && expired.length === 0 ? (
-            <div className="bg-white rounded-xl border border-gray-200 p-12 text-center">
-              <HiOutlineSpeakerphone className="w-12 h-12 text-gray-300 mx-auto mb-3" />
-              <p className="text-gray-500">No announcements yet.</p>
-              {canManage && (
-                <button onClick={() => setShowForm(true)} className="mt-3 text-sm text-blue-600 hover:underline">
-                  Create the first announcement
-                </button>
-              )}
-            </div>
-          ) : (
-            <>
-              {active.length > 0 && (
-                <div className="space-y-3">
-                  {active.map(a => <AnnouncementCard key={a.id} ann={a} canManage={canManage} onDelete={handleDelete} />)}
+          {/* Billable vs Non-Billable — open tickets by their project's billing type (as on the PM dashboard) */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            <div className="bg-white rounded-xl border border-gray-200 p-5">
+              <h2 className="font-semibold text-gray-900 mb-4 text-sm">Billing Type Distribution</h2>
+              {billingPie.length > 0 ? (
+                <ResponsiveContainer width="100%" height={180}>
+                  <PieChart>
+                    <Pie data={billingPie} cx="50%" cy="50%" innerRadius={50} outerRadius={75} paddingAngle={3} dataKey="value">
+                      {billingPie.map((e, i) => <Cell key={i} fill={e.color} />)}
+                    </Pie>
+                    <Tooltip formatter={(value, name) => [`${value} tickets`, name]} />
+                    <Legend />
+                  </PieChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="h-44 flex items-center justify-center text-gray-400 text-sm text-center px-4">
+                  No open tickets on a billable or non-billable project
                 </div>
               )}
-              {expired.length > 0 && (
-                <>
-                  <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mt-6 mb-2">Expired</h3>
-                  <div className="space-y-3 opacity-60">
-                    {expired.map(a => <AnnouncementCard key={a.id} ann={a} canManage={canManage} onDelete={handleDelete} expired />)}
-                  </div>
-                </>
+            </div>
+
+            <TicketListCard
+              title={`💰 Billable Tickets (${billing.billable.length})`}
+              tone="bg-emerald-50 text-emerald-700"
+              tickets={billing.billable}
+              onOpen={tid => navigate(`/helpdesk/tickets/${tid}`)}
+            />
+
+            <TicketListCard
+              title={`🔧 Non-Billable Tickets (${billing.nonBillable.length})`}
+              tone="bg-gray-50 text-gray-600"
+              tickets={billing.nonBillable}
+              onOpen={tid => navigate(`/helpdesk/tickets/${tid}`)}
+            />
+          </div>
+
+          {/* Breakdown row — open tickets */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            <div className="bg-white rounded-xl border border-gray-200 p-5">
+              <h2 className="font-semibold text-gray-900 mb-4 text-sm">Open Tickets by Priority</h2>
+              {pieData.length > 0 ? (
+                <ResponsiveContainer width="100%" height={180}>
+                  <PieChart>
+                    <Pie data={pieData} cx="50%" cy="50%" innerRadius={50} outerRadius={75} paddingAngle={3} dataKey="value"
+                      cursor="pointer" onClick={(slice) => navigate(ticketListUrl({ priority: slice.name }))}>
+                      {pieData.map((e, i) => <Cell key={i} fill={e.color} />)}
+                    </Pie>
+                    <Tooltip formatter={(value, name) => [`${value} tickets`, name]} />
+                    <Legend />
+                  </PieChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="h-44 flex items-center justify-center text-gray-400 text-sm">No open tickets</div>
               )}
-            </>
-          )}
+            </div>
+
+            <BreakdownList
+              title={`Open by Team (${teamRows.reduce((n, r) => n + r.count, 0)})`}
+              tone="bg-indigo-50 text-indigo-700"
+              rows={teamRows}
+              empty="No open tickets"
+              onRowClick={r => navigate(ticketListUrl({ teamManagerId: r.teamManagerId }))}
+            />
+
+            <BreakdownList
+              title={`Open by Project (${projectRows.reduce((n, r) => n + r.count, 0)})`}
+              tone="bg-emerald-50 text-emerald-700"
+              rows={projectRows}
+              empty="No open tickets with a project"
+              onRowClick={r => navigate(ticketListUrl({ projectId: r.pmProjectId }))}
+            />
+          </div>
+
+          {/* Breached | Upcoming Deadlines — full width */}
+          <div id="hd-deadlines" className="bg-white rounded-xl border border-gray-200 overflow-hidden scroll-mt-4">
+            <div className="px-5 py-4 border-b border-gray-100 flex flex-wrap items-center justify-between gap-3">
+              <h2 className="font-semibold text-gray-900">
+                {basis === 'breached'
+                  ? 'Breached Tickets'
+                  : <>Upcoming Deadlines <span className="text-xs font-normal text-gray-400">(next 14 days)</span></>}
+              </h2>
+              <div className="inline-flex rounded-lg border border-gray-200 p-0.5 bg-gray-50" role="tablist" aria-label="Ticket deadlines">
+                {[
+                  { key: 'breached', label: 'Breached Tickets',   count: deadlines.breached.length },
+                  { key: 'upcoming', label: 'Upcoming Deadlines', count: deadlines.upcoming.length },
+                ].map(t => (
+                  <button
+                    key={t.key}
+                    type="button"
+                    role="tab"
+                    aria-selected={basis === t.key}
+                    onClick={() => setBasis(t.key)}
+                    className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+                      basis === t.key
+                        ? 'bg-white text-indigo-700 shadow-sm border border-gray-200'
+                        : 'text-gray-500 hover:text-gray-800'}`}
+                  >
+                    {t.label}
+                    <span className={`ml-1 ${t.key === 'breached' && t.count > 0 ? 'text-red-600 font-semibold' : 'text-gray-400'}`}>{t.count}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {loading ? <Spinner /> : rows.length === 0 ? (
+              <div className="p-8 text-center text-gray-400 text-sm">
+                {basis === 'breached' ? 'No breached tickets' : 'No open tickets due in the next 14 days'}
+              </div>
+            ) : (
+              <div className="divide-y divide-gray-50 max-h-[28rem] overflow-auto">
+                {rows.map(t => {
+                  const tid = t._id ?? t.id;
+                  return (
+                    <div
+                      key={tid}
+                      onClick={() => navigate(`/helpdesk/tickets/${tid}`)}
+                      className="px-5 py-3 hover:bg-gray-50 cursor-pointer transition-colors flex items-center gap-3"
+                    >
+                      <HiOutlineExclamation className={`w-4 h-4 flex-shrink-0 ${basis === 'breached' ? 'text-red-500' : t.daysLeft <= 2 ? 'text-red-500' : t.daysLeft <= 5 ? 'text-yellow-500' : 'text-blue-500'}`} />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-gray-900 truncate">
+                          <span className="font-mono text-xs text-gray-400 mr-1.5">{t.reqNumber ?? `#${tid}`}</span>
+                          {t.title}
+                        </p>
+                        <p className="text-xs text-gray-500 truncate">
+                          {t.projectName || 'No project'} · {t.assigneeName || 'Unassigned'}
+                          {t.priority && (
+                            <span className={`ml-2 px-1.5 py-0.5 rounded text-[10px] font-semibold capitalize ${PRIORITY_COLORS[String(t.priority).toLowerCase()] || 'bg-gray-100 text-gray-600'}`}>
+                              {t.priority}
+                            </span>
+                          )}
+                        </p>
+                      </div>
+                      <span className="text-xs text-gray-400 flex-shrink-0 hidden sm:inline">
+                        {t.dueDate ? `Due ${fmtDay(t.dueDate)}` : 'No due date'}
+                      </span>
+                      <DeadlineBadge row={t} basis={basis} />
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         </>
       )}
-    </div>
-  );
-}
-
-function AnnouncementCard({ ann, canManage, onDelete, expired = false }) {
-  return (
-    <div className={`bg-white rounded-xl border p-5 ${expired ? 'border-gray-200' : 'border-blue-100 shadow-sm'}`}>
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-1">
-            <HiOutlineSpeakerphone className={`w-4 h-4 flex-shrink-0 ${expired ? 'text-gray-400' : 'text-blue-500'}`} />
-            <h4 className="font-semibold text-gray-900 truncate">{ann.title}</h4>
-            {expired && <span className="text-[10px] px-1.5 py-0.5 bg-gray-100 text-gray-500 rounded-full font-medium">Expired</span>}
-          </div>
-          <p className="text-sm text-gray-600 mt-1 whitespace-pre-wrap">{ann.body ?? ann.content}</p>
-          <div className="flex gap-4 mt-3 text-xs text-gray-400">
-            <span>Posted {fmtDate(ann.created_at)}</span>
-            {ann.expires_at && <span>Expires {fmtDate(ann.expires_at)}</span>}
-          </div>
-        </div>
-        {canManage && (
-          <button
-            onClick={() => onDelete(ann.id)}
-            className="flex-shrink-0 p-1.5 rounded-lg text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors"
-            title="Delete announcement"
-          >
-            <HiOutlineX className="w-4 h-4" />
-          </button>
-        )}
-      </div>
     </div>
   );
 }
 
 // ─── Root Component ───────────────────────────────────────────────────────────
+// The Scheduler, Team Availability, Tasks, Reminders and Announcements sub-tabs
+// were removed (2026-09-18) — the Operations dashboard is the dashboard only.
 
 export default function HdDashboard() {
-  const navigate                            = useNavigate();
-  const [activeTab, setActiveTab]           = useState('dashboard');
-  const [loadedTabs, setLoadedTabs]         = useState(new Set(['dashboard']));
-
-  const handleTabChange = (tabId) => {
-    setActiveTab(tabId);
-    setLoadedTabs(prev => new Set([...prev, tabId]));
-  };
-
   return (
-    <div className="h-full flex flex-col text-[13px]">
-      {/* Tab bar */}
-      <div className="bg-white border-b border-gray-200 flex-shrink-0">
-        <div className="flex items-center overflow-x-auto">
-          {TABS.map(tab => (
-            <button
-              key={tab.id}
-              onClick={() => handleTabChange(tab.id)}
-              className={`px-4 py-2.5 text-xs font-medium transition-all border-b-2 whitespace-nowrap ${
-                activeTab === tab.id
-                  ? 'text-indigo-600 border-indigo-600 bg-indigo-50/60'
-                  : 'text-slate-600 border-transparent hover:text-slate-800 hover:bg-slate-50'
-              }`}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Tab content */}
-      <div className="flex-1 overflow-auto bg-[#f5f5f5] p-6">
-        <div className={activeTab === 'dashboard'    ? '' : 'hidden'}>{loadedTabs.has('dashboard')    && <DashboardTab />}</div>
-        <div className={activeTab === 'scheduler'    ? '' : 'hidden'}>{loadedTabs.has('scheduler')    && <SchedulerTab />}</div>
-        <div className={activeTab === 'availability' ? '' : 'hidden'}>{loadedTabs.has('availability') && <AvailabilityTab />}</div>
-        <div className={activeTab === 'tasks'        ? '' : 'hidden'}>{loadedTabs.has('tasks')        && <TasksTab />}</div>
-        <div className={activeTab === 'reminders'    ? '' : 'hidden'}>{loadedTabs.has('reminders')    && <RemindersTab />}</div>
-        <div className={activeTab === 'announcements'? '' : 'hidden'}>{loadedTabs.has('announcements')&& <AnnouncementsTab />}</div>
-      </div>
+    <div className="h-full overflow-auto bg-[#f5f5f5] p-6 text-[13px]">
+      <DashboardTab />
     </div>
   );
 }

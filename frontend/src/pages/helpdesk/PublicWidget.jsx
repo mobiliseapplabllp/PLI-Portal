@@ -308,7 +308,7 @@ export default function PublicWidget() {
         </div>
 
         <div className="px-6 py-3 border-t border-gray-100 text-center">
-          <p className="text-xs text-gray-400">Powered by PLI Portal Helpdesk</p>
+          <p className="text-xs text-gray-400">Powered by PLI Portal Operations</p>
         </div>
       </div>
     </div>

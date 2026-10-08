@@ -79,11 +79,11 @@ export default function TicketApprovalRespond() {
           to="/helpdesk"
           className="inline-block px-6 py-2.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors"
         >
-          Go to Helpdesk Portal
+          Go to Operations Portal
         </Link>
 
         <p className="text-xs text-gray-400 mt-6">
-          PLI Portal &mdash; Helpdesk
+          PLI Portal &mdash; Operations
         </p>
       </div>
     </div>

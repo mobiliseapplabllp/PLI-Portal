@@ -25,6 +25,7 @@ router.delete('/statuses/:id',             authorize(...MANAGERS), ctrl.deleteSt
 router.get   ('/milestone-templates',                          authorize(...ALL),     ctrl.getMilestoneTemplates);
 router.post  ('/milestone-templates',                          authorize(...MANAGERS), ctrl.createMilestoneTemplate);
 router.put   ('/milestone-templates/reorder',                  authorize(...MANAGERS), ctrl.reorderMilestoneTemplates);
+router.post  ('/milestone-templates/copy',                     authorize(...ADMIN),    ctrl.copyMilestoneTemplates);
 router.put   ('/milestone-templates/:id',                      authorize(...MANAGERS), ctrl.updateMilestoneTemplate);
 router.delete('/milestone-templates/:id',                      authorize(...MANAGERS), ctrl.deleteMilestoneTemplate);
 router.get   ('/milestone-templates/:projectType/validate',    authorize(...MANAGERS), ctrl.validateTemplateRanges);
