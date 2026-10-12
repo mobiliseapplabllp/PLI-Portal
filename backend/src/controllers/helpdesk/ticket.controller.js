@@ -21,6 +21,7 @@ const {
   HdConversation,
   HdGroup,
   HdProject,
+  HdTicketAllocationProposal,
   User,
   Project: PmProject,
 }                      = require('../../models/helpdesk');
@@ -41,6 +42,12 @@ const team = () => (_teamService ||= require('../../services/helpdesk/team.servi
 let _ticketExceptionService;
 const ticketExceptionService = () =>
   (_ticketExceptionService ||= require('../../services/pm/ticketException.service'));
+
+// Ticket allocation agreement workflow (migration 057, Operations only).
+// Lazy-required for the same reason as the two services above.
+let _allocationAgreementService;
+const allocationAgreementService = () =>
+  (_allocationAgreementService ||= require('../../services/helpdesk/ticketAllocationAgreement.service'));
 
 const { TICKET_PRIORITY, LINK_TYPE } = HdTicket;
 
@@ -674,6 +681,11 @@ const createTicket = async (req, res, next) => {
     // team comes from the employee master, requester team is derived.
 
     if (!title) return sendClientError(res, 'title is required');
+    // Software tickets are always project work — Project is mandatory for this
+    // category only. Other categories (HR, Finance, Hardware, etc.) stay optional.
+    if (category === 'Software' && !projectId) {
+      return sendClientError(res, 'Project is required for Software category tickets');
+    }
 
     // ── Team / assignee (B5) ─────────────────────────────────────────────────
     const teamRes = await resolveTeam({ assigneeId, teamManagerId });
@@ -684,13 +696,22 @@ const createTicket = async (req, res, next) => {
     if (projRef.error) return sendClientError(res, projRef.error);
 
     let alloc = { allocationHoursPerDay: null, allocationFrom: null, allocationTo: null, allocationMode: 'total', allocationTotalHours: null };
+    let agreementStatus = 'none';
+    // Manager assigning their OWN team member needs the other side to agree
+    // before this is real — ONLY when the feature flag is on. Admin-created
+    // tickets and self-allocation are never diverted; nor is anything when
+    // the flag is off (existing immediate-allocation behavior, unchanged).
+    const isManagerActor = !req.hdUser.isAdmin && !!req.hdUser.permissions?.canAssign;
+    const assignedToSomeoneElse = teamRes.assigneeId && String(teamRes.assigneeId) !== String(req.hdUser.id);
+    let deferredProposal = null;
     if (hasAllocationInput(req.body)) {
+      const agreementOn = isManagerActor && assignedToSomeoneElse && await allocationAgreementService().isEnabled();
       let resolved;
       try {
         resolved = await resolveTicketAllocation(
           { allocationHoursPerDay, allocationFrom, allocationTo, allocationMode, allocationTotalHours },
           null,
-          { assigneeId: teamRes.assigneeId, dueDate },
+          { assigneeId: teamRes.assigneeId, dueDate, checkCapacity: !agreementOn },
         );
       } catch (e) {
         // Over capacity → 409 with the same conflict payload the PM side returns
@@ -698,7 +719,21 @@ const createTicket = async (req, res, next) => {
         throw e;
       }
       if (resolved.error) return sendClientError(res, resolved.error);
-      alloc = resolved.values;
+
+      if (agreementOn) {
+        // Don't write the real allocation columns yet — stash it as a
+        // proposal once the ticket exists; capacity is only checked at
+        // confirmation (see ticketAllocationAgreement.service.js).
+        deferredProposal = {
+          totalHours:     resolved.values.allocationTotalHours,
+          allocationFrom: resolved.values.allocationFrom,
+          allocationTo:   resolved.values.allocationTo || dueDate,
+        };
+        agreementStatus = 'pending_employee';
+      } else {
+        alloc = resolved.values;
+        agreementStatus = alloc.allocationTotalHours != null ? 'confirmed' : 'none';
+      }
     }
 
     const raisedByTeam = await deriveRaisedByTeam(requesterEmail, req.hdUser);
@@ -732,6 +767,7 @@ const createTicket = async (req, res, next) => {
           allocationTo:          alloc.allocationTo,
           allocationMode:        alloc.allocationMode,
           allocationTotalHours:  alloc.allocationTotalHours,
+          allocationAgreementStatus: agreementStatus,
           requestType:  requestType  || null,
           mode:         mode         || null,
           impact:       impact       || null,
@@ -748,6 +784,18 @@ const createTicket = async (req, res, next) => {
       );
 
       await logHistory(ticket.id, 'status', null, ticket.status, req.hdUser.id, t);
+
+      if (deferredProposal) {
+        await HdTicketAllocationProposal.create({
+          ticketId:         ticket.id,
+          proposedByUserId: req.hdUser.id,
+          proposedByRole:   'manager',
+          totalHours:       deferredProposal.totalHours,
+          allocationFrom:   deferredProposal.allocationFrom,
+          allocationTo:     deferredProposal.allocationTo,
+          status: 'pending',
+        }, { transaction: t });
+      }
 
       // Save optional attachment uploaded with ticket creation
       if (req.file) {
@@ -933,13 +981,41 @@ const updateTicket = async (req, res, next) => {
       }
     }
 
+    let deferredProposal = null;
     try {
       if (hasAllocationInput(updates)) {
+        // Manager changing a team member's allocation needs the other side to
+        // agree before it's real — ONLY when the feature flag is on. Admin
+        // edits and self-allocation are never diverted; nor is anything while
+        // the flag is off (existing immediate-allocation behavior, unchanged).
+        const isManagerActor = !req.hdUser.isAdmin && !!req.hdUser.permissions?.canAssign;
+        const assignedToSomeoneElse = nextAssigneeId && String(nextAssigneeId) !== String(req.hdUser.id);
+        const agreementOn = isManagerActor && assignedToSomeoneElse && await allocationAgreementService().isEnabled();
+
+        if (agreementOn && (ticket.allocationAgreementStatus === 'pending_employee' || ticket.allocationAgreementStatus === 'pending_manager')) {
+          const message = 'This ticket has a pending allocation proposal — resolve it (agree or disagree) before changing the allocation directly';
+          return res.status(409).json({ success: false, message, reason: 'pending_allocation_agreement', error: { message } });
+        }
+
         const resolved = await resolveTicketAllocation(updates, ticket, {
-          assigneeId: nextAssigneeId, ticketId: ticket.id, dueDate: nextDueDate,
+          assigneeId: nextAssigneeId, ticketId: ticket.id, dueDate: nextDueDate, checkCapacity: !agreementOn,
         });
         if (resolved.error) return sendClientError(res, resolved.error);
-        Object.assign(updates, resolved.values);
+
+        if (agreementOn) {
+          // Don't write the real allocation columns yet — keep the ticket's
+          // CURRENT allocation untouched and stash this as a pending proposal.
+          deferredProposal = {
+            totalHours:     resolved.values.allocationTotalHours,
+            allocationFrom: resolved.values.allocationFrom,
+            allocationTo:   resolved.values.allocationTo || nextDueDate,
+          };
+          updates.allocationAgreementStatus = 'pending_employee';
+          for (const f of ALLOCATION_FIELDS) delete updates[f];
+        } else {
+          Object.assign(updates, resolved.values);
+          updates.allocationAgreementStatus = resolved.values.allocationTotalHours != null ? 'confirmed' : 'none';
+        }
       } else if (touchesAllocation && ticket.allocationHoursPerDay != null) {
         // Only the assignee changed: the stored hours now land on a different person.
         await assertTicketCapacity(
@@ -994,6 +1070,22 @@ const updateTicket = async (req, res, next) => {
     await sequelize.transaction(async (t) => {
       await ticket.save({ transaction: t });
 
+      if (deferredProposal) {
+        await HdTicketAllocationProposal.update(
+          { status: 'superseded' },
+          { where: { ticketId: ticket.id, status: 'pending' }, transaction: t },
+        );
+        await HdTicketAllocationProposal.create({
+          ticketId:         ticket.id,
+          proposedByUserId: req.hdUser.id,
+          proposedByRole:   'manager',
+          totalHours:       deferredProposal.totalHours,
+          allocationFrom:   deferredProposal.allocationFrom,
+          allocationTo:     deferredProposal.allocationTo,
+          status: 'pending',
+        }, { transaction: t });
+      }
+
       // Log diffs
       for (const f of TRACKED_FIELDS) {
         if (String(snapshot[f] ?? '') !== String(ticket[f] ?? '')) {
@@ -1004,6 +1096,83 @@ const updateTicket = async (req, res, next) => {
 
     return sendSuccess(res, ticket, 'Ticket updated');
   } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * GET /helpdesk/tickets/:id/allocation-proposals
+ * Full negotiation history for a ticket's allocation agreement (migration 057).
+ * @type {import('express').RequestHandler}
+ */
+const getAllocationProposals = async (req, res, next) => {
+  try {
+    const ticket = await HdTicket.findByPk(req.params.id);
+    if (!ticket) return next(new NotFoundError('Ticket'));
+    const history = await allocationAgreementService().getHistory(ticket.id);
+    return sendSuccess(res, { allocationAgreementStatus: ticket.allocationAgreementStatus, proposals: history }, 'Allocation proposal history');
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * POST /helpdesk/tickets/:id/allocation-proposals/respond
+ * Agree or disagree (optionally with a counter-proposal) to the ticket's
+ * currently-pending allocation proposal — whichever side it's awaiting.
+ * On agree, writes the real allocation columns via the SAME validated
+ * resolveTicketAllocation/assertTicketCapacity path a normal update uses.
+ * @type {import('express').RequestHandler}
+ */
+const respondTicketAllocation = async (req, res, next) => {
+  try {
+    const ticket = await HdTicket.findByPk(req.params.id);
+    if (!ticket) return next(new NotFoundError('Ticket'));
+
+    const { action, counter } = req.body;
+    if (action !== 'agree' && action !== 'disagree') {
+      return sendClientError(res, "action must be 'agree' or 'disagree'");
+    }
+
+    let respondedByRole;
+    if (ticket.allocationAgreementStatus === 'pending_employee') {
+      const isAssignee = String(ticket.assigneeId ?? '') === String(req.hdUser.id);
+      if (!isAssignee && !req.hdUser.isAdmin) {
+        return next(new ForbiddenError('Only the assigned team member can respond to this proposal'));
+      }
+      respondedByRole = 'employee';
+    } else if (ticket.allocationAgreementStatus === 'pending_manager') {
+      const isTeamManager = String(ticket.teamManagerId ?? '') === String(req.hdUser.id);
+      if (!isTeamManager && !req.hdUser.isAdmin) {
+        return next(new ForbiddenError('Only the team manager can respond to this proposal'));
+      }
+      respondedByRole = 'manager';
+    } else {
+      return sendClientError(res, 'No pending allocation proposal on this ticket');
+    }
+
+    const result = await allocationAgreementService().respond(
+      { ticketId: ticket.id, respondedByUserId: req.hdUser.id, respondedByRole, action, counter },
+      async (proposal, t) => {
+        const resolved = await resolveTicketAllocation(
+          {
+            allocationTotalHours: proposal.totalHours,
+            allocationFrom:       proposal.allocationFrom,
+            allocationTo:         proposal.allocationTo,
+            allocationMode:       'total',
+          },
+          ticket,
+          { assigneeId: ticket.assigneeId, ticketId: ticket.id, dueDate: ticket.dueDate, transaction: t },
+        );
+        if (resolved.error) throw new ValidationError(resolved.error);
+        Object.assign(ticket, resolved.values);
+        await ticket.save({ transaction: t });
+      },
+    );
+
+    return sendSuccess(res, { ticket: await HdTicket.findByPk(ticket.id), ...result }, 'Allocation response recorded');
+  } catch (err) {
+    if (err instanceof AllocationConflictError) return sendAllocationConflict(res, err);
     next(err);
   }
 };
@@ -1923,6 +2092,8 @@ module.exports = {
   getImportTemplate,
   exportTickets,
   requestTicketAllocationException,
+  getAllocationProposals,
+  respondTicketAllocation,
   // Shared rules (used by task.controller / hdDashboard.controller / tests)
   ticketVisibilityWhere,
   splitProjectRef,

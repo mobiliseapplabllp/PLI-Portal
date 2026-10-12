@@ -1247,6 +1247,7 @@ export default function TicketList() {
                   <th className="text-left text-[10px] font-semibold text-gray-500 uppercase px-2 py-2 w-[88px]">Status</th>
                   <th className="text-left text-[10px] font-semibold text-gray-500 uppercase px-2 py-2 w-[72px]">Priority</th>
                   <th className="text-left text-[10px] font-semibold text-gray-500 uppercase px-2 py-2 w-[100px]">Employee</th>
+                  <th className="text-left text-[10px] font-semibold text-gray-500 uppercase px-2 py-2 w-[76px]">Due Date</th>
                   <th className="text-left text-[10px] font-semibold text-gray-500 uppercase px-2 py-2 w-[76px]">Created</th>
                   <th className="text-left text-[10px] font-semibold text-gray-500 uppercase px-2 py-2 w-[76px]">Closed</th>
                   <th className="w-8 px-1"></th>
@@ -1334,6 +1335,20 @@ export default function TicketList() {
                       <span className="text-[11px] text-gray-600 truncate block">
                         {t.assigneeUser?.name || t.assignee?.name || t.assigneeName || 'Unassigned'}
                       </span>
+                    </td>
+
+                    {/* Due Date */}
+                    <td className="px-2 py-1.5 align-middle">
+                      {(() => {
+                        const due = t.due_date || t.dueDate;
+                        const isOpen = t.status !== 'closed' && t.status !== 'resolved';
+                        const isOverdue = due && isOpen && new Date(due) < new Date(new Date().toDateString());
+                        return (
+                          <span className={`text-[10px] whitespace-nowrap ${isOverdue ? 'text-red-600 font-semibold' : 'text-gray-500'}`}>
+                            {due ? fmtDate(due) : '—'}
+                          </span>
+                        );
+                      })()}
                     </td>
 
                     {/* Created */}

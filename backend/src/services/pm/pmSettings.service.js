@@ -129,6 +129,7 @@ const ALLOWED_FIELDS = [
   'workingHoursPerDay', 'workingSaturdays',
   'exceptionApproverRoles', 'exceptionMaxHoursPerDay',
   'defaultBulkImportProjectTypeId',
+  'ticketAllocationAgreementEnabled',
 ];
 
 const updateSettings = async (data) => {

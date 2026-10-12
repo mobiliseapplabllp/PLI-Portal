@@ -54,6 +54,13 @@ router.get('/:id/history',   ticketCtrl.getHistory);
 // Permission (admin or canAssign) is enforced in the controller, same as assigning.
 router.post('/:id/allocation-exception', ticketCtrl.requestTicketAllocationException);
 
+// ── Allocation agreement workflow (migration 057, Operations only) ──────────
+// Initial proposals are created inline by createTicket/updateTicket when the
+// feature flag is on; these two cover reading the negotiation and responding
+// to it. Role checks (assignee vs team manager) live in the controller.
+router.get('/:id/allocation-proposals',          ticketCtrl.getAllocationProposals);
+router.post('/:id/allocation-proposals/respond', ticketCtrl.respondTicketAllocation);
+
 // â”€â”€ Ticket linking â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 router.post('/:id/link',     ticketCtrl.linkTicket);
 

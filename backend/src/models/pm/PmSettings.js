@@ -44,6 +44,10 @@ const PmSettings = sequelize.define(
     // Project type applied to every project created by the bulk import feature
     // (migration 054) — admin-editable so it never needs a code change.
     defaultBulkImportProjectTypeId: { type: DataTypes.INTEGER, allowNull: true },
+    // Ticket allocation agreement workflow (migration 057) — Operations/Helpdesk
+    // only, never touches PM allocation. While FALSE, ticket allocation behaves
+    // exactly as before (manager sets it, it's immediately active).
+    ticketAllocationAgreementEnabled: { type: DataTypes.BOOLEAN, defaultValue: false },
   },
   { tableName: 'pm_settings' }
 );

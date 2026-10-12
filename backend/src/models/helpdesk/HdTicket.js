@@ -181,6 +181,18 @@ const HdTicket = sequelize.define('HdTicket', {
     allowNull: true,
     field:     'allocation_total_hours',
   },
+  // Ticket allocation agreement workflow (migration 057, Operations only).
+  // NULL/'none' = no allocation proposed. 'pending_employee' = manager's
+  // proposal awaits the assignee. 'pending_manager' = assignee countered,
+  // awaits the manager. 'confirmed' = both sides agreed — the allocation
+  // columns above are now "real" and feed the capacity engine. While the
+  // ticketAllocationAgreementEnabled flag (pm_settings) is off, this is
+  // always set straight to 'confirmed' on save, same as today's behavior.
+  allocationAgreementStatus: {
+    type:      DataTypes.STRING(20),
+    allowNull: true,
+    field:     'allocation_agreement_status',
+  },
   // Team = reporting manager (users.id). A user is in the team when they ARE the
   // manager or their users.managerId points at them. See services/helpdesk/team.service.
   teamManagerId: {

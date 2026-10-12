@@ -1230,6 +1230,7 @@ function SchedulerTab() {
           : ['admin'],
         exceptionMaxHoursPerDay:    Number(s.exceptionMaxHoursPerDay) > 0 ? Number(s.exceptionMaxHoursPerDay) : 12,
         defaultBulkImportProjectTypeId: s.defaultBulkImportProjectTypeId ?? '',
+        ticketAllocationAgreementEnabled: s.ticketAllocationAgreementEnabled ?? false,
       });
     } catch {
       toast.error('Failed to load scheduler settings');
@@ -1436,6 +1437,34 @@ function SchedulerTab() {
               />
             </div>
           )}
+        </div>
+      </div>
+
+      {/* Ticket Allocation Agreement */}
+      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+        <div className="px-5 py-4 border-b border-gray-100 bg-gray-50">
+          <h3 className="text-sm font-semibold text-gray-800 flex items-center gap-2">
+            <HiOutlineClock className="w-4 h-4 text-amber-600" />
+            Ticket Allocation Agreement
+          </h3>
+          <p className="text-xs text-gray-500 mt-0.5">
+            Operations only. When on, a manager's ticket allocation (hours + dates) must be
+            agreed by the assigned team member — via counter-proposal if needed — before it
+            counts against their capacity. While off, allocation behaves as it does today
+            (applied immediately).
+          </p>
+        </div>
+        <div className="px-5 py-5">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium text-gray-700">Require allocation agreement</p>
+              <p className="text-xs text-gray-400 mt-0.5">Applies to new and changed ticket allocations only</p>
+            </div>
+            <Toggle
+              checked={form.ticketAllocationAgreementEnabled}
+              onChange={() => setF('ticketAllocationAgreementEnabled', !form.ticketAllocationAgreementEnabled)}
+            />
+          </div>
         </div>
       </div>
 

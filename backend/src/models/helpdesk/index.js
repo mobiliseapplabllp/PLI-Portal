@@ -24,6 +24,7 @@ const HdAnnouncement    = require('./HdAnnouncement');
 const HdReminder        = require('./HdReminder');
 const HdAttachment      = require('./HdAttachment');
 const HdDocument        = require('./HdDocument');
+const HdTicketAllocationProposal = require('./HdTicketAllocationProposal');
 const User              = require('../User');
 // PM Project model only depends on config/database — safe to require here without
 // pulling in models/associations.js (no circular load).
@@ -110,6 +111,12 @@ HdDocument.belongsTo(HdTicket, { foreignKey: 'ticketId', as: 'ticket', constrain
 HdDocument.belongsTo(User, { foreignKey: 'uploadedById', as: 'uploadedBy', constraints: false });
 HdTicket.hasMany(HdDocument, { foreignKey: 'ticketId', as: 'documents', constraints: false });
 
+// ── Ticket ↔ Allocation agreement proposals (migration 057, Operations only) ─
+HdTicket.hasMany(HdTicketAllocationProposal,   { foreignKey: 'ticketId', as: 'allocationProposals', onDelete: 'CASCADE' });
+HdTicketAllocationProposal.belongsTo(HdTicket, { foreignKey: 'ticketId', as: 'ticket' });
+HdTicketAllocationProposal.belongsTo(User, { foreignKey: 'proposedByUserId', as: 'proposedByUser', constraints: false });
+HdTicketAllocationProposal.belongsTo(User, { foreignKey: 'respondedByUserId', as: 'respondedByUser', constraints: false });
+
 // â”€â”€ User â†” HdGroup (helpdesk group assignment) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 User.belongsTo(HdGroup, { foreignKey: 'hdGroupId', as: 'hdGroup',  constraints: false });
 HdGroup.hasMany(User,   { foreignKey: 'hdGroupId', as: 'members', constraints: false });
@@ -128,6 +135,7 @@ module.exports = {
   HdReminder,
   HdAttachment,
   HdDocument,
+  HdTicketAllocationProposal,
   // Re-export User so consumers can `const { HdTicket, User } = require('.../helpdesk')` if needed
   User,
   // PM Project (aliased as 'pmProject' on HdTicket / HdProject)

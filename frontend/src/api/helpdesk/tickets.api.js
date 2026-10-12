@@ -67,3 +67,16 @@ export const requestTicketAllocationExceptionApi = (ticketId, body) =>
  * @param {object[]} rows  Array of plain objects keyed by CSV header names.
  */
 export const bulkUploadTicketsApi = (rows) => api.post('/helpdesk/tickets/bulk-upload', { rows });
+
+/**
+ * Ticket allocation agreement workflow (Operations only — only live when the
+ * admin has enabled it in PM Settings; otherwise allocation is immediate as before).
+ */
+export const getAllocationProposalsApi = (ticketId) =>
+  api.get(`/helpdesk/tickets/${ticketId}/allocation-proposals`);
+
+/**
+ * @param {{ action:'agree'|'disagree', counter?:{ totalHours:number, allocationFrom:string, allocationTo:string } }} body
+ */
+export const respondTicketAllocationApi = (ticketId, body) =>
+  api.post(`/helpdesk/tickets/${ticketId}/allocation-proposals/respond`, body);

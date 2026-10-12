@@ -119,8 +119,8 @@ const EMPTY_FORM = {
   title:          '',         // "subject" in original
   description:    '',
   status:         'open',
-  mode:           'Web Form',
-  category:       '',
+  mode:           'E-Mail',
+  category:       'Software',
   priority:       '',         // stored as PLI lowercase value
   impact:         'Medium',
   urgency:        'Medium',
@@ -570,6 +570,11 @@ export default function CreateTicket() {
 
     if (!formData.category) newErrors.category = 'Category is required';
     if (!formData.priority) newErrors.priority  = 'Priority is required';
+    // Software tickets are always project work — Project is mandatory for this
+    // category only (other categories — HR, Finance, Hardware, etc. — stay optional).
+    if (formData.category === 'Software' && !formData.projectId) {
+      newErrors.projectId = 'Project is required for Software category tickets';
+    }
     if (formData.dueDate && new Date(formData.dueDate) <= new Date()) {
       newErrors.dueDate = 'Due date must be in the future';
     }
@@ -1015,7 +1020,9 @@ export default function CreateTicket() {
                   {/* C4/C5 — Project (PM projects) + quick-create */}
                   <div>
                     <div className="flex items-center justify-between mb-0.5">
-                      <label className={`${LBL} mb-0`}>Project</label>
+                      <label className={`${LBL} mb-0`}>
+                        Project{formData.category === 'Software' && <span className="text-red-500"> *</span>}
+                      </label>
                       <label className="flex items-center gap-1 text-[10px] text-gray-500 cursor-pointer select-none">
                         <input
                           type="checkbox"
@@ -1059,6 +1066,9 @@ export default function CreateTicket() {
                       )}
                     </div>
                     <p className={`${HINT} mt-0.5`}>PM projects · completed / cancelled / closed hidden unless "Show closed"</p>
+                    {errors.projectId && (
+                      <p className={ERR}>{errors.projectId}</p>
+                    )}
                   </div>
 
                 </div>

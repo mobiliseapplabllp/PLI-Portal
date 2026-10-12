@@ -27,7 +27,10 @@ import {
 // updateTicketApi is called directly (not via the thunk) wherever an allocation is
 // sent: the thunk collapses errors to a message string and the HTTP 409 `conflict`
 // body would be lost.
-import { getTicketHistoryApi, updateTicketApi } from '../../api/helpdesk/tickets.api';
+import {
+  getTicketHistoryApi, updateTicketApi,
+  getAllocationProposalsApi, respondTicketAllocationApi,
+} from '../../api/helpdesk/tickets.api';
 import TicketConflictPanel from '../../components/helpdesk/TicketConflictPanel';
 import TicketExceptionModal from '../../components/helpdesk/TicketExceptionModal';
 import {
@@ -817,6 +820,11 @@ export default function TicketDetail() {
             onEditAllocation={() => { setAssignEditMode(true); setShowAssignModal(true); }}
             onRemoveAssignee={handleRemoveAssignee}
             onUpdateAssigneeWeight={handleUpdateAssigneeWeight}
+          />
+          <AllocationAgreementPanel
+            ticket={ticket}
+            user={user}
+            onChanged={() => dispatch(fetchTicketById(id))}
           />
           <ApprovalsPanel
             approvals={approvals}
@@ -1832,6 +1840,134 @@ function AssignmentPanel({ ticket, user, canManage, submitting, onPickUp, onAssi
           </button>
         )}
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// AllocationAgreementPanel — ticket allocation agreement workflow
+// (Operations only; a no-op unless the admin has turned the feature on, in
+// which case the ticket's allocationAgreementStatus is 'pending_employee' or
+// 'pending_manager' and this is the only place that status is actionable).
+// ---------------------------------------------------------------------------
+
+function AllocationAgreementPanel({ ticket, user, onChanged }) {
+  const status = ticket.allocationAgreementStatus;
+  const [showCounter, setShowCounter] = useState(false);
+  const [counter, setCounter] = useState({ totalHours: '', allocationFrom: '', allocationTo: '' });
+  const [submitting, setSubmitting] = useState(false);
+  const [proposal, setProposal] = useState(null);
+
+  useEffect(() => {
+    if (status !== 'pending_employee' && status !== 'pending_manager') { setProposal(null); return; }
+    let alive = true;
+    getAllocationProposalsApi(ticket.id || ticket._id)
+      .then((res) => {
+        if (!alive) return;
+        const list = res.data?.data?.proposals || [];
+        setProposal(list.length ? list[list.length - 1] : null);
+      })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [ticket.id, ticket._id, status]);
+
+  if (status !== 'pending_employee' && status !== 'pending_manager') return null;
+
+  const isAssignee    = String(ticket.assigneeId ?? '') === String(user?.id ?? '');
+  const isTeamManager = String(ticket.teamManagerId ?? '') === String(user?.id ?? '');
+  const myTurn = (status === 'pending_employee' && isAssignee) || (status === 'pending_manager' && isTeamManager);
+
+  const respond = async (action) => {
+    if (action === 'disagree' && showCounter) {
+      if (!counter.totalHours || !counter.allocationFrom || !counter.allocationTo) {
+        toast.error('Enter total hours, start date and end date for your counter-proposal');
+        return;
+      }
+    }
+    setSubmitting(true);
+    try {
+      await respondTicketAllocationApi(ticket.id || ticket._id, {
+        action,
+        counter: action === 'disagree' && showCounter ? {
+          totalHours: Number(counter.totalHours),
+          allocationFrom: counter.allocationFrom,
+          allocationTo: counter.allocationTo,
+        } : undefined,
+      });
+      toast.success(action === 'agree' ? 'Allocation confirmed' : 'Response recorded');
+      setShowCounter(false);
+      onChanged?.();
+    } catch (e) {
+      toast.error(e?.response?.data?.message || 'Could not record your response');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="bg-amber-50 rounded-xl border border-amber-200 p-4 space-y-3">
+      <h3 className="text-xs font-semibold text-amber-700 uppercase tracking-wider">Allocation Proposal — Awaiting Agreement</h3>
+      {proposal && (
+        <p className="text-sm text-gray-700">
+          <strong>{proposal.proposedByUser?.name || (proposal.proposedByRole === 'manager' ? 'Manager' : 'Employee')}</strong> proposed{' '}
+          <strong>{Number(proposal.totalHours)} hrs</strong> total, {fmtDate(proposal.allocationFrom)} → {fmtDate(proposal.allocationTo)}.
+        </p>
+      )}
+      {!myTurn ? (
+        <p className="text-xs text-gray-500">Waiting on {status === 'pending_employee' ? 'the assigned team member' : 'the team manager'} to respond.</p>
+      ) : (
+        <div className="space-y-2">
+          <div className="flex gap-2">
+            <button
+              type="button"
+              disabled={submitting}
+              onClick={() => respond('agree')}
+              className="px-3 py-1.5 text-xs font-medium rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50"
+            >
+              Agree
+            </button>
+            <button
+              type="button"
+              disabled={submitting}
+              onClick={() => (showCounter ? respond('disagree') : setShowCounter(true))}
+              className="px-3 py-1.5 text-xs font-medium rounded-lg bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+            >
+              Disagree{showCounter ? ' — submit counter' : ''}
+            </button>
+            {showCounter && (
+              <button
+                type="button"
+                onClick={() => respond('disagree')}
+                disabled={submitting}
+                className="px-3 py-1.5 text-xs font-medium rounded-lg bg-white border border-gray-300 text-gray-500 hover:bg-gray-50 disabled:opacity-50"
+                title="Disagree without proposing your own numbers"
+              >
+                Disagree only
+              </button>
+            )}
+          </div>
+          {showCounter && (
+            <div className="grid grid-cols-3 gap-2 pt-1">
+              <input
+                type="number" min="0.5" step="0.5" placeholder="Total hrs"
+                value={counter.totalHours}
+                onChange={(e) => setCounter(c => ({ ...c, totalHours: e.target.value }))}
+                className="px-2 py-1 text-xs border border-gray-300 rounded-lg"
+              />
+              <input
+                type="date" value={counter.allocationFrom}
+                onChange={(e) => setCounter(c => ({ ...c, allocationFrom: e.target.value }))}
+                className="px-2 py-1 text-xs border border-gray-300 rounded-lg"
+              />
+              <input
+                type="date" value={counter.allocationTo}
+                onChange={(e) => setCounter(c => ({ ...c, allocationTo: e.target.value }))}
+                className="px-2 py-1 text-xs border border-gray-300 rounded-lg"
+              />
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
