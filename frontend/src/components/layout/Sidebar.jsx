@@ -247,13 +247,7 @@ const pmNavItems = {
         { to: '/pm/my-tasks', label: 'My Tasks', icon: HiOutlineCheckCircle },
       ],
     },
-    {
-      label: 'Settings',
-      icon: HiOutlineCog,
-      children: [
-        { to: '/pm/settings', label: 'PM Settings', icon: HiOutlineCog },
-      ],
-    },
+    // PM Settings is admin-only — not shown to managers.
   ],
 
   // ── Senior Manager ────────────────────────────────────────────────────────
@@ -290,7 +284,7 @@ const pmNavItems = {
       label: 'Settings',
       icon: HiOutlineCog,
       children: [
-        { to: '/pm/settings',       label: 'PM Settings',         icon: HiOutlineCog },
+        // PM Settings is admin-only — not shown to senior managers.
         { to: '/helpdesk/settings', label: 'Operations Settings', icon: HiOutlineCog },
       ],
     },

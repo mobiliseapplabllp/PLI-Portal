@@ -7,7 +7,7 @@ const KpiItem = require('../models/KpiItem');
 const { KPI_STATUS } = require('../config/constants');
 const { NotFoundError } = require('../utils/errors');
 const { createAuditLog } = require('../middleware/auditLogger');
-const { findPlanForEmployee, applyPlanToAssignment } = require('./kpiPlan.service');
+const { findPlanForEmployee, applyPlanToAssignment, convertUncommittedAssignmentsOnDepartmentChange } = require('./kpiPlan.service');
 const { getFinancialYear, getQuarterFromMonth } = require('../utils/quarterHelper');
 
 const userIncludes = [
@@ -105,6 +105,7 @@ const autoSyncKpiForNewEmployee = async (employee, createdBy) => {
         month,
         quarter: getQuarterFromMonth(month),
         employeeId: employee.id,
+        departmentId: employee.departmentId || null,
         managerId: employee.managerId || createdBy,
         createdById: createdBy,
         status: KPI_STATUS.ASSIGNED,
@@ -173,6 +174,7 @@ const updateUser = async (id, data, updatedBy) => {
   const isBeingDeactivated = wasActive && patch.isActive === false;
   const isBeingReactivated = !wasActive && patch.isActive === true;
   const hasManagerChanged = patch.managerId !== undefined && String(oldValue.managerId || '') !== String(patch.managerId || '');
+  const hasDepartmentChanged = patch.departmentId !== undefined && String(oldValue.departmentId || '') !== String(patch.departmentId || '');
 
   if (isBeingDeactivated) {
     patch.kpiReviewApplicable = false;
@@ -181,10 +183,50 @@ const updateUser = async (id, data, updatedBy) => {
   Object.assign(user, patch);
   await user.save();
 
+  // Department transfer — swap NOT-YET-COMMITTED months onto the new
+  // department's KPI plan; already-committed months are left completely
+  // untouched (they keep their original department's items/deadlines/scoring
+  // forever, via the KpiAssignment.departmentId snapshot).
+  if (hasDepartmentChanged) {
+    const { converted, skippedNoPlan } = user.departmentId
+      ? await convertUncommittedAssignmentsOnDepartmentChange(user, user.departmentId, updatedBy)
+      : { converted: [], skippedNoPlan: [] };
+
+    const stillOpenOldDeptCount = await KpiAssignment.count({
+      where: {
+        employeeId: user.id,
+        departmentId: oldValue.departmentId || null,
+        status: { [Op.notIn]: [KPI_STATUS.FINAL_APPROVED, KPI_STATUS.LOCKED] },
+      },
+    });
+
+    await createAuditLog({
+      entityType: 'user',
+      entityId: user.id,
+      action: 'department_changed',
+      changedBy: updatedBy,
+      oldValue: { departmentId: oldValue.departmentId || null },
+      newValue: {
+        departmentId: user.departmentId || null,
+        convertedToNewDeptMonths: converted,
+        skippedNoPlanMonths: skippedNoPlan,
+        stillOpenUnderOldDepartment: stillOpenOldDeptCount,
+      },
+    });
+  }
+
   if (hasManagerChanged) {
+    // Scoped to the employee's CURRENT department snapshot when it also just
+    // changed — her old department's still-open/committed assignments keep
+    // their original manager, who has the context to finish reviewing them.
+    // (When only the manager changes, this condition is simply always true
+    // for every one of her assignments, same as before.)
+    const managerReassignWhere = { employeeId: user.id };
+    if (hasDepartmentChanged) managerReassignWhere.departmentId = user.departmentId || null;
+
     const [reassignedCount] = await KpiAssignment.update(
       { managerId: user.managerId || null },
-      { where: { employeeId: user.id } }
+      { where: managerReassignWhere }
     );
     await createAuditLog({
       entityType: 'user',

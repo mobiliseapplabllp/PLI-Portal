@@ -110,6 +110,8 @@ const editInputCls =
 
 // ─── Tab 1: Project Types ─────────────────────────────────────────────────────
 function ProjectTypesTab() {
+  const { user } = useSelector(s => s.auth);
+  const isAdmin = user?.role === 'admin';
   const [types,    setTypes]    = useState([]);
   const [loading,  setLoading]  = useState(true);
   const [newName,  setNewName]  = useState('');
@@ -188,28 +190,30 @@ function ProjectTypesTab() {
 
   return (
     <div className="space-y-4">
-      {/* Inline add form */}
-      <div className="bg-white rounded-xl border border-gray-200 p-4">
-        <p className="text-sm font-semibold text-gray-700 mb-3">Add Project Type</p>
-        <div className="flex items-center gap-3">
-          <input
-            type="text"
-            value={newName}
-            onChange={e => setNewName(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && handleAdd()}
-            placeholder="e.g. Fixed Price, T&amp;M, Retainer…"
-            className={inputCls + ' flex-1'}
-          />
-          <button
-            onClick={handleAdd}
-            disabled={adding || !newName.trim()}
-            className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 text-white text-sm font-medium rounded-lg hover:bg-emerald-700 disabled:opacity-50 transition-colors whitespace-nowrap"
-          >
-            <HiOutlinePlus className="w-4 h-4" />
-            {adding ? 'Adding…' : 'Add'}
-          </button>
+      {/* Inline add form — admin only */}
+      {isAdmin && (
+        <div className="bg-white rounded-xl border border-gray-200 p-4">
+          <p className="text-sm font-semibold text-gray-700 mb-3">Add Project Type</p>
+          <div className="flex items-center gap-3">
+            <input
+              type="text"
+              value={newName}
+              onChange={e => setNewName(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && handleAdd()}
+              placeholder="e.g. Fixed Price, T&amp;M, Retainer…"
+              className={inputCls + ' flex-1'}
+            />
+            <button
+              onClick={handleAdd}
+              disabled={adding || !newName.trim()}
+              className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 text-white text-sm font-medium rounded-lg hover:bg-emerald-700 disabled:opacity-50 transition-colors whitespace-nowrap"
+            >
+              <HiOutlinePlus className="w-4 h-4" />
+              {adding ? 'Adding…' : 'Add'}
+            </button>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* List */}
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
@@ -223,13 +227,13 @@ function ProjectTypesTab() {
                   <th className={thCls + ' text-left'}>Name</th>
                   <th className={thCls + ' text-center w-28'}>Sort Order</th>
                   <th className={thCls + ' text-center w-24'}>Active</th>
-                  <th className={thCls + ' text-right w-28'}>Actions</th>
+                  {isAdmin && <th className={thCls + ' text-right w-28'}>Actions</th>}
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
                 {types.map(item => {
                   const id = getId(item);
-                  const isEditing = editId === id;
+                  const isEditing = isAdmin && editId === id;
                   return (
                     <tr key={id} className="hover:bg-gray-50/70 transition-colors">
                       {isEditing ? (
@@ -281,26 +285,34 @@ function ProjectTypesTab() {
                           <td className="px-4 py-3 font-medium text-gray-800">{item.name}</td>
                           <td className="px-4 py-3 text-center text-gray-500">{item.sortOrder ?? 0}</td>
                           <td className="px-4 py-3 text-center">
-                            <Toggle checked={!!item.isActive} onChange={() => handleToggleActive(item)} />
+                            {isAdmin ? (
+                              <Toggle checked={!!item.isActive} onChange={() => handleToggleActive(item)} />
+                            ) : (
+                              <span className={`text-xs ${item.isActive ? 'text-emerald-600' : 'text-gray-400'}`}>
+                                {item.isActive ? 'Active' : 'Inactive'}
+                              </span>
+                            )}
                           </td>
-                          <td className="px-4 py-3">
-                            <div className="flex justify-end gap-1">
-                              <button
-                                onClick={() => startEdit(item)}
-                                className="p-1.5 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
-                                title="Edit"
-                              >
-                                <HiOutlinePencil className="w-4 h-4" />
-                              </button>
-                              <button
-                                onClick={() => handleDelete(id)}
-                                className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
-                                title="Delete"
-                              >
-                                <HiOutlineTrash className="w-4 h-4" />
-                              </button>
-                            </div>
-                          </td>
+                          {isAdmin && (
+                            <td className="px-4 py-3">
+                              <div className="flex justify-end gap-1">
+                                <button
+                                  onClick={() => startEdit(item)}
+                                  className="p-1.5 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
+                                  title="Edit"
+                                >
+                                  <HiOutlinePencil className="w-4 h-4" />
+                                </button>
+                                <button
+                                  onClick={() => handleDelete(id)}
+                                  className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                                  title="Delete"
+                                >
+                                  <HiOutlineTrash className="w-4 h-4" />
+                                </button>
+                              </div>
+                            </td>
+                          )}
                         </>
                       )}
                     </tr>
@@ -317,6 +329,8 @@ function ProjectTypesTab() {
 
 // ─── Tab 2: Statuses ──────────────────────────────────────────────────────────
 function StatusesTab() {
+  const { user } = useSelector(s => s.auth);
+  const isAdmin = user?.role === 'admin';
   const [statuses, setStatuses] = useState([]);
   const [loading,  setLoading]  = useState(true);
   const [addForm,  setAddForm]  = useState({ name: '', color: '#10b981', isActive: true, forProject: true, forMilestone: true, forSubMilestone: false });
@@ -415,7 +429,8 @@ function StatusesTab() {
 
   return (
     <div className="space-y-4">
-      {/* Add form */}
+      {/* Add form — admin only */}
+      {isAdmin && (
       <div className="bg-white rounded-xl border border-gray-200 p-4">
         <p className="text-sm font-semibold text-gray-700 mb-3">Add Status</p>
         <div className="flex items-center gap-3 flex-wrap sm:flex-nowrap">
@@ -473,6 +488,7 @@ function StatusesTab() {
           <p className="text-xs text-gray-400 mt-1">At least one scope must be selected</p>
         </div>
       </div>
+      )}
 
       {/* List */}
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
@@ -490,13 +506,13 @@ function StatusesTab() {
                   <th className={thCls + ' text-center w-24'}>Project</th>
                   <th className={thCls + ' text-center w-28'}>Milestone</th>
                   <th className={thCls + ' text-center w-32'}>Sub-Milestone</th>
-                  <th className={thCls + ' text-right w-28'}>Actions</th>
+                  {isAdmin && <th className={thCls + ' text-right w-28'}>Actions</th>}
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
                 {statuses.map(item => {
                   const id = getId(item);
-                  const isEditing = editId === id;
+                  const isEditing = isAdmin && editId === id;
                   return (
                     <tr key={id} className="hover:bg-gray-50/70 transition-colors">
                       {isEditing ? (
@@ -606,14 +622,21 @@ function StatusesTab() {
                               : <span className="text-gray-300 text-xs">—</span>}
                           </td>
                           <td className="px-4 py-3 text-center">
-                            <Toggle checked={!!item.isActive} onChange={() => handleToggleActive(item)} />
+                            {isAdmin ? (
+                              <Toggle checked={!!item.isActive} onChange={() => handleToggleActive(item)} />
+                            ) : (
+                              <span className={`text-xs ${item.isActive ? 'text-emerald-600' : 'text-gray-400'}`}>
+                                {item.isActive ? 'Active' : 'Inactive'}
+                              </span>
+                            )}
                           </td>
                           <td className="px-4 py-3 text-center">
                             <input
                               type="checkbox"
                               checked={item.forProject ?? true}
                               onChange={() => handleScopeToggle(item._id, 'forProject', !(item.forProject ?? true))}
-                              className="w-4 h-4 text-primary-600 rounded"
+                              disabled={!isAdmin}
+                              className="w-4 h-4 text-primary-600 rounded disabled:opacity-60"
                             />
                           </td>
                           <td className="px-4 py-3 text-center">
@@ -621,7 +644,8 @@ function StatusesTab() {
                               type="checkbox"
                               checked={item.forMilestone ?? true}
                               onChange={() => handleScopeToggle(item._id, 'forMilestone', !(item.forMilestone ?? true))}
-                              className="w-4 h-4 text-primary-600 rounded"
+                              disabled={!isAdmin}
+                              className="w-4 h-4 text-primary-600 rounded disabled:opacity-60"
                             />
                           </td>
                           <td className="px-4 py-3 text-center">
@@ -629,29 +653,32 @@ function StatusesTab() {
                               type="checkbox"
                               checked={item.forSubMilestone ?? false}
                               onChange={() => handleScopeToggle(item._id, 'forSubMilestone', !(item.forSubMilestone ?? false))}
-                              className="w-4 h-4 text-primary-600 rounded"
+                              disabled={!isAdmin}
+                              className="w-4 h-4 text-primary-600 rounded disabled:opacity-60"
                             />
                           </td>
-                          <td className="px-4 py-3">
-                            <div className="flex justify-end gap-1">
-                              <button
-                                onClick={() => startEdit(item)}
-                                className="p-1.5 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
-                                title="Edit"
-                              >
-                                <HiOutlinePencil className="w-4 h-4" />
-                              </button>
-                              {!item.isSystem && (
+                          {isAdmin && (
+                            <td className="px-4 py-3">
+                              <div className="flex justify-end gap-1">
                                 <button
-                                  onClick={() => handleDelete(id)}
-                                  className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
-                                  title="Delete"
+                                  onClick={() => startEdit(item)}
+                                  className="p-1.5 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
+                                  title="Edit"
                                 >
-                                  <HiOutlineTrash className="w-4 h-4" />
+                                  <HiOutlinePencil className="w-4 h-4" />
                                 </button>
-                              )}
-                            </div>
-                          </td>
+                                {!item.isSystem && (
+                                  <button
+                                    onClick={() => handleDelete(id)}
+                                    className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                                    title="Delete"
+                                  >
+                                    <HiOutlineTrash className="w-4 h-4" />
+                                  </button>
+                                )}
+                              </div>
+                            </td>
+                          )}
                         </>
                       )}
                     </tr>
@@ -667,8 +694,8 @@ function StatusesTab() {
 }
 
 // ─── DnD: Sortable milestone template row ────────────────────────────────────
-function SortableTemplateRow({ template, onEdit, onDelete, canDelete }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: template._id || template.id });
+function SortableTemplateRow({ template, onEdit, onDelete, canDelete, isAdmin = true }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: template._id || template.id, disabled: !isAdmin });
   const style = {
     transform: CSS.Transform.toString(transform),
     transition,
@@ -677,14 +704,16 @@ function SortableTemplateRow({ template, onEdit, onDelete, canDelete }) {
   return (
     <tr ref={setNodeRef} style={style} className="hover:bg-gray-50/70 transition-colors">
       <td className="px-4 py-3">
-        <button
-          {...attributes}
-          {...listeners}
-          className="cursor-grab active:cursor-grabbing text-gray-400 hover:text-gray-600 p-1"
-          title="Drag to reorder"
-        >
-          ⠿
-        </button>
+        {isAdmin && (
+          <button
+            {...attributes}
+            {...listeners}
+            className="cursor-grab active:cursor-grabbing text-gray-400 hover:text-gray-600 p-1"
+            title="Drag to reorder"
+          >
+            ⠿
+          </button>
+        )}
       </td>
       <td className="px-4 py-3 font-medium text-gray-800">{template.name}</td>
       <td className="px-4 py-3 text-center">
@@ -693,26 +722,28 @@ function SortableTemplateRow({ template, onEdit, onDelete, canDelete }) {
         </span>
       </td>
       <td className="px-4 py-3 text-center text-gray-500">{template.sortOrder ?? 0}</td>
-      <td className="px-4 py-3">
-        <div className="flex justify-end gap-1">
-          <button
-            onClick={() => onEdit(template)}
-            className="p-1.5 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
-            title="Edit"
-          >
-            <HiOutlinePencil className="w-4 h-4" />
-          </button>
-          {canDelete && (
+      {isAdmin && (
+        <td className="px-4 py-3">
+          <div className="flex justify-end gap-1">
             <button
-              onClick={() => onDelete(template._id || template.id)}
-              className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
-              title="Delete"
+              onClick={() => onEdit(template)}
+              className="p-1.5 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
+              title="Edit"
             >
-              <HiOutlineTrash className="w-4 h-4" />
+              <HiOutlinePencil className="w-4 h-4" />
             </button>
-          )}
-        </div>
-      </td>
+            {canDelete && (
+              <button
+                onClick={() => onDelete(template._id || template.id)}
+                className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                title="Delete"
+              >
+                <HiOutlineTrash className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+        </td>
+      )}
     </tr>
   );
 }
@@ -925,7 +956,8 @@ function MilestoneTemplatesTab() {
 
   return (
     <div className="space-y-4">
-      {/* Add form */}
+      {/* Add form — admin only */}
+      {isAdmin && (
       <div className="bg-white rounded-xl border border-gray-200 p-4">
         <p className="text-sm font-semibold text-gray-700 mb-3">Add Milestone Template</p>
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
@@ -1001,6 +1033,7 @@ function MilestoneTemplatesTab() {
           </button>
         </div>
       </div>
+      )}
 
       {/* Project type filter pills */}
       {projectTypes.length > 0 && (
@@ -1095,13 +1128,13 @@ function MilestoneTemplatesTab() {
                       <th className={thCls + ' text-left'}>Name</th>
                       <th className={thCls + ' text-center w-40'}>Range (%)</th>
                       <th className={thCls + ' text-center w-28'}>Sort Order</th>
-                      <th className={thCls + ' text-right w-28'}>Actions</th>
+                      {isAdmin && <th className={thCls + ' text-right w-28'}>Actions</th>}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-50">
                     {filteredTemplates.map(item => {
                       const id = getId(item);
-                      const isEditing = editId === id;
+                      const isEditing = isAdmin && editId === id;
                       if (isEditing) {
                         return (
                           <tr key={id} className="hover:bg-gray-50/70 transition-colors">
@@ -1168,6 +1201,7 @@ function MilestoneTemplatesTab() {
                           onEdit={startEdit}
                           onDelete={handleDelete}
                           canDelete={!item.isSystem}
+                          isAdmin={isAdmin}
                         />
                       );
                     })}
@@ -2805,6 +2839,8 @@ function EmailAlertsTab() {
 
 // ─── Tab 7: Member Roles ──────────────────────────────────────────────────────
 function MemberRolesTab() {
+  const { user } = useSelector(s => s.auth);
+  const isAdmin = user?.role === 'admin';
   const [roles,    setRoles]    = useState([]);
   const [loading,  setLoading]  = useState(true);
   const [newName,  setNewName]  = useState('');
@@ -2889,7 +2925,8 @@ function MemberRolesTab() {
         Add roles like <em>Developer</em>, <em>Designer</em>, <em>DevOps</em>, etc.
       </div>
 
-      {/* Add form */}
+      {/* Add form — admin only */}
+      {isAdmin && (
       <div className="bg-white rounded-xl border border-gray-200 p-4">
         <p className="text-sm font-semibold text-gray-700 mb-3">Add Member Role</p>
         <div className="flex items-center gap-3">
@@ -2911,6 +2948,7 @@ function MemberRolesTab() {
           </button>
         </div>
       </div>
+      )}
 
       {/* Roles table */}
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
@@ -2924,13 +2962,13 @@ function MemberRolesTab() {
                   <th className={thCls + ' text-left'}>Role Name</th>
                   <th className={thCls + ' text-center w-28'}>Sort Order</th>
                   <th className={thCls + ' text-center w-24'}>Active</th>
-                  <th className={thCls + ' text-right w-28'}>Actions</th>
+                  {isAdmin && <th className={thCls + ' text-right w-28'}>Actions</th>}
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
                 {roles.map(item => {
                   const id = getId(item);
-                  const isEditing = editId === id;
+                  const isEditing = isAdmin && editId === id;
                   return (
                     <tr key={id} className="hover:bg-gray-50/70 transition-colors">
                       {isEditing ? (
@@ -2987,29 +3025,37 @@ function MemberRolesTab() {
                           </td>
                           <td className="px-4 py-3 text-center text-gray-500">{item.sortOrder ?? '—'}</td>
                           <td className="px-4 py-3 text-center">
-                            <Toggle
-                              checked={!!item.isActive}
-                              onChange={() => handleToggleActive(item)}
-                            />
+                            {isAdmin ? (
+                              <Toggle
+                                checked={!!item.isActive}
+                                onChange={() => handleToggleActive(item)}
+                              />
+                            ) : (
+                              <span className={`text-xs ${item.isActive ? 'text-emerald-600' : 'text-gray-400'}`}>
+                                {item.isActive ? 'Active' : 'Inactive'}
+                              </span>
+                            )}
                           </td>
-                          <td className="px-4 py-3">
-                            <div className="flex justify-end gap-1">
-                              <button
-                                onClick={() => startEdit(item)}
-                                className="p-1.5 text-blue-500 hover:bg-blue-50 rounded-lg transition-colors"
-                                title="Edit"
-                              >
-                                <HiOutlinePencil className="w-4 h-4" />
-                              </button>
-                              <button
-                                onClick={() => handleDelete(id)}
-                                className="p-1.5 text-red-400 hover:bg-red-50 rounded-lg transition-colors"
-                                title="Delete"
-                              >
-                                <HiOutlineTrash className="w-4 h-4" />
-                              </button>
-                            </div>
-                          </td>
+                          {isAdmin && (
+                            <td className="px-4 py-3">
+                              <div className="flex justify-end gap-1">
+                                <button
+                                  onClick={() => startEdit(item)}
+                                  className="p-1.5 text-blue-500 hover:bg-blue-50 rounded-lg transition-colors"
+                                  title="Edit"
+                                >
+                                  <HiOutlinePencil className="w-4 h-4" />
+                                </button>
+                                <button
+                                  onClick={() => handleDelete(id)}
+                                  className="p-1.5 text-red-400 hover:bg-red-50 rounded-lg transition-colors"
+                                  title="Delete"
+                                >
+                                  <HiOutlineTrash className="w-4 h-4" />
+                                </button>
+                              </div>
+                            </td>
+                          )}
                         </>
                       )}
                     </tr>

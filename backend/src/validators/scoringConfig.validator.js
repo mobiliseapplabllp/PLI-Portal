@@ -4,6 +4,8 @@ const createScoringConfigValidator = [
   body('financialYear')
     .notEmpty().withMessage('financialYear is required')
     .matches(/^\d{4}-\d{2}$/).withMessage('financialYear must be in YYYY-YY format (e.g. 2025-26)'),
+  // Department-wise scoring config — omit/null = applies to every department (the global fallback).
+  body('departmentId').optional({ nullable: true }).isUUID().withMessage('departmentId must be a valid UUID'),
   body('meetsMultiplier')
     .optional()
     .isNumeric().withMessage('meetsMultiplier must be a number'),

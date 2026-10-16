@@ -1,4 +1,5 @@
 const { Op } = require('sequelize');
+const sequelize = require('../config/database');
 const KpiPlan = require('../models/KpiPlan');
 const KpiPlanItem = require('../models/KpiPlanItem');
 const KpiItem = require('../models/KpiItem');
@@ -281,7 +282,7 @@ const resyncPlanAssignments = async (plan, planItems, actorId) => {
   };
   if (plan.role) empWhere.role = plan.role;
 
-  const employees = await User.findAll({ where: empWhere, attributes: ['id', 'managerId'] });
+  const employees = await User.findAll({ where: empWhere, attributes: ['id', 'managerId', 'departmentId'] });
   console.log(`[resync] plan=${plan.id} role=${plan.role} dept=${plan.departmentId} → ${employees.length} employees, ${months.length} months`);
   let created = 0;
 
@@ -300,6 +301,7 @@ const resyncPlanAssignments = async (plan, planItems, actorId) => {
         month,
         quarter: getQuarterFromMonth(month),
         employeeId: emp.id,
+        departmentId: emp.departmentId || plan.departmentId || null,
         managerId,
         createdById: actorId,
         status: KPI_STATUS.ASSIGNED,
@@ -379,6 +381,63 @@ const applyPlanToAssignment = async (plan, assignmentId, t) => {
   await KpiItem.bulkCreate(kpiItems, { transaction: t });
 };
 
+// ── Department transfer — convert NOT-YET-COMMITTED months only ────────────────
+
+/**
+ * When an employee moves to a new department, their KPI months split into two
+ * groups:
+ *  - Already committed (status beyond DRAFT/ASSIGNED) — left completely
+ *    untouched. They keep their original department's KPI items, and (via the
+ *    KpiAssignment.departmentId snapshot) their original department's
+ *    deadlines/scoring forever.
+ *  - Not yet committed (still DRAFT/ASSIGNED) — nothing typed on them yet, so
+ *    it's safe to swap them onto the NEW department's KPI plan instead, since
+ *    that's the work she'll actually be doing going forward.
+ *
+ * Only ever touches assignments belonging to the ONE employee passed in —
+ * scoped strictly by employeeId, never department-wide. Returns a summary for
+ * the caller to audit-log.
+ */
+const convertUncommittedAssignmentsOnDepartmentChange = async (employee, newDepartmentId, actorId) => {
+  const UNCOMMITTED_STATUSES = [KPI_STATUS.DRAFT, KPI_STATUS.ASSIGNED];
+  const pending = await KpiAssignment.findAll({
+    where: { employeeId: employee.id, status: { [Op.in]: UNCOMMITTED_STATUSES } },
+  });
+  if (!pending.length) return { converted: [], skippedNoPlan: [] };
+
+  // Group by financialYear — the right plan to apply can differ per FY.
+  const byFY = {};
+  for (const a of pending) (byFY[a.financialYear] ||= []).push(a);
+
+  const converted = [];
+  const skippedNoPlan = [];
+
+  for (const [fy, rows] of Object.entries(byFY)) {
+    const plan = await findPlanForEmployee({ id: employee.id, role: employee.role, departmentId: newDepartmentId }, fy);
+    if (!plan) {
+      skippedNoPlan.push(...rows.map((r) => ({ financialYear: fy, month: r.month })));
+      continue;
+    }
+
+    const totalWeightage = Math.round(
+      (plan.items || []).reduce((s, i) => s + parseFloat(i.monthlyWeightage || 0), 0)
+    );
+
+    for (const assignment of rows) {
+      await sequelize.transaction(async (t) => {
+        await KpiItem.destroy({ where: { kpiAssignmentId: assignment.id }, transaction: t });
+        await applyPlanToAssignment(plan, assignment.id, t);
+        assignment.departmentId = newDepartmentId;
+        assignment.totalWeightage = totalWeightage;
+        await assignment.save({ transaction: t });
+      });
+      converted.push({ financialYear: fy, month: assignment.month });
+    }
+  }
+
+  return { converted, skippedNoPlan };
+};
+
 module.exports = {
   getPlans,
   getPlanById,
@@ -391,4 +450,5 @@ module.exports = {
   publishPlan,
   findPlanForEmployee,
   applyPlanToAssignment,
+  convertUncommittedAssignmentsOnDepartmentChange,
 };

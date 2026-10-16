@@ -1,5 +1,6 @@
 const ScoringConfig = require('../models/ScoringConfig');
 const User = require('../models/User');
+const Department = require('../models/Department');
 const { NotFoundError, ConflictError } = require('../utils/errors');
 const { createAuditLog } = require('../middleware/auditLogger');
 const notificationService = require('./notification.service');
@@ -14,10 +15,14 @@ const getFinalApproverService = () => require('./finalApprover.service');
 const getConfigs = async (query = {}) => {
   const where = {};
   if (query.financialYear) where.financialYear = query.financialYear;
+  if (query.departmentId)  where.departmentId  = query.departmentId;
 
   const configs = await ScoringConfig.findAll({
     where,
-    include: [{ model: User, as: 'createdBy', attributes: ['id', 'name'] }],
+    include: [
+      { model: User, as: 'createdBy', attributes: ['id', 'name'] },
+      { model: Department, as: 'department', attributes: ['id', 'name'] },
+    ],
     order: [['financialYear', 'DESC']],
   });
 
@@ -25,33 +30,42 @@ const getConfigs = async (query = {}) => {
 };
 
 /**
- * Fetch the active scoring config for a financial year.
- * One config per FY — applies to all quarters (Q1–Q4).
+ * Fetch the active scoring config for a financial year — the department-
+ * specific one if it exists, else the global (departmentId=NULL) fallback.
+ * One config per FY (per department) — applies to all quarters (Q1–Q4).
  * Returns null if not found; callers must fall back to system defaults.
+ * @param {string} financialYear
+ * @param {string|null} departmentId — null resolves straight to the global config
  */
-const getActiveConfig = async (financialYear) => {
-  return ScoringConfig.findOne({
-    where: { financialYear, isActive: true },
-  });
+const getActiveConfig = async (financialYear, departmentId = null) => {
+  if (departmentId) {
+    const specific = await ScoringConfig.findOne({ where: { financialYear, departmentId, isActive: true } });
+    if (specific) return specific;
+  }
+  return ScoringConfig.findOne({ where: { financialYear, departmentId: null, isActive: true } });
 };
 
 /**
- * Create a new scoring config for a financial year.
- * Blocked if a config already exists for that FY.
- * Notifies all final approvers.
+ * Create a new scoring config for a financial year (optionally scoped to a
+ * department — null = global). Blocked if a config already exists for that
+ * exact (financialYear, departmentId) combination. Notifies all final approvers.
  */
 const createConfig = async (data, userId) => {
+  const departmentId = data.departmentId || null;
   const existing = await ScoringConfig.findOne({
-    where: { financialYear: data.financialYear },
+    where: { financialYear: data.financialYear, departmentId },
   });
   if (existing) {
     throw new ConflictError(
-      `A scoring config already exists for FY ${data.financialYear}. Edit the existing one instead.`
+      departmentId
+        ? `A scoring config already exists for this department in FY ${data.financialYear}. Edit the existing one instead.`
+        : `A global scoring config already exists for FY ${data.financialYear}. Edit the existing one instead.`
     );
   }
 
   const config = await ScoringConfig.create({
     financialYear:    data.financialYear,
+    departmentId,
     meetsMultiplier:   data.meetsMultiplier   ?? 1.0,
     belowMultiplier:   data.belowMultiplier   ?? -0.5,
     exceedsMultiplier: data.exceedsMultiplier ?? 1.5,
@@ -75,7 +89,10 @@ const createConfig = async (data, userId) => {
   _notifyFinalApprovers(userId, config.financialYear, 'created');
 
   return ScoringConfig.findByPk(config.id, {
-    include: [{ model: User, as: 'createdBy', attributes: ['id', 'name'] }],
+    include: [
+      { model: User, as: 'createdBy', attributes: ['id', 'name'] },
+      { model: Department, as: 'department', attributes: ['id', 'name'] },
+    ],
   });
 };
 
@@ -122,30 +139,42 @@ const updateConfig = async (id, data, userId) => {
 
   _notifyFinalApprovers(userId, config.financialYear, 'updated');
 
-  // Recalculate all quarters synchronously before returning — guarantees workbench
-  // shows updated values the moment admin's save response arrives.
-  await _autoRecalculateAllQuarters(config.financialYear, userId);
+  // Recalculate synchronously before returning — guarantees workbench shows
+  // updated values the moment admin's save response arrives. Scoped to the
+  // config's OWN department when it's a department-specific config, so
+  // editing Sales' scoring config never touches Operations' (or any other
+  // department's) already-correct numbers.
+  await _autoRecalculateAllQuarters(config.financialYear, userId, config.departmentId);
 
   const updated = await ScoringConfig.findByPk(config.id, {
-    include: [{ model: User, as: 'createdBy', attributes: ['id', 'name'] }],
+    include: [
+      { model: User, as: 'createdBy', attributes: ['id', 'name'] },
+      { model: Department, as: 'department', attributes: ['id', 'name'] },
+    ],
   });
 
   return { config: updated, impactsAllQuarters: true };
 };
 
 /**
- * Auto-recalculate all quarters (Q1–Q4) in the FY whenever scoring config is updated.
+ * Auto-recalculate quarters (Q1–Q4) whenever scoring config is updated.
+ * A specific `departmentId` scopes recalculation to just that department —
+ * editing Sales' config never touches Operations' records. `departmentId`
+ * null (the GLOBAL config changed) recalculates everyone, same as before —
+ * safe because bulkRecalculateQuarter resolves each employee's OWN config
+ * (their department's override if one exists, else this global one), so a
+ * department with its own override comes out with identical numbers either way.
  * Fires async — does not block the admin save response.
  * Uses a system-level user context so no role check is needed.
  */
-const _autoRecalculateAllQuarters = async (financialYear, changedById) => {
+const _autoRecalculateAllQuarters = async (financialYear, changedById, departmentId = null) => {
   const quarters = ['Q1', 'Q2', 'Q3', 'Q4'];
   const systemUser = { role: 'admin', id: changedById, departmentId: null };
 
   const results = await Promise.allSettled(
     quarters.map((quarter) =>
       getFinalApproverService()
-        .bulkRecalculateQuarter(financialYear, quarter, null, systemUser)
+        .bulkRecalculateQuarter(financialYear, quarter, departmentId, systemUser)
         .then((result) => {
           console.log(`[AutoRecalc] FY=${financialYear} ${quarter}: ${result.recalculated} updated, ${result.skipped} skipped`);
           return result;

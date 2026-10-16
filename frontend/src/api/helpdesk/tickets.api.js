@@ -80,3 +80,12 @@ export const getAllocationProposalsApi = (ticketId) =>
  */
 export const respondTicketAllocationApi = (ticketId, body) =>
   api.post(`/helpdesk/tickets/${ticketId}/allocation-proposals/respond`, body);
+
+/**
+ * Read-only capacity check — never blocks, just tells you whether a candidate
+ * total hours/date range would put the assignee over capacity, for showing a
+ * live availability hint while proposing/countering.
+ * @param {{ allocationTotalHours:number, allocationFrom:string, allocationTo:string }} body
+ */
+export const previewAllocationCapacityApi = (ticketId, body) =>
+  api.post(`/helpdesk/tickets/${ticketId}/allocation-preview`, body);

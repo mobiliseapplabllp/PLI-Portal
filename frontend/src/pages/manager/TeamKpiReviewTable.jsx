@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useSelector } from 'react-redux';
 import { getTeamOverviewApi, managerReviewApi, reviewCommitmentApi } from '../../api/kpiAssignments.api';
 import { getDepartmentsApi } from '../../api/departments.api';
-import { getUsersApi } from '../../api/users.api';
+import { getUsersApi, getTeamApi } from '../../api/users.api';
 import PageHeader from '../../components/common/PageHeader';
 import StatusBadge from '../../components/common/StatusBadge';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
@@ -14,7 +14,7 @@ import ConfirmDialog from '../../components/common/ConfirmDialog';
 import toast from 'react-hot-toast';
 import { getMonthName } from '../../utils/formatters';
 import {
-  QUARTER_MAP, KPI_STATUS, FINANCIAL_YEARS, ROLE_OPTIONS,
+  QUARTER_MAP, KPI_STATUS, FINANCIAL_YEARS,
   getVisibleMonthOptions,
 } from '../../utils/constants';
 import {
@@ -37,8 +37,6 @@ function getCurrentFYAndMonth() {
   const fyStart = month >= 4 ? year : year - 1;
   return { financialYear: `${fyStart}-${String(fyStart + 1).slice(2)}`, month };
 }
-
-const ADMIN_ROLE_OPTIONS = ROLE_OPTIONS.filter((r) => !['admin', 'hr_admin', 'final_approver'].includes(r.value));
 
 export default function TeamKpiReviewTable() {
   const navigate = useNavigate();
@@ -63,10 +61,13 @@ export default function TeamKpiReviewTable() {
   // commitDecisions[assignmentId][itemId] = { approval: 'approved'|'rejected'|'', comment: '' }
   const [commitDecisions, setCommitDecisions] = useState({});
 
-  // Admin-only: department / role / employee selectors
+  // Admin-only: department / manager-team / employee selectors (cascading,
+  // same pattern as Final Approval Workbench)
   const [departments, setDepartments] = useState([]);
   const [adminDept, setAdminDept] = useState('');
-  const [adminRole, setAdminRole] = useState('');
+  const [adminManager, setAdminManager] = useState('');
+  const [managers, setManagers] = useState([]);
+  const [teamMemberIds, setTeamMemberIds] = useState(null); // null = no manager selected, else Set
   const [adminEmployee, setAdminEmployee] = useState('');
   const [adminEmployees, setAdminEmployees] = useState([]);
 
@@ -74,22 +75,52 @@ export default function TeamKpiReviewTable() {
   const selectedMonthName = getMonthName(selectedMonth);
   const selectedQuarter = QUARTER_MAP[selectedMonth] || '';
 
-  // Load departments for admin selector
+  // Load departments + managers for admin selectors (once)
   useEffect(() => {
     if (!isAdmin) return;
     getDepartmentsApi().then((r) => setDepartments(r.data.data || [])).catch(() => {});
+    Promise.all([
+      getUsersApi({ role: 'manager', isActive: 'true', limit: 200 }),
+      getUsersApi({ role: 'sales_director', isActive: 'true', limit: 200 }),
+    ])
+      .then(([mRes, sdRes]) => setManagers([...(mRes.data.data || []), ...(sdRes.data.data || [])]))
+      .catch(() => setManagers([]));
   }, []);
 
-  // Load employees when admin dept/role filter changes
+  // Department narrows the manager list client-side
+  const managerOptions = isAdmin
+    ? (adminDept ? managers.filter((m) => String(m.departmentId) === String(adminDept)) : managers)
+        .slice().sort((a, b) => a.name.localeCompare(b.name))
+    : [];
+
+  // Manager selected → fetch their team's real member IDs (authoritative, not just managerId field)
+  useEffect(() => {
+    if (!isAdmin) return;
+    if (!adminManager) { setTeamMemberIds(null); return; }
+    getTeamApi(adminManager)
+      .then((r) => {
+        const members = r.data.data || [];
+        const ids = new Set(members.map((m) => m._id || m.id).filter(Boolean));
+        ids.add(adminManager);
+        setTeamMemberIds(ids);
+      })
+      .catch(() => setTeamMemberIds(new Set()));
+  }, [isAdmin, adminManager]);
+
+  // Load employees when admin dept/manager filter changes
   useEffect(() => {
     if (!isAdmin) return;
     setAdminEmployee('');
-    if (!adminDept && !adminRole) { setAdminEmployees([]); return; }
+    if (!adminDept && !adminManager) { setAdminEmployees([]); return; }
     const params = { isActive: 'true', limit: 200 };
     if (adminDept) params.department = adminDept;
-    if (adminRole) params.role = adminRole;
-    getUsersApi(params).then((r) => setAdminEmployees(r.data.data || [])).catch(() => setAdminEmployees([]));
-  }, [adminDept, adminRole]);
+    getUsersApi(params)
+      .then((r) => {
+        const list = r.data.data || [];
+        setAdminEmployees(teamMemberIds ? list.filter((e) => teamMemberIds.has(e._id || e.id)) : list);
+      })
+      .catch(() => setAdminEmployees([]));
+  }, [adminDept, adminManager, teamMemberIds]);
 
   const loadData = () => {
     if (!filters.financialYear || !filters.month) return;
@@ -240,19 +271,19 @@ export default function TeamKpiReviewTable() {
           <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">View Employee KPIs:</span>
           <select
             value={adminDept}
-            onChange={(e) => setAdminDept(e.target.value)}
+            onChange={(e) => { setAdminDept(e.target.value); setAdminManager(''); }}
             className="input-field w-44 text-sm"
           >
-            <option value="">All Departments</option>
-            {departments.map((d) => <option key={d._id} value={d._id}>{d.name}</option>)}
+            <option value="">— All Departments —</option>
+            {departments.map((d) => <option key={d._id || d.id} value={d._id || d.id}>{d.name}</option>)}
           </select>
           <select
-            value={adminRole}
-            onChange={(e) => setAdminRole(e.target.value)}
-            className="input-field w-40 text-sm"
+            value={adminManager}
+            onChange={(e) => setAdminManager(e.target.value)}
+            className="input-field w-44 text-sm"
           >
-            <option value="">All Roles</option>
-            {ADMIN_ROLE_OPTIONS.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
+            <option value="">— All Managers —</option>
+            {managerOptions.map((m) => <option key={m._id || m.id} value={m._id || m.id}>{m.name}</option>)}
           </select>
           <select
             value={adminEmployee}
@@ -260,9 +291,13 @@ export default function TeamKpiReviewTable() {
             className="input-field w-56 text-sm"
             disabled={adminEmployees.length === 0}
           >
-            <option value="">{adminEmployees.length === 0 ? 'Select dept or role first…' : 'Select employee…'}</option>
+            <option value="">
+              {adminEmployees.length === 0
+                ? 'Select dept or manager first…'
+                : adminManager ? `— All in team (${adminEmployees.length}) —` : 'Select employee…'}
+            </option>
             {adminEmployees.map((e) => (
-              <option key={e._id} value={e._id}>{e.name} ({e.employeeCode})</option>
+              <option key={e._id || e.id} value={e._id || e.id}>{e.name} ({e.employeeCode})</option>
             ))}
           </select>
         </div>

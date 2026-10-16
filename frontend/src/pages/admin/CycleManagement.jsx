@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { getCyclesApi, createCycleApi, updateCycleApi } from '../../api/cycles.api';
+import { getDepartmentsApi } from '../../api/departments.api';
 import PageHeader from '../../components/common/PageHeader';
 import DataTable from '../../components/common/DataTable';
 import StatusBadge from '../../components/common/StatusBadge';
@@ -11,6 +12,7 @@ import { getMonthName, formatDate } from '../../utils/formatters';
 
 export default function CycleManagement() {
   const [cycles, setCycles] = useState([]);
+  const [departments, setDepartments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing] = useState(null);
@@ -21,13 +23,17 @@ export default function CycleManagement() {
     getCyclesApi().then((res) => setCycles(res.data.data)).finally(() => setLoading(false));
   };
 
-  useEffect(() => { loadCycles(); }, []);
+  useEffect(() => {
+    loadCycles();
+    getDepartmentsApi().then((r) => setDepartments(r.data.data || [])).catch(() => {});
+  }, []);
 
   const openCreate = () => {
     setEditing(null);
     reset({
       financialYear: getCurrentFinancialYear(),
       month: '',
+      departmentId: '',
       commitmentDeadline: '',
       employeeSubmissionDeadline: '',
       managerReviewDeadline: '',
@@ -40,6 +46,7 @@ export default function CycleManagement() {
     setEditing(cycle);
     reset({
       status: cycle.status,
+      departmentId: cycle.departmentId || '',
       commitmentDeadline: cycle.commitmentDeadline?.slice(0, 10) || '',
       employeeSubmissionDeadline: cycle.employeeSubmissionDeadline?.slice(0, 10) || '',
       managerReviewDeadline: cycle.managerReviewDeadline?.slice(0, 10) || '',
@@ -51,10 +58,10 @@ export default function CycleManagement() {
   const onSubmit = async (data) => {
     try {
       if (editing) {
-        await updateCycleApi(editing._id, data);
+        await updateCycleApi(editing._id, { ...data, departmentId: data.departmentId || null });
         toast.success('Cycle updated');
       } else {
-        await createCycleApi({ ...data, month: Number(data.month) });
+        await createCycleApi({ ...data, month: Number(data.month), departmentId: data.departmentId || null });
         toast.success('Cycle created');
       }
       setShowModal(false);
@@ -67,6 +74,7 @@ export default function CycleManagement() {
   const columns = [
     { key: 'financialYear', label: 'FY' },
     { key: 'month', label: 'Month', render: (r) => getMonthName(r.month) },
+    { key: 'department', label: 'Department', render: (r) => r.department?.name || <span className="text-gray-400">All Departments</span> },
     { key: 'quarter', label: 'Quarter' },
     { key: 'status', label: 'Status', render: (r) => <StatusBadge status={r.status} type="cycle" /> },
     { key: 'empDeadline', label: 'Emp Deadline', render: (r) => formatDate(r.employeeSubmissionDeadline) },
@@ -100,18 +108,37 @@ export default function CycleManagement() {
                   {MONTHS.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
                 </select>
               </div>
+              <div>
+                <label className="label-text">Department <span className="text-xs text-gray-400">(leave blank to apply to every department)</span></label>
+                <select {...register('departmentId')} className="input-field">
+                  <option value="">All Departments</option>
+                  {departments.map((d) => <option key={d._id || d.id} value={d._id || d.id}>{d.name}</option>)}
+                </select>
+              </div>
             </>
           )}
           {editing && (
-            <div>
-              <label className="label-text">Status</label>
-              <select {...register('status')} className="input-field">
-                <option value="draft">Draft</option>
-                <option value="open">Open</option>
-                <option value="closed">Closed</option>
-                <option value="locked">Locked</option>
-              </select>
-            </div>
+            <>
+              <div>
+                <label className="label-text">Status</label>
+                <select {...register('status')} className="input-field">
+                  <option value="draft">Draft</option>
+                  <option value="open">Open</option>
+                  <option value="closed">Closed</option>
+                  <option value="locked">Locked</option>
+                </select>
+              </div>
+              <div>
+                <label className="label-text">Department <span className="text-xs text-gray-400">(leave blank to apply to every department)</span></label>
+                <select {...register('departmentId')} className="input-field">
+                  <option value="">All Departments</option>
+                  {departments.map((d) => <option key={d._id || d.id} value={d._id || d.id}>{d.name}</option>)}
+                </select>
+                <p className="text-xs text-gray-400 mt-1">
+                  Changing this moves the cycle to a different department's deadlines — blocked if that department already has its own cycle for this month.
+                </p>
+              </div>
+            </>
           )}
           <div>
             <label className="label-text">Monthly Commitment Deadline <span className="text-xs text-gray-400">(employee commits to targets)</span></label>

@@ -23,17 +23,27 @@ const notificationService = require('./notification.service');
 const { findPlanForEmployee, applyPlanToAssignment } = require('./kpiPlan.service');
 // Lazy-required to avoid circular dependency: finalApprover → kpiAssignment → finalApprover
 const getFinalApproverService = () => require('./finalApprover.service');
-const AppraisalCycle = require('../models/AppraisalCycle');
+let _cycleService;
+const cycleService = () => (_cycleService ||= require('./cycle.service'));
 
 // ── Deadline enforcement ───────────────────────────────────────────────────────
 // deadlineField: 'commitmentDeadline' | 'employeeSubmissionDeadline' | 'managerReviewDeadline'
 // Admin is never blocked by deadlines.
 const assertDeadline = async (assignment, deadlineField, user) => {
   if (user.role === 'admin') return;
-  const cycle = await AppraisalCycle.findOne({
-    where: { financialYear: assignment.financialYear, month: assignment.month },
-    attributes: [deadlineField],
-  });
+  // Prefer the assignment's own department SNAPSHOT (set once at creation —
+  // see KpiAssignment.departmentId) so a later department transfer never
+  // silently changes which cycle's deadline an already-open assignment is
+  // judged against. NULL (legacy rows predating the snapshot) falls back to
+  // the employee's current department, unchanged from prior behavior.
+  let employeeDeptId = assignment.departmentId ?? assignment.employee?.departmentId;
+  if (employeeDeptId === undefined) {
+    const emp = await User.findByPk(assignment.employeeId, { attributes: ['departmentId'] });
+    employeeDeptId = emp?.departmentId || null;
+  }
+  const cycle = await cycleService().resolveCycleForDepartment(
+    assignment.financialYear, assignment.month, employeeDeptId
+  );
   const deadline = cycle?.[deadlineField];
   if (!deadline) {
     throw new ValidationError('Submission is not allowed — the admin has not set a deadline for this cycle yet.');
@@ -196,11 +206,13 @@ const getAssignmentById = async (id, user) => {
 
   const assignmentPlain = withCurrentManager(assignment);
 
-  // Attach appraisal cycle deadlines so frontend can show deadline status
-  const cycle = await AppraisalCycle.findOne({
-    where: { financialYear: assignment.financialYear, month: assignment.month },
-    attributes: ['commitmentDeadline', 'employeeSubmissionDeadline', 'managerReviewDeadline', 'finalReviewDeadline'],
-  });
+  // Attach appraisal cycle deadlines so frontend can show deadline status —
+  // the assignment's own department SNAPSHOT if set (legacy rows fall back
+  // to the employee's current department), then that department's
+  // cycle if one exists, else the global one.
+  const cycle = await cycleService().resolveCycleForDepartment(
+    assignment.financialYear, assignment.month, assignment.departmentId ?? assignment.employee?.departmentId
+  );
   assignmentPlain.appraisalCycle = cycle
     ? { commitmentDeadline: cycle.commitmentDeadline, employeeSubmissionDeadline: cycle.employeeSubmissionDeadline, managerReviewDeadline: cycle.managerReviewDeadline, finalReviewDeadline: cycle.finalReviewDeadline }
     : null;
@@ -253,6 +265,7 @@ const createAssignment = async (data, user) => {
     month: data.month,
     quarter,
     employeeId: data.employee,
+    departmentId: employee.departmentId || null,
     managerId: user._id,
     createdById: user._id,
     status: KPI_STATUS.DRAFT,
@@ -1182,6 +1195,7 @@ const cloneKpis = async (data, user) => {
       month: Number(targetMonth),
       quarter,
       employeeId: targetEmployeeId,
+      departmentId: targetEmployee.departmentId || null,
       managerId: user.role === 'admin' ? targetEmployee.managerId || user._id : user._id,
       createdById: user._id,
       status: KPI_STATUS.DRAFT,
@@ -1385,6 +1399,7 @@ const bulkImportFromExcel = async (buffer, financialYear, month, user) => {
             month: Number(month),
             quarter,
             employeeId: employee.id,
+            departmentId: employee.departmentId || null,
             managerId: user.role === 'admin' ? employee.managerId || user._id : user._id,
             createdById: user._id,
             status: KPI_STATUS.DRAFT,

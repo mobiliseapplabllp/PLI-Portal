@@ -18,7 +18,10 @@ const { ValidationError } = require('../utils/errors');
 const { createAuditLog } = require('../middleware/auditLogger');
 const notificationService = require('./notification.service');
 const scoringConfigService = require('./scoringConfig.service');
-const AppraisalCycle = require('../models/AppraisalCycle');
+// Lazy-required to avoid any circular-dependency risk, same reasoning as
+// getFinalApproverService elsewhere in this codebase.
+let _cycleService;
+const cycleService = () => (_cycleService ||= require('./cycle.service'));
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -54,14 +57,22 @@ const getDeptQuarterlyStatus = async (user, query) => {
   const empWhere = { isActive: true, role: { [Op.in]: ['employee', 'manager'] } };
   if (deptId) empWhere.departmentId = deptId;
 
-  const [employees, scoringConfig] = await Promise.all([
+  const [employees] = await Promise.all([
     User.findAll({
       where: empWhere,
       attributes: ['id', 'name', 'employeeCode', 'designation', 'departmentId', 'managerId'],
     }),
-    // FIX 1: load real scoring config once for the FY — used in fallback computation
-    scoringConfigService.getActiveConfig(financialYear),
   ]);
+
+  // FIX 1: resolve each employee's OWN scoring config (their department's
+  // override if one exists, else the global one) — cached per department so
+  // a mixed-department listing (admin viewing "all") doesn't re-query per employee.
+  const configCache = new Map();
+  const configFor = async (deptId) => {
+    const key = deptId || '__global__';
+    if (!configCache.has(key)) configCache.set(key, await scoringConfigService.getActiveConfig(financialYear, deptId));
+    return configCache.get(key);
+  };
 
   const deptIds    = [...new Set(employees.map((e) => e.departmentId).filter(Boolean))];
   const managerIds = [...new Set(employees.map((e) => e.managerId).filter(Boolean))];
@@ -78,6 +89,7 @@ const getDeptQuarterlyStatus = async (user, query) => {
 
   // FIX 2: process all employees in parallel — removes the sequential for-loop bottleneck
   const results = await Promise.all(employees.map(async (emp) => {
+    const scoringConfig = await configFor(emp.departmentId);
     const [assignments, approval] = await Promise.all([
       KpiAssignment.findAll({
         where: { employeeId: emp.id, financialYear, month: { [Op.in]: months } },
@@ -235,9 +247,6 @@ const _buildQuarterlyApprovalData = async (employeeId, financialYear, quarter) =
     throw err;
   }
 
-  // FY-only config — one config applies to all quarters
-  const scoringConfig = await scoringConfigService.getActiveConfig(financialYear);
-
   const assignments = await KpiAssignment.findAll({
     where: { employeeId, financialYear, month: { [Op.in]: months } },
     include: [{
@@ -253,6 +262,15 @@ const _buildQuarterlyApprovalData = async (employeeId, financialYear, quarter) =
     err.status = 400;
     throw err;
   }
+
+  // FY config — resolved from the FIRST month's own department SNAPSHOT (the
+  // department she was in when this quarter's assignments were created), not
+  // her current live department, so a later transfer never changes which
+  // config an already-graded quarter was judged against. Legacy rows with no
+  // snapshot fall back to her current department, unchanged from before.
+  const scoringConfig = await scoringConfigService.getActiveConfig(
+    financialYear, assignments[0].departmentId ?? employee.departmentId
+  );
 
   const notReady = assignments.filter((a) => a.status !== KPI_STATUS.MANAGER_REVIEWED);
   if (notReady.length > 0) {
@@ -505,10 +523,9 @@ const submitQuarterlyApproval = async (approvalId, body, user) => {
     const quarterMonths = QUARTER_MONTHS[approval.quarter];
     const lastMonth = quarterMonths?.[quarterMonths.length - 1];
     if (!lastMonth) throw new ValidationError(`Invalid quarter: ${approval.quarter}`);
-    const cycle = await AppraisalCycle.findOne({
-      where: { financialYear: approval.financialYear, month: lastMonth },
-      attributes: ['finalReviewDeadline'],
-    });
+    const cycle = await cycleService().resolveCycleForDepartment(
+      approval.financialYear, lastMonth, approval.employee?.departmentId
+    );
     const deadline = cycle?.finalReviewDeadline;
     if (!deadline) {
       throw new ValidationError('Final approval is not allowed — the admin has not set a final review deadline for this cycle yet.');
@@ -669,10 +686,18 @@ const bulkRecalculateQuarter = async (financialYear, quarter, departmentId, user
   const empWhere = { isActive: true, role: { [Op.in]: ['employee', 'manager'] } };
   if (deptId) empWhere.departmentId = deptId;
 
-  const [employees, scoringConfig] = await Promise.all([
-    User.findAll({ where: empWhere, attributes: ['id'] }),
-    scoringConfigService.getActiveConfig(financialYear),
+  const [employees] = await Promise.all([
+    User.findAll({ where: empWhere, attributes: ['id', 'departmentId'] }),
   ]);
+
+  // Resolve each employee's OWN config (their department override if one
+  // exists, else the global one) — cached per department.
+  const configCache = new Map();
+  const configFor = async (deptId) => {
+    const key = deptId || '__global__';
+    if (!configCache.has(key)) configCache.set(key, await scoringConfigService.getActiveConfig(financialYear, deptId));
+    return configCache.get(key);
+  };
 
   const months = QUARTER_MONTHS[quarter];
   if (!months) {
@@ -701,6 +726,9 @@ const bulkRecalculateQuarter = async (financialYear, quarter, departmentId, user
       if (assignments.length < 3) { skipped++; return; }
 
       const [asgn1, asgn2, asgn3] = assignments;
+      // Resolved from the quarter's FIRST month's own department SNAPSHOT —
+      // same reasoning as _buildQuarterlyApprovalData above.
+      const scoringConfig = await configFor(asgn1.departmentId ?? emp.departmentId);
       const buildLookup = (items) => {
         const byPlan = new Map(); const byTitle = new Map();
         (items || []).forEach((i) => {

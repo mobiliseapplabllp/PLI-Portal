@@ -48,9 +48,11 @@ User.hasMany(User, { foreignKey: 'managerId', as: 'directReports' });
 
 // ── AppraisalCycle ────────────────────────────────────────────────────────────
 AppraisalCycle.belongsTo(User, { foreignKey: 'createdById', as: 'createdBy' });
+AppraisalCycle.belongsTo(Department, { foreignKey: 'departmentId', as: 'department' });
 
 // ── KpiAssignment ─────────────────────────────────────────────────────────────
 KpiAssignment.belongsTo(User, { foreignKey: 'employeeId', as: 'employee' });
+KpiAssignment.belongsTo(Department, { foreignKey: 'departmentId', as: 'department' });
 KpiAssignment.belongsTo(User, { foreignKey: 'managerId', as: 'manager' });
 KpiAssignment.belongsTo(User, { foreignKey: 'createdById', as: 'createdBy' });
 KpiAssignment.belongsTo(User, { foreignKey: 'lockedById', as: 'lockedBy' });
@@ -84,6 +86,7 @@ QuarterlyApprovalItem.belongsTo(KpiPlanItem, { foreignKey: 'kpiPlanItemId', as: 
 
 // ── ScoringConfig ─────────────────────────────────────────────────────────────
 ScoringConfig.belongsTo(User, { foreignKey: 'createdById', as: 'createdBy' });
+ScoringConfig.belongsTo(Department, { foreignKey: 'departmentId', as: 'department' });
 QuarterlyApproval.belongsTo(ScoringConfig, { foreignKey: 'scoringConfigId', as: 'scoringConfig' });
 
 // ── PLI ───────────────────────────────────────────────────────────────────────

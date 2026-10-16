@@ -1101,6 +1101,73 @@ const updateTicket = async (req, res, next) => {
 };
 
 /**
+ * GET /helpdesk/tickets/settings/allocation-agreement-flag
+ * Exposes just `ticketAllocationAgreementEnabled` to ANY authenticated
+ * helpdesk user — not admin-gated like the full /pm/settings endpoint, since
+ * a manager creating/editing a ticket allocation needs to know this to show
+ * the right capacity-hint wording (will it defer to agreement, or apply
+ * immediately), and managers cannot call /pm/settings.
+ * @type {import('express').RequestHandler}
+ */
+const getAllocationAgreementFlag = async (req, res, next) => {
+  try {
+    const pmSettingsService = require('../../services/pm/pmSettings.service');
+    const settings = await pmSettingsService.getSettings();
+    return sendSuccess(res, { ticketAllocationAgreementEnabled: !!settings.ticketAllocationAgreementEnabled });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * POST /helpdesk/tickets/:id/allocation-preview
+ * Read-only capacity check — tells the caller whether a candidate total
+ * hours/date range would put the assignee over capacity, WITHOUT writing
+ * anything or blocking them from proposing/countering it anyway. Used to
+ * show a live availability hint during the allocation agreement negotiation
+ * (migration 057) — the actual enforcement still happens only at Agree time.
+ * @type {import('express').RequestHandler}
+ */
+const previewAllocationCapacity = async (req, res, next) => {
+  try {
+    const ticket = await HdTicket.findByPk(req.params.id);
+    if (!ticket) return next(new NotFoundError('Ticket'));
+    if (!ticket.assigneeId) return sendSuccess(res, { overCapacity: false }, 'No assignee — nothing to check');
+
+    const { allocationTotalHours, allocationFrom, allocationTo } = req.body;
+    if (!allocationTotalHours || !allocationFrom || !allocationTo) {
+      return sendClientError(res, 'allocationTotalHours, allocationFrom and allocationTo are required');
+    }
+
+    try {
+      const resolved = await resolveTicketAllocation(
+        { allocationTotalHours, allocationFrom, allocationTo, allocationMode: 'total' },
+        ticket,
+        { assigneeId: ticket.assigneeId, ticketId: ticket.id, dueDate: ticket.dueDate },
+      );
+      if (resolved.error) {
+        // A preview never blocks — "exceeds the hard exception cap" is an
+        // over-capacity SIGNAL to show, not a 400 bad-request. Any other
+        // validation message (malformed dates, from > to) IS a genuine bad
+        // request from the caller.
+        if (/exceeds the exception cap/i.test(resolved.error)) {
+          return sendSuccess(res, { overCapacity: true, message: resolved.error }, 'Over capacity');
+        }
+        return sendClientError(res, resolved.error);
+      }
+      return sendSuccess(res, { overCapacity: false, hoursPerDay: resolved.values.allocationHoursPerDay }, 'Within capacity');
+    } catch (e) {
+      if (e instanceof AllocationConflictError) {
+        return sendSuccess(res, { overCapacity: true, message: e.message, ...e.conflict }, 'Over capacity');
+      }
+      throw e;
+    }
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
  * GET /helpdesk/tickets/:id/allocation-proposals
  * Full negotiation history for a ticket's allocation agreement (migration 057).
  * @type {import('express').RequestHandler}
@@ -2094,6 +2161,8 @@ module.exports = {
   requestTicketAllocationException,
   getAllocationProposals,
   respondTicketAllocation,
+  previewAllocationCapacity,
+  getAllocationAgreementFlag,
   // Shared rules (used by task.controller / hdDashboard.controller / tests)
   ticketVisibilityWhere,
   splitProjectRef,

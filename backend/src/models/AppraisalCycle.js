@@ -12,6 +12,9 @@ const AppraisalCycle = sequelize.define(
     },
     financialYear: { type: DataTypes.STRING(16), allowNull: false },
     month: { type: DataTypes.INTEGER, allowNull: false },
+    // NULL = applies to every department (the global fallback). A department
+    // only gets its own row when an admin explicitly creates one.
+    departmentId: { type: DataTypes.UUID, allowNull: true },
     quarter: { type: DataTypes.ENUM('Q1', 'Q2', 'Q3', 'Q4'), allowNull: false },
     // Deadline order: commitment → employeeSubmission → managerReview → finalReview
     commitmentDeadline: { type: DataTypes.DATE, allowNull: true },
@@ -26,7 +29,7 @@ const AppraisalCycle = sequelize.define(
   },
   {
     tableName: 'appraisal_cycles',
-    indexes: [{ unique: true, fields: ['financialYear', 'month'] }],
+    indexes: [{ unique: true, fields: ['financialYear', 'month', 'departmentId'], name: 'uq_appraisal_cycle_fy_month_dept' }],
   }
 );
 

@@ -36,22 +36,39 @@ async function runDeadlineReminders() {
       where: { status: 'open' },
     });
 
+    // Departments with their OWN open cycle for a given (financialYear, month) —
+    // used so the GLOBAL cycle's pass skips employees already covered by their
+    // department's specific cycle (avoids double reminders / the wrong deadline).
+    const overrideDeptsByKey = {};
+    for (const c of openCycles) {
+      if (!c.departmentId) continue;
+      const key = `${c.financialYear}|${c.month}`;
+      (overrideDeptsByKey[key] ||= new Set()).add(c.departmentId);
+    }
+
     for (const cycle of openCycles) {
       const month = getMonthName(cycle.month);
       const year = cycle.financialYear;
+      const overrideDepts = overrideDeptsByKey[`${cycle.financialYear}|${cycle.month}`] || new Set();
+      // For an employee loaded with their department, decide if THIS pass covers them.
+      const coversEmployee = (emp) => {
+        if (cycle.departmentId) return emp.department?.id === cycle.departmentId || emp.departmentId === cycle.departmentId;
+        const empDeptId = emp.department?.id || emp.departmentId;
+        return !empDeptId || !overrideDepts.has(empDeptId);
+      };
 
       // ── Commitment deadline → employees who haven't committed yet ──────────
       if (cycle.commitmentDeadline) {
         const days = daysUntil(cycle.commitmentDeadline);
         if (REMINDER_DAYS.includes(days)) {
-          const assignments = await KpiAssignment.findAll({
+          const assignments = (await KpiAssignment.findAll({
             where: {
               financialYear: cycle.financialYear,
               month: cycle.month,
               status: { [Op.in]: ['assigned', 'commitment_draft'] },
             },
-            include: [{ model: User, as: 'employee', attributes: ['id', 'name', 'email'] }],
-          });
+            include: [{ model: User, as: 'employee', attributes: ['id', 'name', 'email', 'departmentId'] }],
+          })).filter((a) => a.employee && coversEmployee(a.employee));
           const deadline = formatDate(cycle.commitmentDeadline);
           for (const a of assignments) {
             if (!a.employee) continue;
@@ -75,14 +92,14 @@ async function runDeadlineReminders() {
       if (cycle.employeeSubmissionDeadline) {
         const days = daysUntil(cycle.employeeSubmissionDeadline);
         if (REMINDER_DAYS.includes(days)) {
-          const assignments = await KpiAssignment.findAll({
+          const assignments = (await KpiAssignment.findAll({
             where: {
               financialYear: cycle.financialYear,
               month: cycle.month,
               status: 'commitment_approved',
             },
-            include: [{ model: User, as: 'employee', attributes: ['id', 'name', 'email'] }],
-          });
+            include: [{ model: User, as: 'employee', attributes: ['id', 'name', 'email', 'departmentId'] }],
+          })).filter((a) => a.employee && coversEmployee(a.employee));
           const deadline = formatDate(cycle.employeeSubmissionDeadline);
           for (const a of assignments) {
             if (!a.employee) continue;
@@ -106,15 +123,19 @@ async function runDeadlineReminders() {
       if (cycle.managerReviewDeadline) {
         const days = daysUntil(cycle.managerReviewDeadline);
         if (REMINDER_DAYS.includes(days)) {
-          const assignments = await KpiAssignment.findAll({
+          const assignments = (await KpiAssignment.findAll({
             where: {
               financialYear: cycle.financialYear,
               month: cycle.month,
               status: 'employee_submitted',
             },
-            include: [{ model: User, as: 'manager', attributes: ['id', 'name', 'email'] }],
-          });
-          // Deduplicate by manager
+            include: [
+              { model: User, as: 'manager', attributes: ['id', 'name', 'email'] },
+              { model: User, as: 'employee', attributes: ['id', 'departmentId'] },
+            ],
+          })).filter((a) => a.employee && coversEmployee(a.employee));
+          // Deduplicate by manager — scope is decided by the EMPLOYEE being
+          // reviewed's department (above), not the manager's own department.
           const managerMap = {};
           for (const a of assignments) {
             if (a.manager && !managerMap[a.manager.id]) {

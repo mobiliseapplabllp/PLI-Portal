@@ -185,7 +185,7 @@ function AllocationDerivedLine({ total, from, to, onDerived }) {
  * Same source as the Assign dialog: GET /pm/users/:id/availability, which counts
  * their project periods AND their other open tickets.
  */
-function AgentCapacityLine({ userId, from, to, addHoursPerDay, totalHours, suppressWarning = false, onCapacity }) {
+function AgentCapacityLine({ userId, from, to, addHoursPerDay, totalHours, suppressWarning = false, onCapacity, willDefer = false }) {
   const [avail, setAvail]     = useState(null);
   const [loading, setLoading] = useState(false);
   // Report the agent's real daily capacity up to the page (the conflict panel needs
@@ -227,10 +227,13 @@ function AgentCapacityLine({ userId, from, to, addHoursPerDay, totalHours, suppr
         {r1(free)}h free on their busiest day ({r1(peak)}h / {r1(capacity)}h already committed across projects and tickets)
       </p>
       {exceeds && !suppressWarning && (
-        <div className="mt-1 flex items-start gap-1.5 rounded border border-red-200 bg-red-50 px-2 py-1.5 text-[10px] text-red-700">
+        <div className={`mt-1 flex items-start gap-1.5 rounded border px-2 py-1.5 text-[10px] ${willDefer ? 'border-amber-200 bg-amber-50 text-amber-700' : 'border-red-200 bg-red-50 text-red-700'}`}>
           <span>
             Adding {r1(add)}h/day{totalHours ? ` (${r1(totalHours)}h total)` : ''} puts them at {r1(peak + add)}h / {r1(capacity)}h
-            {avail.overDays ? ` on ${avail.overDays} day${avail.overDays === 1 ? '' : 's'}` : ''} — over capacity, the request will be refused.
+            {avail.overDays ? ` on ${avail.overDays} day${avail.overDays === 1 ? '' : 's'}` : ''} — over capacity
+            {willDefer
+              ? ', this proposal can still be sent, but agreeing to it later may be rejected until it\'s reduced.'
+              : ', the request will be refused.'}
           </span>
         </div>
       )}
@@ -310,7 +313,9 @@ export default function CreateTicket() {
   // C4 — PM projects
   const [projects,        setProjects]        = useState([]);
   const [projectsLoading, setProjectsLoading] = useState(false);
-  const [showClosed,      setShowClosed]      = useState(false);
+  // Default true — show every project (open + closed) like the Ticket List's
+  // project filter already does; the checkbox lets someone narrow to open-only.
+  const [showClosed,      setShowClosed]      = useState(true);
   // C5 — quick-create project (role-gated)
   const [showProjectModal, setShowProjectModal] = useState(false);
   const canCreateProject = !!authUser?.role && DEFAULT_CREATOR_ROLES.includes(authUser.role);
@@ -318,6 +323,12 @@ export default function CreateTicket() {
   const [saving,      setSaving]      = useState(false);
   const [submitError, setSubmitError] = useState('');
   const [attachment,  setAttachment]  = useState(null);
+  // Ticket Allocation Agreement feature flag (PM Settings). When on, a manager
+  // assigning someone else never gets an immediate capacity refusal — it goes
+  // to the assignee as a proposal instead, checked for real only once they
+  // (dis)agree. The capacity hint below needs to know this to avoid telling a
+  // manager "the request will be refused" when it actually won't be.
+  const [agreementEnabled, setAgreementEnabled] = useState(false);
 
   // ── Phase 3: effort allocation — only shown/sent when an assignee is chosen ─
   const isoDay = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -403,11 +414,23 @@ export default function CreateTicket() {
         setTeams(list);
         // A duplicated ticket may carry a "self team" (assignee with no manager) that is
         // not a selectable team — drop it rather than submit a hidden, invalid value.
-        setFormData(prev => (
-          prev.teamManagerId && !list.some(t => String(t._id ?? t.id) === String(prev.teamManagerId))
-            ? { ...prev, teamManagerId: '' }
-            : prev
-        ));
+        setFormData(prev => {
+          if (prev.teamManagerId && !list.some(t => String(t._id ?? t.id) === String(prev.teamManagerId))) {
+            return { ...prev, teamManagerId: '' };
+          }
+          // A manager creating a fresh ticket (not duplicating one) defaults to
+          // their own team — one less click for the common case of raising a
+          // ticket for their own direct report.
+          if (
+            !prev.teamManagerId
+            && !location.state?.duplicateFrom
+            && ['manager', 'senior_manager'].includes(authUser?.role)
+            && list.some(t => String(t._id ?? t.id) === String(authUserId))
+          ) {
+            return { ...prev, teamManagerId: authUserId };
+          }
+          return prev;
+        });
       })
       .catch(() => { setTeams([]); toast.error('Failed to load teams'); })
       .finally(() => setTeamsLoading(false));
@@ -440,6 +463,12 @@ export default function CreateTicket() {
     if (!hdOptions || Object.keys(hdOptions).length === 0) {
       dispatch(fetchHdOptions());
     }
+
+    // Non-admin-gated — unlike /pm/settings, any helpdesk user can read this
+    // one flag (a manager creating a ticket is never an admin).
+    api.get('/helpdesk/tickets/settings/allocation-agreement-flag')
+      .then(res => setAgreementEnabled(!!(res.data?.data ?? res.data)?.ticketAllocationAgreementEnabled))
+      .catch(() => {});
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── C3: when the team changes, (re)load its members ─────────────────────────
@@ -741,6 +770,12 @@ export default function CreateTicket() {
       return;
     }
     setAttachment(file);
+  };
+
+  const attachmentInputRef = useRef(null);
+  const handleRemoveAttachment = () => {
+    setAttachment(null);
+    if (attachmentInputRef.current) attachmentInputRef.current.value = '';
   };
 
   // Current priority's display label (e.g. 'medium' → 'Medium')
@@ -1292,6 +1327,12 @@ export default function CreateTicket() {
                         totalHours={allocHoursValid ? allocRaw : null}
                         suppressWarning={!!allocConflict}
                         onCapacity={setAgentCapacity}
+                        willDefer={
+                          agreementEnabled
+                          && ['manager', 'senior_manager'].includes(authUser?.role)
+                          && formData.assigneeId
+                          && String(formData.assigneeId) !== String(authUserId)
+                        }
                       />
 
                       {/* Server refused the allocation (HTTP 409) — nothing was created */}
@@ -1321,14 +1362,23 @@ export default function CreateTicket() {
                   Attachment
                 </h2>
                 <input
+                  ref={attachmentInputRef}
                   type="file"
                   accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg,.gif,.zip,.txt"
                   onChange={handleFileChange}
                   className="w-full text-xs text-gray-500 file:mr-3 file:py-1 file:px-3 file:rounded file:border-0 file:text-xs file:font-medium file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
                 />
                 {attachment && (
-                  <p className="text-[10px] text-gray-500 mt-1">
+                  <p className="text-[10px] text-gray-500 mt-1 flex items-center gap-1.5">
                     Selected: <span className="font-medium">{attachment.name}</span> ({(attachment.size / 1024).toFixed(1)} KB)
+                    <button
+                      type="button"
+                      onClick={handleRemoveAttachment}
+                      className="text-red-400 hover:text-red-600 ml-1"
+                      title="Remove attachment"
+                    >
+                      ✕
+                    </button>
                   </p>
                 )}
               </div>

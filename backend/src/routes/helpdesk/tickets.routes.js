@@ -32,6 +32,10 @@ router.post('/bulk-upload',
 // Static sub-paths must come before /:id to avoid param capture
 router.get('/template/import', ticketCtrl.getImportTemplate);
 router.get('/export',          ticketCtrl.exportTickets);
+// Any authenticated helpdesk user (not just admin) needs this single flag to
+// know whether creating/editing an allocation will defer to the agreement
+// workflow — unlike the full /pm/settings endpoint, which is admin-only.
+router.get('/settings/allocation-agreement-flag', ticketCtrl.getAllocationAgreementFlag);
 
 router.get('/:id',           ticketCtrl.getTicket);
 // Authorization enforced inside updateTicket (owner or admin/canAssign required)
@@ -60,6 +64,8 @@ router.post('/:id/allocation-exception', ticketCtrl.requestTicketAllocationExcep
 // to it. Role checks (assignee vs team manager) live in the controller.
 router.get('/:id/allocation-proposals',          ticketCtrl.getAllocationProposals);
 router.post('/:id/allocation-proposals/respond', ticketCtrl.respondTicketAllocation);
+// Read-only — shows availability while negotiating, never blocks a propose/counter.
+router.post('/:id/allocation-preview',           ticketCtrl.previewAllocationCapacity);
 
 // â”€â”€ Ticket linking â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 router.post('/:id/link',     ticketCtrl.linkTicket);

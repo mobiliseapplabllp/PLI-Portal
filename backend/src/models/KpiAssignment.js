@@ -14,6 +14,12 @@ const KpiAssignment = sequelize.define(
     month: { type: DataTypes.INTEGER, allowNull: false },
     quarter: { type: DataTypes.ENUM('Q1', 'Q2', 'Q3', 'Q4'), allowNull: false },
     employeeId: { type: DataTypes.UUID, allowNull: false },
+    // SNAPSHOT of the employee's department at the moment this row was
+    // created — deliberately never auto-updated afterward (a live
+    // employee.departmentId lookup would let a later transfer silently
+    // change which department's deadlines/scoring apply to an already-open
+    // assignment). NULL on legacy rows falls back to a live lookup.
+    departmentId: { type: DataTypes.UUID, allowNull: true },
     managerId: { type: DataTypes.UUID, allowNull: false },
     createdById: { type: DataTypes.UUID, allowNull: true },
     status: {

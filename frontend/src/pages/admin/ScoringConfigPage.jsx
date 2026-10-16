@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { HiOutlineClipboardList, HiOutlineExclamationCircle } from 'react-icons/hi';
 import { getScoringConfigsApi, createScoringConfigApi, updateScoringConfigApi } from '../../api/scoringConfig.api';
+import { getDepartmentsApi } from '../../api/departments.api';
 import PageHeader from '../../components/common/PageHeader';
 import Modal from '../../components/common/Modal';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
@@ -9,6 +10,7 @@ import { FINANCIAL_YEARS, getCurrentFinancialYear } from '../../utils/constants'
 
 const DEFAULT_FORM = {
   financialYear: getCurrentFinancialYear(),
+  departmentId: '',
   meetsMultiplier: 1.0,
   belowMultiplier: -0.5,
   exceedsMultiplier: 1.5,
@@ -17,6 +19,7 @@ const DEFAULT_FORM = {
 
 export default function ScoringConfigPage() {
   const [configs, setConfigs]                   = useState([]);
+  const [departments, setDepartments]           = useState([]);
   const [loading, setLoading]                   = useState(true);
   const [saving, setSaving]                     = useState(false);
   const [showModal, setShowModal]               = useState(false);
@@ -35,7 +38,10 @@ export default function ScoringConfigPage() {
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => { loadConfigs(); }, []);
+  useEffect(() => {
+    loadConfigs();
+    getDepartmentsApi().then((r) => setDepartments(r.data.data || [])).catch(() => {});
+  }, []);
 
   const openCreate = () => {
     setEditing(null);
@@ -82,6 +88,7 @@ export default function ScoringConfigPage() {
     try {
       await createScoringConfigApi({
         financialYear:    form.financialYear,
+        departmentId:     form.departmentId || null,
         meetsMultiplier:   parseFloat(form.meetsMultiplier),
         belowMultiplier:   parseFloat(form.belowMultiplier),
         exceedsMultiplier: parseFloat(form.exceedsMultiplier),
@@ -160,6 +167,11 @@ export default function ScoringConfigPage() {
                     <span className="ml-2 text-xs font-normal text-gray-400">Applies to Q1 · Q2 · Q3 · Q4</span>
                   </h4>
                   <div className="flex items-center gap-2 mt-1">
+                    {config.department ? (
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 font-medium">{config.department.name}</span>
+                    ) : (
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-500 font-medium">All Departments</span>
+                    )}
                     {config.isActive ? (
                       <span className="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">Active</span>
                     ) : (
@@ -217,15 +229,25 @@ export default function ScoringConfigPage() {
         size="md"
       >
         {!editing && (
-          <div className="mb-5">
-            <label className="label-text">Financial Year</label>
-            <select {...field('financialYear')} className="input-field">
-              {FINANCIAL_YEARS.map((fy) => (
-                <option key={fy} value={fy}>FY {fy}</option>
-              ))}
-            </select>
-            <p className="text-xs text-gray-400 mt-1">
-              This config will apply to <strong>all quarters (Q1–Q4)</strong> within FY {form.financialYear}.
+          <div className="mb-5 space-y-4">
+            <div>
+              <label className="label-text">Financial Year</label>
+              <select {...field('financialYear')} className="input-field">
+                {FINANCIAL_YEARS.map((fy) => (
+                  <option key={fy} value={fy}>FY {fy}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="label-text">Department <span className="text-xs text-gray-400">(leave blank to apply to every department)</span></label>
+              <select {...field('departmentId')} className="input-field">
+                <option value="">All Departments</option>
+                {departments.map((d) => <option key={d._id || d.id} value={d._id || d.id}>{d.name}</option>)}
+              </select>
+            </div>
+            <p className="text-xs text-gray-400">
+              This config will apply to <strong>all quarters (Q1–Q4)</strong> within FY {form.financialYear}
+              {form.departmentId ? ', for the selected department only' : ', across every department (unless a department has its own override)'}.
             </p>
           </div>
         )}

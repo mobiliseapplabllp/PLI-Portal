@@ -29,7 +29,7 @@ import {
 // body would be lost.
 import {
   getTicketHistoryApi, updateTicketApi,
-  getAllocationProposalsApi, respondTicketAllocationApi,
+  getAllocationProposalsApi, respondTicketAllocationApi, previewAllocationCapacityApi,
 } from '../../api/helpdesk/tickets.api';
 import TicketConflictPanel from '../../components/helpdesk/TicketConflictPanel';
 import TicketExceptionModal from '../../components/helpdesk/TicketExceptionModal';
@@ -810,6 +810,13 @@ export default function TicketDetail() {
 
         {/* ── Right Sidebar ────────────────────────────────────────────────── */}
         <div className="w-80 flex-shrink-0 space-y-4">
+          {/* Action-needed alert takes priority over passive info */}
+          <AllocationAgreementPanel
+            ticket={ticket}
+            user={user}
+            onChanged={() => dispatch(fetchTicketById(id))}
+          />
+          <PropertiesPanel ticket={ticket} />
           <AssignmentPanel
             ticket={ticket}
             user={user}
@@ -820,11 +827,6 @@ export default function TicketDetail() {
             onEditAllocation={() => { setAssignEditMode(true); setShowAssignModal(true); }}
             onRemoveAssignee={handleRemoveAssignee}
             onUpdateAssigneeWeight={handleUpdateAssigneeWeight}
-          />
-          <AllocationAgreementPanel
-            ticket={ticket}
-            user={user}
-            onChanged={() => dispatch(fetchTicketById(id))}
           />
           <ApprovalsPanel
             approvals={approvals}
@@ -846,7 +848,6 @@ export default function TicketDetail() {
             canManage={canManage}
             dispatch={dispatch}
           />
-          <PropertiesPanel ticket={ticket} />
         </div>
       </div>
 
@@ -1857,6 +1858,7 @@ function AllocationAgreementPanel({ ticket, user, onChanged }) {
   const [counter, setCounter] = useState({ totalHours: '', allocationFrom: '', allocationTo: '' });
   const [submitting, setSubmitting] = useState(false);
   const [proposal, setProposal] = useState(null);
+  const [capacityHint, setCapacityHint] = useState(null); // { overCapacity, hoursPerDay, suggestions } | 'checking' | null
 
   useEffect(() => {
     if (status !== 'pending_employee' && status !== 'pending_manager') { setProposal(null); return; }
@@ -1871,10 +1873,37 @@ function AllocationAgreementPanel({ ticket, user, onChanged }) {
     return () => { alive = false; };
   }, [ticket.id, ticket._id, status]);
 
+  // Live availability hint — informational only, never blocks proposing,
+  // countering, or clicking Agree. Checked against the NUMBERS CURRENTLY ON
+  // SCREEN: the original proposal by default, or the counter being drafted
+  // once the employee starts typing one — so "Agree" on the original proposal
+  // is just as informed as submitting a counter. Debounced.
+  const checkValues = showCounter
+    ? counter
+    : { totalHours: proposal?.totalHours, allocationFrom: proposal?.allocationFrom, allocationTo: proposal?.allocationTo };
+  useEffect(() => {
+    if (!checkValues.totalHours || !checkValues.allocationFrom || !checkValues.allocationTo) {
+      setCapacityHint(null);
+      return undefined;
+    }
+    setCapacityHint('checking');
+    const t = setTimeout(() => {
+      previewAllocationCapacityApi(ticket.id || ticket._id, {
+        allocationTotalHours: Number(checkValues.totalHours),
+        allocationFrom: checkValues.allocationFrom,
+        allocationTo: checkValues.allocationTo,
+      })
+        .then((res) => setCapacityHint(res.data?.data || null))
+        .catch(() => setCapacityHint(null));
+    }, 500);
+    return () => clearTimeout(t);
+  }, [showCounter, checkValues.totalHours, checkValues.allocationFrom, checkValues.allocationTo, ticket.id, ticket._id]);
+
   if (status !== 'pending_employee' && status !== 'pending_manager') return null;
 
-  const isAssignee    = String(ticket.assigneeId ?? '') === String(user?.id ?? '');
-  const isTeamManager = String(ticket.teamManagerId ?? '') === String(user?.id ?? '');
+  const myUserId = String(user?._id ?? user?.id ?? '');
+  const isAssignee    = String(ticket.assigneeId ?? '') === myUserId;
+  const isTeamManager = String(ticket.teamManagerId ?? '') === myUserId;
   const myTurn = (status === 'pending_employee' && isAssignee) || (status === 'pending_manager' && isTeamManager);
 
   const respond = async (action) => {
@@ -1912,6 +1941,22 @@ function AllocationAgreementPanel({ ticket, user, onChanged }) {
           <strong>{proposal.proposedByUser?.name || (proposal.proposedByRole === 'manager' ? 'Manager' : 'Employee')}</strong> proposed{' '}
           <strong>{Number(proposal.totalHours)} hrs</strong> total, {fmtDate(proposal.allocationFrom)} → {fmtDate(proposal.allocationTo)}.
         </p>
+      )}
+      {!showCounter && capacityHint === 'checking' && (
+        <p className="text-[11px] text-gray-400">Checking availability…</p>
+      )}
+      {!showCounter && capacityHint && capacityHint !== 'checking' && (
+        capacityHint.overCapacity ? (
+          <p className="text-[11px] text-red-700 bg-red-50 rounded px-2 py-1">
+            ⚠ Over capacity{capacityHint.suggestions?.overloadHours ? ` by ~${capacityHint.suggestions.overloadHours} hrs/day` : ''} —
+            agreeing to this as-is may be rejected until it's reduced
+            {capacityHint.suggestions?.reduceTo ? ` (try ≤ ${capacityHint.suggestions.reduceTo} hrs/day)` : ''}.
+          </p>
+        ) : (
+          <p className="text-[11px] text-emerald-700 bg-emerald-50 rounded px-2 py-1">
+            ✓ Within capacity{capacityHint.hoursPerDay != null ? ` (~${capacityHint.hoursPerDay} hrs/day)` : ''}.
+          </p>
+        )
       )}
       {!myTurn ? (
         <p className="text-xs text-gray-500">Waiting on {status === 'pending_employee' ? 'the assigned team member' : 'the team manager'} to respond.</p>
@@ -1965,6 +2010,22 @@ function AllocationAgreementPanel({ ticket, user, onChanged }) {
                 className="px-2 py-1 text-xs border border-gray-300 rounded-lg"
               />
             </div>
+          )}
+          {showCounter && capacityHint === 'checking' && (
+            <p className="text-[11px] text-gray-400">Checking availability…</p>
+          )}
+          {showCounter && capacityHint && capacityHint !== 'checking' && (
+            capacityHint.overCapacity ? (
+              <p className="text-[11px] text-red-700 bg-red-50 rounded px-2 py-1">
+                ⚠ Over capacity{capacityHint.suggestions?.overloadHours ? ` by ~${capacityHint.suggestions.overloadHours} hrs/day` : ''} —
+                this can still be sent, but agreeing to it later may be rejected until it's reduced
+                {capacityHint.suggestions?.reduceTo ? ` (try ≤ ${capacityHint.suggestions.reduceTo} hrs/day)` : ''}.
+              </p>
+            ) : (
+              <p className="text-[11px] text-emerald-700 bg-emerald-50 rounded px-2 py-1">
+                ✓ Within capacity{capacityHint.hoursPerDay != null ? ` (~${capacityHint.hoursPerDay} hrs/day)` : ''}.
+              </p>
+            )
           )}
         </div>
       )}

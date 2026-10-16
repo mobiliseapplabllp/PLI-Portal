@@ -12,7 +12,7 @@ import {
   revertManagerReviewApi,
 } from '../../api/kpiAssignments.api';
 import { getDepartmentsApi } from '../../api/departments.api';
-import { getUsersApi } from '../../api/users.api';
+import { getUsersApi, getTeamApi } from '../../api/users.api';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
 import WorkflowGuide from '../../components/common/WorkflowGuide';
 import {
@@ -24,7 +24,6 @@ import {
   KPI_HEADS,
   KPI_HEAD_LABELS,
   KPI_SUBMISSION_VALUES,
-  ROLE_OPTIONS,
   QUARTER_MAP,
   QUARTER_MONTHS,
 } from '../../utils/constants';
@@ -43,7 +42,6 @@ import {
 } from 'react-icons/hi';
 
 const FY_MONTHS = [4, 5, 6, 7, 8, 9, 10, 11, 12, 1, 2, 3];
-const ADMIN_ROLE_OPTIONS = ROLE_OPTIONS.filter((r) => !['admin', 'hr_admin', 'final_approver'].includes(r.value));
 
 const STATUS_ORDER = [
   KPI_STATUS.DRAFT,
@@ -98,30 +96,63 @@ export default function ManagerTeamKpi() {
   const [revertMgrChecked, setRevertMgrChecked] = useState({});
   const [revertMgrLoading, setRevertMgrLoading] = useState(false);
 
-  // Admin-only: department / role / employee selectors
+  // Admin-only: department / manager-team / employee selectors (cascading,
+  // same pattern as Final Approval Workbench)
   const [adminDept, setAdminDept] = useState('');
-  const [adminRole, setAdminRole] = useState('');
+  const [adminManager, setAdminManager] = useState('');
   const [departments, setDepartments] = useState([]);
+  const [managers, setManagers] = useState([]);
+  const [teamMemberIds, setTeamMemberIds] = useState(null); // null = no manager selected, else Set
   const [adminEmployees, setAdminEmployees] = useState([]);
 
-  // Load departments for admin selector
+  // Load departments + managers for admin selectors (once)
   useEffect(() => {
     if (!isAdmin) return;
     getDepartmentsApi().then((r) => setDepartments(r.data.data || [])).catch(() => {});
+    Promise.all([
+      getUsersApi({ role: 'manager', isActive: 'true', limit: 200 }),
+      getUsersApi({ role: 'sales_director', isActive: 'true', limit: 200 }),
+    ])
+      .then(([mRes, sdRes]) => setManagers([...(mRes.data.data || []), ...(sdRes.data.data || [])]))
+      .catch(() => setManagers([]));
   }, []);
 
-  // Load employees when admin dept/role filter changes
+  // Department narrows the manager list client-side
+  const managerOptions = isAdmin
+    ? (adminDept ? managers.filter((m) => String(m.departmentId) === String(adminDept)) : managers)
+        .slice().sort((a, b) => a.name.localeCompare(b.name))
+    : [];
+
+  // Manager selected → fetch their team's real member IDs (authoritative, not just managerId field)
+  useEffect(() => {
+    if (!isAdmin) return;
+    if (!adminManager) { setTeamMemberIds(null); return; }
+    getTeamApi(adminManager)
+      .then((r) => {
+        const members = r.data.data || [];
+        const ids = new Set(members.map((m) => m._id || m.id).filter(Boolean));
+        ids.add(adminManager);
+        setTeamMemberIds(ids);
+      })
+      .catch(() => setTeamMemberIds(new Set()));
+  }, [isAdmin, adminManager]);
+
+  // Load employees when admin dept/manager filter changes
   useEffect(() => {
     if (!isAdmin) return;
     setSelectedEmployeeId('');
     setTeamData([]);
     setItems([]);
-    if (!adminDept && !adminRole) { setAdminEmployees([]); return; }
+    if (!adminDept && !adminManager) { setAdminEmployees([]); return; }
     const params = { isActive: 'true', limit: 200 };
     if (adminDept) params.department = adminDept;
-    if (adminRole) params.role = adminRole;
-    getUsersApi(params).then((r) => setAdminEmployees(r.data.data || [])).catch(() => setAdminEmployees([]));
-  }, [adminDept, adminRole]);
+    getUsersApi(params)
+      .then((r) => {
+        const list = r.data.data || [];
+        setAdminEmployees(teamMemberIds ? list.filter((e) => teamMemberIds.has(e._id || e.id)) : list);
+      })
+      .catch(() => setAdminEmployees([]));
+  }, [adminDept, adminManager, teamMemberIds]);
 
   // Non-admin: load whole team when FY/month changes
   const loadTeamData = useCallback(async () => {
@@ -173,12 +204,13 @@ export default function ManagerTeamKpi() {
   useEffect(() => {
     if (isAdmin) loadAdminData(selectedEmployeeId);
   }, [selectedEmployeeId, loadAdminData]);
-
-  // Reset employee selection when FY/month changes
-  useEffect(() => {
-    setSelectedEmployeeId('');
-    setItems([]);
-  }, [fy, selectedMonth]);
+  // Note: no explicit "reset on FY/month change" effect — Department, Manager,
+  // and Employee are all meant to STAY as the admin set them so they can check
+  // the same filter/employee across different months. Data still reloads
+  // correctly: loadAdminData/loadTeamData are recreated whenever fy/selectedMonth
+  // change (they're useCallbacks depending on those values), and the effects
+  // above/below already re-run whenever that function identity changes — so the
+  // same employee's data is fetched fresh for the new month automatically.
 
   const selectedMember = teamData.find(
     (m) => String(m.employee?.id || m.employee?._id) === String(selectedEmployeeId)
@@ -468,22 +500,30 @@ export default function ManagerTeamKpi() {
 
             <span className="text-gray-300 text-lg hidden sm:block">›</span>
 
-            {/* Admin: department + role selectors */}
+            {/* Admin: department + manager/team selectors (cascading) */}
             {isAdmin && (
               <>
                 <div className="flex items-center gap-2">
                   <label className="text-xs font-semibold text-gray-500 whitespace-nowrap">Department</label>
-                  <select value={adminDept} onChange={(e) => setAdminDept(e.target.value)} className="input-field text-sm py-1.5 w-36">
-                    <option value="">All Depts</option>
-                    {departments.map((d) => <option key={d._id} value={d._id}>{d.name}</option>)}
+                  <select
+                    value={adminDept}
+                    onChange={(e) => { setAdminDept(e.target.value); setAdminManager(''); }}
+                    className="input-field text-sm py-1.5 w-36"
+                  >
+                    <option value="">— All Departments —</option>
+                    {departments.map((d) => <option key={d._id || d.id} value={d._id || d.id}>{d.name}</option>)}
                   </select>
                 </div>
                 <span className="text-gray-300 text-lg hidden sm:block">›</span>
                 <div className="flex items-center gap-2">
-                  <label className="text-xs font-semibold text-gray-500 whitespace-nowrap">Role</label>
-                  <select value={adminRole} onChange={(e) => setAdminRole(e.target.value)} className="input-field text-sm py-1.5 w-32">
-                    <option value="">All Roles</option>
-                    {ADMIN_ROLE_OPTIONS.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
+                  <label className="text-xs font-semibold text-gray-500 whitespace-nowrap">Manager / Team</label>
+                  <select
+                    value={adminManager}
+                    onChange={(e) => setAdminManager(e.target.value)}
+                    className="input-field text-sm py-1.5 w-40"
+                  >
+                    <option value="">— All Managers —</option>
+                    {managerOptions.map((m) => <option key={m._id || m.id} value={m._id || m.id}>{m.name}</option>)}
                   </select>
                 </div>
                 <span className="text-gray-300 text-lg hidden sm:block">›</span>
@@ -499,7 +539,11 @@ export default function ManagerTeamKpi() {
                 disabled={loading || (isAdmin ? adminEmployees.length === 0 : teamData.length === 0)}
               >
                 <option value="">
-                  {isAdmin && adminEmployees.length === 0 ? '— Select dept / role first —' : '— Select Employee —'}
+                  {isAdmin
+                    ? (adminEmployees.length === 0
+                        ? '— Select dept / manager first —'
+                        : adminManager ? `— All in team (${adminEmployees.length}) —` : '— All Employees —')
+                    : '— Select Employee —'}
                 </option>
                 {isAdmin
                   ? adminEmployees.map((e) => (
