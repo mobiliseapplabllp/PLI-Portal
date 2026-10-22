@@ -13,6 +13,9 @@ const PliSlab = require('./PliSlab');
 const Notification = require('./Notification');
 const AuditLog = require('./AuditLog');
 const KpiTemplate = require('./KpiTemplate');
+const KpiDefiner = require('./KpiDefiner');
+const KpiDefinitionApprover = require('./KpiDefinitionApprover');
+const KpiDefinitionChangeRequest = require('./KpiDefinitionChangeRequest');
 
 // ── PM Models ─────────────────────────────────────────────────────────────────
 const Project                    = require('./pm/Project');
@@ -68,6 +71,21 @@ KpiPlan.belongsTo(User, { foreignKey: 'createdById', as: 'createdBy' });
 KpiPlan.belongsTo(Department, { foreignKey: 'departmentId', as: 'department' });
 KpiPlan.hasMany(KpiPlanItem, { foreignKey: 'kpiPlanId', as: 'items', onDelete: 'CASCADE' });
 KpiPlanItem.belongsTo(KpiPlan, { foreignKey: 'kpiPlanId', as: 'plan' });
+
+// ── KPI Definition delegation + approval ───────────────────────────────────────
+KpiDefiner.belongsTo(User, { foreignKey: 'userId', as: 'user' });
+KpiDefiner.belongsTo(Department, { foreignKey: 'departmentId', as: 'department' });
+KpiDefiner.belongsTo(User, { foreignKey: 'grantedById', as: 'grantedBy' });
+
+KpiDefinitionApprover.belongsTo(Department, { foreignKey: 'departmentId', as: 'department' });
+KpiDefinitionApprover.belongsTo(User, { foreignKey: 'userId', as: 'user' });
+KpiDefinitionApprover.belongsTo(User, { foreignKey: 'assignedById', as: 'assignedBy' });
+
+KpiDefinitionChangeRequest.belongsTo(Department, { foreignKey: 'departmentId', as: 'department' });
+KpiDefinitionChangeRequest.belongsTo(KpiPlan, { foreignKey: 'planId', as: 'plan' });
+KpiDefinitionChangeRequest.belongsTo(User, { foreignKey: 'requestedById', as: 'requestedBy' });
+KpiDefinitionChangeRequest.belongsTo(User, { foreignKey: 'approverId', as: 'approver' });
+KpiDefinitionChangeRequest.belongsTo(User, { foreignKey: 'reviewedById', as: 'reviewedBy' });
 
 // ── QuarterlyApproval ─────────────────────────────────────────────────────────
 QuarterlyApproval.belongsTo(User, { foreignKey: 'employeeId', as: 'employee' });

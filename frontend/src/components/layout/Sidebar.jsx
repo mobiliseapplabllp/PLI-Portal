@@ -34,9 +34,11 @@ import {
   HiOutlineTicket,
   HiOutlineBookOpen,
   HiOutlineSpeakerphone,
+  HiOutlineKey,
 } from 'react-icons/hi';
 import { ROLE_CONFIG } from '../../utils/constants';
 import { listAllocationExceptionsApi } from '../../api/pm/allocation.api';
+import { getMyKpiDefinitionAccessApi } from '../../api/kpiDefinitionRequest.api';
 
 const allocExceptionsItem = { to: '/pm/allocation-exceptions', label: 'Allocation exceptions', icon: HiOutlineInbox, badgeKey: 'allocExceptions' };
 
@@ -84,6 +86,7 @@ const kpiNavItems = {
       children: [
         { to: '/hr-admin/kpi-plans/create', label: 'Create KPI', icon: HiOutlinePlus },
         { to: '/hr-admin/kpi-plans', label: 'Edit KPI', icon: HiOutlinePencilAlt },
+        { to: '/kpi-definition-requests', label: 'KPI Definition Requests', icon: HiOutlineMyRequests },
       ],
     },
     {
@@ -120,6 +123,8 @@ const kpiNavItems = {
         { to: '/employee/kpis', label: 'My KPIs', icon: HiOutlineClipboardCheck },
         { to: '/final-approver/workbench', label: 'Approval Workbench', icon: HiOutlineClipboardCheck },
         { to: '/admin/scoring-config', label: 'Scoring Config', icon: HiOutlineChartBar },
+        { to: '/kpi-definition-requests', label: 'KPI Definition Requests', icon: HiOutlineMyRequests },
+        { to: '/admin/kpi-definition-delegation', label: 'KPI Delegation', icon: HiOutlineKey },
       ],
     },
     {
@@ -146,6 +151,7 @@ const kpiNavItems = {
         { to: '/hr-admin/kpi-plans', label: 'Edit KPI', icon: HiOutlinePencilAlt },
         { to: '/manager/team-kpi', label: 'Team KPIs', icon: HiOutlineClipboardList },
         { to: '/employee/kpis', label: 'My KPIs', icon: HiOutlineClipboardCheck },
+        { to: '/kpi-definition-requests', label: 'KPI Definition Requests', icon: HiOutlineMyRequests },
       ],
     },
     {
@@ -452,6 +458,7 @@ export default function Sidebar({ collapsed, onToggle, onNavClick }) {
   const location = useLocation();
   const [openMenus, setOpenMenus] = useState({});
   const [badges, setBadges] = useState({});
+  const [kpiDefAccess, setKpiDefAccess] = useState(null);
 
   // Pending-exception count, fetched once; fails silently. Approver roles get every
   // pending request, other PM roles get their own pending requests (server decides).
@@ -469,8 +476,44 @@ export default function Sidebar({ collapsed, onToggle, onNavClick }) {
     return () => { alive = false; };
   }, [isAdmin]);
 
+  // Roles that already show KPI-definition links statically (hr_admin,
+  // sales_director, admin) skip this — it only matters for someone granted
+  // Definer/Approver rights whose own role wouldn't otherwise show them
+  // (e.g. a plain 'employee' like Neha/Veer, see kpiDefinitionDelegation.service.js).
+  const hasStaticKpiDefLinks = ['hr_admin', 'sales_director', 'admin'].includes(user?.role);
+  useEffect(() => {
+    if (!user || hasStaticKpiDefLinks) return;
+    let alive = true;
+    getMyKpiDefinitionAccessApi()
+      .then((r) => { if (alive) setKpiDefAccess(r.data?.data || null); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [user, hasStaticKpiDefLinks]);
+
   const navMap = activeModule === 'pm' ? pmNavItems : kpiNavItems;
-  const items = navMap[user?.role] || navMap.employee || [];
+  const baseItems = navMap[user?.role] || navMap.employee || [];
+
+  // Inject "Create/Edit KPI" and "KPI Definition Requests" into the role's
+  // existing "KPI" section for a granted Definer/Approver — without mutating
+  // the shared module-level nav arrays above.
+  const items = (() => {
+    if (!kpiDefAccess || (!kpiDefAccess.isDefiner && !kpiDefAccess.isApprover)) return baseItems;
+    return baseItems.map((item) => {
+      if (item.label !== 'KPI' || !item.children) return item;
+      const children = [...item.children];
+      const hasPath = (to) => children.some((c) => c.to === to);
+      {/* Being made Approver implies Definer rights too (plus publish) — see
+          kpiDefinitionApproval.service.js canDefine(). */}
+      if (kpiDefAccess.isDefiner || kpiDefAccess.isApprover) {
+        if (!hasPath('/hr-admin/kpi-plans/create')) children.push({ to: '/hr-admin/kpi-plans/create', label: 'Create KPI', icon: HiOutlinePlus });
+        if (!hasPath('/hr-admin/kpi-plans')) children.push({ to: '/hr-admin/kpi-plans', label: 'Edit KPI', icon: HiOutlinePencilAlt });
+      }
+      if (!hasPath('/kpi-definition-requests')) {
+        children.push({ to: '/kpi-definition-requests', label: 'KPI Definition Requests', icon: HiOutlineMyRequests });
+      }
+      return { ...item, children };
+    });
+  })();
   const roleConfig = ROLE_CONFIG[user?.role] || ROLE_CONFIG.employee;
 
   // Accordion: opening a section replaces openMenus wholesale, so it's the ONLY

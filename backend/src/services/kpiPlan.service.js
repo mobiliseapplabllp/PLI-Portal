@@ -6,25 +6,45 @@ const KpiItem = require('../models/KpiItem');
 const KpiAssignment = require('../models/KpiAssignment');
 const User = require('../models/User');
 const Department = require('../models/Department');
+const KpiDefiner = require('../models/KpiDefiner');
+const KpiDefinitionApprover = require('../models/KpiDefinitionApprover');
 const { DEFAULT_HEAD_WEIGHTAGES, KPI_PLAN_STATUS, KPI_HEADS, KPI_STATUS } = require('../config/constants');
 const { AppError, NotFoundError, ForbiddenError, ConflictError } = require('../utils/errors');
 const { getQuarterFromMonth } = require('../utils/quarterHelper');
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-const assertHrAdminOrAdmin = (user) => {
-  if (!['hr_admin', 'admin', 'sales_director'].includes(user.role))
-    throw new ForbiddenError('Only HR Admin, Admin or Sales Director can manage KPI plans.');
-};
+// Permission is NOT checked in this file — every write function here is only
+// ever called from kpiDefinitionApproval.service.js, which is the single
+// source of truth for who may touch which department's KPI plan (admin, the
+// department's Approver, or a granted Definer). This file trusts its caller.
 
-const assertSalesDeptAccess = (plan, user) => {
-  if (user.role === 'sales_director' && String(plan.departmentId) !== String(user.departmentId))
-    throw new ForbiddenError('Access denied — you can only manage your own department KPI plans.');
-};
+// req.user has `id` renamed to `_id` for the client (renameIdsForClient) —
+// a raw Sequelize instance (e.g. in scripts/tests) still has `id`. Accept both.
+const uid = (user) => user._id || user.id;
 
 const validateHeadWeightages = (hw) => {
   const total = KPI_HEADS.reduce((s, h) => s + (parseFloat(hw[h]) || 0), 0);
   return Math.round(total * 100) / 100;
+};
+
+// A non-admin/hr_admin user's readable departments = their own department,
+// PLUS any department they're a granted Definer for, PLUS any department
+// they're an assigned Approver for — an Approver can be assigned to a
+// department that ISN'T their own (admin may assign any user), so "own
+// department only" would otherwise make it impossible for them to even view
+// the plan they're meant to define/approve.
+const getAccessibleDepartmentIds = async (user) => {
+  const ids = new Set();
+  if (user.departmentId) ids.add(String(user.departmentId));
+
+  const grant = await KpiDefiner.findOne({ where: { userId: uid(user), isActive: true } });
+  if (grant) ids.add(String(grant.departmentId));
+
+  const approverRows = await KpiDefinitionApprover.findAll({ where: { userId: uid(user) }, attributes: ['departmentId'] });
+  approverRows.forEach((r) => ids.add(String(r.departmentId)));
+
+  return [...ids];
 };
 
 // ── List Plans ────────────────────────────────────────────────────────────────
@@ -37,12 +57,16 @@ const getPlans = async (query, user) => {
   if (status) where.status = status;
   // Match exact role OR plans where role is NULL (legacy plans created before role field was added)
   if (role) where.role = { [Op.or]: [role, null] };
-  // Sales Director can only see their own department's plans
-  if (user.role === 'sales_director') where.departmentId = user.departmentId;
 
-  // Managers can only see their own department plan
-  if (user.role === 'manager') {
-    where.departmentId = user.departmentId;
+  // Sales Director, Manager, and any plain employee (only reachable here via
+  // a granted Definer/Approver — see kpiDefinitionApproval.service.js) are
+  // scoped to their own department PLUS whatever department(s) they have a
+  // Definer or Approver grant for — a cross-department Approver assignment is
+  // a real case, not just "own department". admin/hr_admin/senior_manager
+  // keep their pre-existing unrestricted read access, unchanged.
+  if (['sales_director', 'manager', 'employee'].includes(user.role)) {
+    const accessible = await getAccessibleDepartmentIds(user);
+    where.departmentId = { [Op.in]: accessible };
   }
 
   const plans = await KpiPlan.findAll({
@@ -69,17 +93,16 @@ const getPlanById = async (id, user) => {
     ],
   });
   if (!plan) throw new NotFoundError('KPI Plan');
-  if (['manager', 'sales_director'].includes(user.role) && String(plan.departmentId) !== String(user.departmentId))
-    throw new ForbiddenError('Access denied.');
+  if (['manager', 'sales_director', 'employee'].includes(user.role)) {
+    const accessible = await getAccessibleDepartmentIds(user);
+    if (!accessible.includes(String(plan.departmentId))) throw new ForbiddenError('Access denied.');
+  }
   return plan;
 };
 
 // ── Create Plan ───────────────────────────────────────────────────────────────
 
 const createPlan = async (data, user) => {
-  assertHrAdminOrAdmin(user);
-  // Sales Director can only create plans for their own department
-  if (user.role === 'sales_director') data.departmentId = user.departmentId;
   const { financialYear, departmentId, headWeightages, role } = data;
 
   if (!departmentId) throw new AppError('departmentId is required.', 400);
@@ -98,7 +121,7 @@ const createPlan = async (data, user) => {
     role,
     headWeightages: hw,
     status: KPI_PLAN_STATUS.DRAFT,
-    createdById: user.id,
+    createdById: uid(user),
   });
 
   return plan;
@@ -107,10 +130,8 @@ const createPlan = async (data, user) => {
 // ── Update Plan Metadata ──────────────────────────────────────────────────────
 
 const updatePlan = async (id, data, user) => {
-  assertHrAdminOrAdmin(user);
   const plan = await KpiPlan.findByPk(id);
   if (!plan) throw new NotFoundError('KPI Plan');
-  assertSalesDeptAccess(plan, user);
 
   if (plan.isPublished && (data.financialYear || data.departmentId || data.role !== undefined)) {
     throw new AppError('Financial year, department, and role cannot be changed on a published plan.', 400);
@@ -134,10 +155,8 @@ const updatePlan = async (id, data, user) => {
 // ── Update Plan Status ────────────────────────────────────────────────────────
 
 const updatePlanStatus = async (id, status, user) => {
-  assertHrAdminOrAdmin(user);
   const plan = await KpiPlan.findByPk(id);
   if (!plan) throw new NotFoundError('KPI Plan');
-  assertSalesDeptAccess(plan, user);
 
   const allowed = Object.values(KPI_PLAN_STATUS);
   if (!allowed.includes(status))
@@ -150,10 +169,8 @@ const updatePlanStatus = async (id, status, user) => {
 // ── Add Plan Item ─────────────────────────────────────────────────────────────
 
 const addPlanItem = async (planId, itemData, user) => {
-  assertHrAdminOrAdmin(user);
   const plan = await KpiPlan.findByPk(planId);
   if (!plan) throw new NotFoundError('KPI Plan');
-  assertSalesDeptAccess(plan, user);
 
   const newWt = parseFloat(itemData.monthlyWeightage || 0);
   const allItems = await KpiPlanItem.findAll({ where: { kpiPlanId: planId } });
@@ -181,10 +198,8 @@ const addPlanItem = async (planId, itemData, user) => {
 // ── Update Plan Item ──────────────────────────────────────────────────────────
 
 const updatePlanItem = async (planId, itemId, itemData, user) => {
-  assertHrAdminOrAdmin(user);
   const plan = await KpiPlan.findByPk(planId);
   if (!plan) throw new NotFoundError('KPI Plan');
-  assertSalesDeptAccess(plan, user);
 
   const item = await KpiPlanItem.findOne({ where: { id: itemId, kpiPlanId: planId } });
   if (!item) throw new NotFoundError('KPI Plan Item');
@@ -226,10 +241,8 @@ const updatePlanItem = async (planId, itemId, itemData, user) => {
 // ── Delete Plan Item ──────────────────────────────────────────────────────────
 
 const deletePlanItem = async (planId, itemId, user) => {
-  assertHrAdminOrAdmin(user);
   const plan = await KpiPlan.findByPk(planId);
   if (!plan) throw new NotFoundError('KPI Plan');
-  assertSalesDeptAccess(plan, user);
 
   const item = await KpiPlanItem.findOne({ where: { id: itemId, kpiPlanId: planId } });
   if (!item) throw new NotFoundError('KPI Plan Item');
@@ -319,10 +332,8 @@ const resyncPlanAssignments = async (plan, planItems, actorId) => {
 };
 
 const publishPlan = async (planId, user) => {
-  assertHrAdminOrAdmin(user);
   const plan = await KpiPlan.findByPk(planId);
   if (!plan) throw new NotFoundError('KPI Plan');
-  assertSalesDeptAccess(plan, user);
 
   const items = await KpiPlanItem.findAll({ where: { kpiPlanId: planId } });
   if (items.length === 0) throw new AppError('Cannot publish a plan with no KPI items.', 400);
@@ -333,10 +344,56 @@ const publishPlan = async (planId, user) => {
 
   await plan.update({ isPublished: true, publishedAt: new Date(), status: KPI_PLAN_STATUS.SAVED });
 
-  const actorId = user._id || user.id;
+  const actorId = uid(user);
   const { synced, created } = await resyncPlanAssignments(plan, items, actorId);
+  const { monthsConverted } = await retrySkippedDepartmentConversions(plan, actorId);
 
-  return { plan, assignmentsCreated: created, assignmentsSynced: synced };
+  return { plan, assignmentsCreated: created, assignmentsSynced: synced, monthsConverted };
+};
+
+// ── Unpublish Plan ────────────────────────────────────────────────────────────
+//
+// The mirror of publish — flips isPublished back to false. Never touches
+// kpi_assignments/kpi_items; only changes whether findPlanForEmployee will
+// use this plan for FUTURE assignment generation going forward.
+//
+// Hard guard: blocked entirely if even one assignment generated from this
+// plan has already moved past DRAFT/ASSIGNED (i.e. the employee has
+// committed/submitted something). Once real work exists under a plan, it
+// cannot be pulled back to draft — only a plan where nothing has been
+// touched yet may be unpublished.
+const planHasCommittedAssignments = async (plan) => {
+  const planItemIds = (await KpiPlanItem.findAll({ where: { kpiPlanId: plan.id }, attributes: ['id'] }))
+    .map((i) => i.id);
+  if (planItemIds.length === 0) return false;
+
+  const assignmentIds = [...new Set(
+    (await KpiItem.findAll({ where: { kpiPlanItemId: { [Op.in]: planItemIds } }, attributes: ['kpiAssignmentId'] }))
+      .map((i) => i.kpiAssignmentId)
+  )];
+  if (assignmentIds.length === 0) return false;
+
+  const UNCOMMITTED = [KPI_STATUS.DRAFT, KPI_STATUS.ASSIGNED];
+  const committedCount = await KpiAssignment.count({
+    where: { id: { [Op.in]: assignmentIds }, status: { [Op.notIn]: UNCOMMITTED } },
+  });
+  return committedCount > 0;
+};
+
+const unpublishPlan = async (planId) => {
+  const plan = await KpiPlan.findByPk(planId);
+  if (!plan) throw new NotFoundError('KPI Plan');
+  if (!plan.isPublished) throw new AppError('This plan is not published.', 400);
+
+  if (await planHasCommittedAssignments(plan)) {
+    throw new AppError(
+      'Cannot unpublish — one or more employees have already submitted commitments under this plan.',
+      400
+    );
+  }
+
+  await plan.update({ isPublished: false, publishedAt: null });
+  return plan;
 };
 
 // ── Apply Plan to Assignment ──────────────────────────────────────────────────
@@ -438,6 +495,47 @@ const convertUncommittedAssignmentsOnDepartmentChange = async (employee, newDepa
   return { converted, skippedNoPlan };
 };
 
+// ── Retry skipped department conversions — runs on every publish ───────────────
+//
+// If an employee's department was changed BEFORE their new department had a
+// published plan, convertUncommittedAssignmentsOnDepartmentChange() above
+// correctly skipped their not-yet-committed months (nothing to switch them
+// to yet) and left those months snapshotted to their OLD department. Once
+// this department's plan is published (now, or any later re-publish /
+// "Re-sync Assignments"), automatically retry those employees instead of
+// requiring a separate manual fix — same per-employee function, same
+// guarantees: still-committed months are still never touched.
+const retrySkippedDepartmentConversions = async (plan, actorId) => {
+  const empWhere = {
+    departmentId: plan.departmentId,
+    isActive: true,
+    [Op.or]: [{ kpiReviewApplicable: true }, { kpiReviewApplicable: null }],
+  };
+  if (plan.role) empWhere.role = plan.role;
+
+  const employees = await User.findAll({ where: empWhere, attributes: ['id', 'role', 'departmentId', 'managerId'] });
+
+  let monthsConverted = 0;
+  for (const emp of employees) {
+    // Only employees who actually have a month stuck on a DIFFERENT
+    // department's snapshot — everyone else is already correctly synced via
+    // resyncPlanAssignments and shouldn't have their items needlessly rebuilt.
+    const stuck = await KpiAssignment.findOne({
+      where: {
+        employeeId: emp.id,
+        status: { [Op.in]: [KPI_STATUS.DRAFT, KPI_STATUS.ASSIGNED] },
+        departmentId: { [Op.ne]: plan.departmentId },
+      },
+    });
+    if (!stuck) continue;
+
+    const { converted } = await convertUncommittedAssignmentsOnDepartmentChange(emp, plan.departmentId, actorId);
+    monthsConverted += converted.length;
+  }
+
+  return { monthsConverted };
+};
+
 module.exports = {
   getPlans,
   getPlanById,
@@ -448,6 +546,7 @@ module.exports = {
   updatePlanItem,
   deletePlanItem,
   publishPlan,
+  unpublishPlan,
   findPlanForEmployee,
   applyPlanToAssignment,
   convertUncommittedAssignmentsOnDepartmentChange,

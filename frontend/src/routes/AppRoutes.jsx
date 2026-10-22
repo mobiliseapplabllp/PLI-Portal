@@ -45,6 +45,7 @@ import PliRuleConfig from '../pages/admin/PliRuleConfig';
 import ScoringConfigPage from '../pages/admin/ScoringConfigPage';
 import Reports from '../pages/admin/Reports';
 import AuditLogs from '../pages/admin/AuditLogs';
+import KpiDefinitionDelegation from '../pages/admin/KpiDefinitionDelegation';
 
 // CSAT pages
 import ClientOrgsPage from '../pages/csat/ClientOrgsPage';
@@ -92,6 +93,7 @@ const HdReports             = lazy(() => import('../pages/helpdesk/HdReports'));
 // Common
 import ProfilePage from '../pages/common/ProfilePage';
 import NotFoundPage from '../pages/common/NotFoundPage';
+import KpiDefinitionRequests from '../pages/common/KpiDefinitionRequests';
 
 const ALL_ROLES = ['admin', 'manager', 'senior_manager', 'employee', 'hr_admin', 'final_approver', 'md', 'director', 'sales_director'];
 const PM_CREATORS = ['admin', 'manager', 'senior_manager'];
@@ -170,9 +172,14 @@ export default function AppRoutes() {
 
           {/* HR Admin routes */}
           <Route path="/hr-admin/dashboard" element={<RoleRoute roles={['hr_admin', 'admin']}><HrAdminDashboard /></RoleRoute>} />
-          <Route path="/hr-admin/kpi-plans" element={<RoleRoute roles={['hr_admin', 'admin', 'sales_director']}><KpiPlanManagement /></RoleRoute>} />
-          <Route path="/hr-admin/kpi-plans/create" element={<RoleRoute roles={['hr_admin', 'admin', 'sales_director']}><CreateKpiPlan /></RoleRoute>} />
+          {/* Open to ALL_ROLES: a user granted KPI Definer rights (any role, e.g.
+              an 'employee') must be able to reach this page too — the real
+              permission check lives server-side in kpiDefinitionApproval.service.js. */}
+          <Route path="/hr-admin/kpi-plans" element={<RoleRoute roles={ALL_ROLES}><KpiPlanManagement /></RoleRoute>} />
+          <Route path="/hr-admin/kpi-plans/create" element={<RoleRoute roles={ALL_ROLES}><CreateKpiPlan /></RoleRoute>} />
           <Route path="/admin/kpi-templates" element={<RoleRoute roles={['hr_admin', 'admin']}><KpiTemplates /></RoleRoute>} />
+          <Route path="/admin/kpi-definition-delegation" element={<RoleRoute roles={['admin']}><KpiDefinitionDelegation /></RoleRoute>} />
+          <Route path="/kpi-definition-requests" element={<RoleRoute roles={ALL_ROLES}><KpiDefinitionRequests /></RoleRoute>} />
 
           {/* Final Approver routes */}
           <Route path="/final-approver/dashboard" element={<RoleRoute roles={['final_approver', 'admin']}><FinalApproverDashboard /></RoleRoute>} />

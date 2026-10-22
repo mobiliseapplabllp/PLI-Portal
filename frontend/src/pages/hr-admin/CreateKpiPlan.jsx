@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useSelector } from 'react-redux';
 import {
   HiOutlineArrowLeft,
   HiOutlineClipboardList,
@@ -12,6 +13,7 @@ import {
 } from 'react-icons/hi';
 import { createKpiPlanApi } from '../../api/kpiPlan.api';
 import { getDepartmentsApi } from '../../api/departments.api';
+import { getMyKpiDefinitionAccessApi } from '../../api/kpiDefinitionRequest.api';
 import { getCurrentFinancialYear, DEFAULT_HEAD_WEIGHTAGES, FINANCIAL_YEARS, ROLE_OPTIONS } from '../../utils/constants';
 
 const KPI_ROLE_OPTIONS = ROLE_OPTIONS.filter((r) => !['admin', 'final_approver'].includes(r.value));
@@ -34,12 +36,22 @@ const STEPS = [
   },
 ];
 
+// Only admin has unrestricted department choice. Everyone else reaches this
+// page as either a granted Definer (own department only) or an assigned
+// Approver (whichever department(s) they were assigned — NOT necessarily
+// their own, since admin can assign anyone as a department's Approver) — see
+// kpiDefinitionApproval.service.js canDefine(). The department field is
+// restricted to that set instead of a free pick.
+
 export default function CreateKpiPlan() {
   const navigate = useNavigate();
+  const { user } = useSelector((state) => state.auth);
+  const isAdmin = user?.role === 'admin';
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [isDuplicate, setIsDuplicate] = useState(false);
   const [departments, setDepartments] = useState([]);
+  const [allowedDeptIds, setAllowedDeptIds] = useState(null); // null = unrestricted (admin)
   const [form, setForm] = useState({
     financialYear: getCurrentFinancialYear(),
     departmentId: '',
@@ -47,10 +59,28 @@ export default function CreateKpiPlan() {
   });
 
   useEffect(() => {
-    getDepartmentsApi()
-      .then((r) => setDepartments(r.data.data || []))
-      .catch(() => {});
+    getDepartmentsApi().then((r) => setDepartments(r.data.data || [])).catch(() => {});
+
+    if (isAdmin) return;
+    getMyKpiDefinitionAccessApi()
+      .then((r) => {
+        const access = r.data?.data || {};
+        const ids = [
+          ...(access.isDefiner && access.definerDepartmentId ? [access.definerDepartmentId] : []),
+          ...(access.isApprover ? access.approverDepartmentIds || [] : []),
+        ];
+        const unique = [...new Set(ids)];
+        setAllowedDeptIds(unique);
+        if (unique.length === 1) setForm((p) => ({ ...p, departmentId: unique[0] }));
+      })
+      .catch(() => setAllowedDeptIds([]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const visibleDepartments = isAdmin || allowedDeptIds === null
+    ? departments
+    : departments.filter((d) => allowedDeptIds.includes(d._id || d.id));
+  const isLockedToOneDept = !isAdmin && allowedDeptIds?.length === 1;
 
   const goToEdit = () => {
     navigate('/hr-admin/kpi-plans', {
@@ -72,7 +102,13 @@ export default function CreateKpiPlan() {
     setIsDuplicate(false);
     setSaving(true);
     try {
-      await createKpiPlanApi({ ...form, headWeightages: { ...DEFAULT_HEAD_WEIGHTAGES } });
+      const res = await createKpiPlanApi({ ...form, headWeightages: { ...DEFAULT_HEAD_WEIGHTAGES } });
+      if (res.data?.status === 'pending') {
+        navigate('/kpi-definition-requests', {
+          state: { justSubmitted: true },
+        });
+        return;
+      }
       navigate('/hr-admin/kpi-plans', {
         state: { fy: form.financialYear, dept: form.departmentId, role: form.role },
       });
@@ -209,18 +245,31 @@ export default function CreateKpiPlan() {
                         Department <span className="text-red-400">*</span>
                       </span>
                     </label>
-                    <select
-                      value={form.departmentId}
-                      onChange={(e) => handleChange('departmentId', e.target.value)}
-                      className="input-field"
-                    >
-                      <option value="">Select department…</option>
-                      {departments.map((d) => (
-                        <option key={d._id || d.id} value={d._id || d.id}>{d.name}</option>
-                      ))}
-                    </select>
-                    {departments.length === 0 && (
-                      <p className="text-xs text-amber-600 mt-1">No departments found. Add them in Admin settings first.</p>
+                    {isLockedToOneDept ? (
+                      <>
+                        <div className="input-field bg-gray-50 text-gray-600 cursor-not-allowed">
+                          {departments.find((d) => (d._id || d.id) === form.departmentId)?.name || '—'}
+                        </div>
+                        <p className="text-xs text-gray-400 mt-1">You only have KPI definition rights for this department.</p>
+                      </>
+                    ) : (
+                      <>
+                        <select
+                          value={form.departmentId}
+                          onChange={(e) => handleChange('departmentId', e.target.value)}
+                          className="input-field"
+                        >
+                          <option value="">Select department…</option>
+                          {visibleDepartments.map((d) => (
+                            <option key={d._id || d.id} value={d._id || d.id}>{d.name}</option>
+                          ))}
+                        </select>
+                        {visibleDepartments.length === 0 && (
+                          <p className="text-xs text-amber-600 mt-1">
+                            {isAdmin ? 'No departments found. Add them in Admin settings first.' : 'You do not have KPI definition rights for any department.'}
+                          </p>
+                        )}
+                      </>
                     )}
                   </div>
                 </div>

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
+import { useSelector } from 'react-redux';
 import {
   HiOutlinePlus,
   HiOutlinePencil,
@@ -18,10 +19,12 @@ import {
   createKpiPlanApi,
   updateKpiPlanStatusApi,
   publishKpiPlanApi,
+  unpublishKpiPlanApi,
   addKpiPlanItemApi,
   updateKpiPlanItemApi,
   deleteKpiPlanItemApi,
 } from '../../api/kpiPlan.api';
+import { getMyKpiDefinitionAccessApi } from '../../api/kpiDefinitionRequest.api';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
 import ConfirmDialog from '../../components/common/ConfirmDialog';
 import {
@@ -78,6 +81,9 @@ export default function KpiPlanManagement() {
   const navigate = useNavigate();
   const location = useLocation();
   const navState = location.state || {};
+  const { user } = useSelector((state) => state.auth);
+  const isAdmin = user?.role === 'admin';
+  const [allowedDeptIds, setAllowedDeptIds] = useState(null); // null = unrestricted (admin)
 
   const [fy, setFy]               = useState(navState.fy   || getCurrentFinancialYear());
   const [filterDept, setFilterDept] = useState(navState.dept || '');
@@ -95,13 +101,34 @@ export default function KpiPlanManagement() {
   const [draftRows, setDraftRows] = useState([]);
 
   const [showPublishConfirm, setShowPublishConfirm] = useState(false);
+  const [showUnpublishConfirm, setShowUnpublishConfirm] = useState(false);
   const [showWeightageError, setShowWeightageError] = useState(false);
   const [departments, setDepartments] = useState([]);
   const [toast, setToast]         = useState(null);
 
   useEffect(() => {
     getDepartmentsApi().then((r) => setDepartments(r.data.data || [])).catch(() => {});
+
+    if (isAdmin) return;
+    getMyKpiDefinitionAccessApi()
+      .then((r) => {
+        const access = r.data?.data || {};
+        const ids = [
+          ...(access.isDefiner && access.definerDepartmentId ? [access.definerDepartmentId] : []),
+          ...(access.isApprover ? access.approverDepartmentIds || [] : []),
+        ];
+        const unique = [...new Set(ids)];
+        setAllowedDeptIds(unique);
+        if (!filterDept && unique.length === 1) setFilterDept(unique[0]);
+      })
+      .catch(() => setAllowedDeptIds([]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const visibleDepartments = isAdmin || allowedDeptIds === null
+    ? departments
+    : departments.filter((d) => allowedDeptIds.includes(d._id || d.id));
+  const isLockedToOneDept = !isAdmin && allowedDeptIds?.length === 1;
 
   useEffect(() => {
     if (fy && filterDept && filterRole) loadPlanByFilters();
@@ -134,9 +161,13 @@ export default function KpiPlanManagement() {
   const handleAutoCreate = async () => {
     setSaving(true);
     try {
-      await createKpiPlanApi({ financialYear: fy, departmentId: filterDept, role: filterRole, headWeightages: { ...DEFAULT_HEAD_WEIGHTAGES } });
-      setToast({ type: 'success', msg: 'KPI plan created successfully!' });
-      await loadPlanByFilters();
+      const res = await createKpiPlanApi({ financialYear: fy, departmentId: filterDept, role: filterRole, headWeightages: { ...DEFAULT_HEAD_WEIGHTAGES } });
+      if (res.data?.status === 'pending') {
+        setToast({ type: 'success', msg: 'Submitted for approval — the plan will be created once approved. See "KPI Definition Requests" to track it.' });
+      } else {
+        setToast({ type: 'success', msg: 'KPI plan created successfully!' });
+        await loadPlanByFilters();
+      }
     } catch (err) {
       const msg = err.response?.data?.error?.message || 'Failed to create KPI plan';
       setToast({ type: 'error', msg });
@@ -162,8 +193,12 @@ export default function KpiPlanManagement() {
   const handleUpdateStatus = async (status) => {
     setSaving(true);
     try {
-      await updateKpiPlanStatusApi(selectedPlan.id, status);
-      showToast(`KPI marked as ${KPI_PLAN_STATUS_LABELS[status]}`);
+      const res = await updateKpiPlanStatusApi(selectedPlan.id, status);
+      if (res.data?.status === 'pending') {
+        showToast('Submitted for approval — status will change once approved.');
+      } else {
+        showToast(`KPI marked as ${KPI_PLAN_STATUS_LABELS[status]}`);
+      }
       await refreshPlan(selectedPlan.id);
     } catch (e) { showToast(e.response?.data?.error?.message || 'Failed', 'error'); }
     finally { setSaving(false); }
@@ -173,10 +208,25 @@ export default function KpiPlanManagement() {
     setSaving(true);
     try {
       const res = await publishKpiPlanApi(selectedPlan.id);
-      showToast(res.data?.message || 'KPI published successfully');
+      if (res.data?.status === 'pending') {
+        showToast('Submitted for approval — publishing will apply once approved.');
+      } else {
+        showToast(res.data?.message || 'KPI published successfully');
+      }
       setShowPublishConfirm(false);
       await refreshPlan(selectedPlan.id);
     } catch (e) { showToast(e.response?.data?.error?.message || 'Failed to publish', 'error'); }
+    finally { setSaving(false); }
+  };
+
+  const handleUnpublish = async () => {
+    setSaving(true);
+    try {
+      await unpublishKpiPlanApi(selectedPlan.id);
+      showToast('Plan unpublished.');
+      setShowUnpublishConfirm(false);
+      await refreshPlan(selectedPlan.id);
+    } catch (e) { showToast(e.response?.data?.error?.message || 'Failed to unpublish', 'error'); }
     finally { setSaving(false); }
   };
 
@@ -191,9 +241,13 @@ export default function KpiPlanManagement() {
     }
     setSaving(true);
     try {
-      await addKpiPlanItemApi(selectedPlan.id, { ...toPayload(draft), kpiHead: activeHead });
+      const res = await addKpiPlanItemApi(selectedPlan.id, { ...toPayload(draft), kpiHead: activeHead });
       setDraftRows((p) => p.filter((r) => r._id !== draft._id));
-      showToast('KPI added');
+      if (res.data?.status === 'pending') {
+        showToast('Submitted for approval — the KPI will be added once approved.');
+      } else {
+        showToast('KPI added');
+      }
       await refreshPlan(selectedPlan.id);
     } catch (e) { showToast(e.response?.data?.error?.message || 'Failed to add KPI', 'error'); }
     finally { setSaving(false); }
@@ -212,9 +266,13 @@ export default function KpiPlanManagement() {
     }
     setSaving(true);
     try {
-      await updateKpiPlanItemApi(selectedPlan.id, itemId, toPayload(editValues));
+      const res = await updateKpiPlanItemApi(selectedPlan.id, itemId, toPayload(editValues));
       setEditingId(null); setEditValues({});
-      showToast('KPI updated');
+      if (res.data?.status === 'pending') {
+        showToast('Submitted for approval — the KPI will be updated once approved.');
+      } else {
+        showToast('KPI updated');
+      }
       await refreshPlan(selectedPlan.id);
     } catch (e) { showToast(e.response?.data?.error?.message || 'Failed to update KPI', 'error'); }
     finally { setSaving(false); }
@@ -223,8 +281,12 @@ export default function KpiPlanManagement() {
   const handleDelete = async (itemId) => {
     if (!window.confirm('Remove this KPI? This cannot be undone.')) return;
     try {
-      await deleteKpiPlanItemApi(selectedPlan.id, itemId);
-      showToast('KPI removed');
+      const res = await deleteKpiPlanItemApi(selectedPlan.id, itemId);
+      if (res.data?.status === 'pending') {
+        showToast('Submitted for approval — the KPI will be removed once approved.');
+      } else {
+        showToast('KPI removed');
+      }
       await refreshPlan(selectedPlan.id);
     } catch (e) { showToast(e.response?.data?.error?.message || 'Failed', 'error'); }
   };
@@ -259,16 +321,22 @@ export default function KpiPlanManagement() {
           <span className="text-gray-300 text-lg hidden sm:block">›</span>
           <div className="flex items-center gap-2">
             <label className="text-xs font-semibold text-gray-500 whitespace-nowrap">Department</label>
-            <select
-              value={filterDept}
-              onChange={(e) => { setFilterDept(e.target.value); setFilterRole(''); }}
-              className="input-field text-sm py-1.5 w-44"
-            >
-              <option value="">Select Department</option>
-              {departments.map((d) => (
-                <option key={d._id || d.id} value={d._id || d.id}>{d.name}</option>
-              ))}
-            </select>
+            {isLockedToOneDept ? (
+              <span className="input-field text-sm py-1.5 w-44 bg-gray-50 text-gray-600 cursor-not-allowed inline-block">
+                {departments.find((d) => (d._id || d.id) === filterDept)?.name || '—'}
+              </span>
+            ) : (
+              <select
+                value={filterDept}
+                onChange={(e) => { setFilterDept(e.target.value); setFilterRole(''); }}
+                className="input-field text-sm py-1.5 w-44"
+              >
+                <option value="">Select Department</option>
+                {visibleDepartments.map((d) => (
+                  <option key={d._id || d.id} value={d._id || d.id}>{d.name}</option>
+                ))}
+              </select>
+            )}
           </div>
           <span className="text-gray-300 text-lg hidden sm:block">›</span>
           <div className="flex items-center gap-2">
@@ -327,6 +395,15 @@ export default function KpiPlanManagement() {
               <HiOutlineCheck className="h-4 w-4" />
               {selectedPlan.isPublished ? 'Re-sync Assignments' : 'Publish'}
             </button>
+            {selectedPlan.isPublished && (
+              <button
+                onClick={() => setShowUnpublishConfirm(true)}
+                disabled={saving}
+                className="btn-secondary text-xs flex items-center gap-1 whitespace-nowrap text-red-600 hover:bg-red-50"
+              >
+                <HiOutlineX className="h-4 w-4" /> Unpublish
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -614,6 +691,25 @@ export default function KpiPlanManagement() {
         confirmLabel={selectedPlan?.isPublished ? 'Re-sync Assignments →' : 'Publish KPI →'}
         onConfirm={handlePublish}
         onCancel={() => setShowPublishConfirm(false)}
+        loading={saving}
+      />
+
+      {/* ── Unpublish confirm ────────────────────────────────────────────────── */}
+      <ConfirmDialog
+        isOpen={showUnpublishConfirm}
+        title={`Unpublish KPI — ${selectedPlan?.department?.name} FY ${selectedPlan?.financialYear}`}
+        message={
+          <div className="space-y-2 text-sm">
+            <p>This plan will stop being used for any NEW employee assignments until it's published again.</p>
+            <p className="text-gray-600">
+              Blocked automatically if any employee has already submitted a commitment under this plan —
+              nothing already submitted is ever affected either way.
+            </p>
+          </div>
+        }
+        confirmLabel="Unpublish →"
+        onConfirm={handleUnpublish}
+        onCancel={() => setShowUnpublishConfirm(false)}
         loading={saving}
       />
     </div>

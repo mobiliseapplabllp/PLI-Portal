@@ -23,6 +23,7 @@ const ALL_MONTHS = [4, 5, 6, 7, 8, 9, 10, 11, 12, 1, 2, 3];
   const createdUserIds = [];
   const createdDeptIds = [];
   const createdPlanIds = [];
+  let fatal = null;
 
   try {
     manager = await User.findOne({ where: { isActive: true } });
@@ -147,6 +148,77 @@ const ALL_MONTHS = [4, 5, 6, 7, 8, 9, 10, 11, 12, 1, 2, 3];
     // updatePlanItem's resync fires fire-and-forget (pre-existing, not awaited) — let it settle before cleanup.
     await new Promise((r) => setTimeout(r, 1500));
 
+    // ═══ Check 6: skipped conversion is RETRIED AUTOMATICALLY once the new
+    // department's plan is finally published (the Neha/Sales real-world case
+    // from this session — her department changed BEFORE Sales had a
+    // published plan, so her months were correctly skipped; publishing
+    // Sales' plan afterward must now sweep her up automatically). ═══
+    const deptOpsB = await Department.create({ code: '__TEST_OPSB__', name: '__TEST__ Ops B', isActive: true });
+    const deptSalesB = await Department.create({ code: '__TEST_SALESB__', name: '__TEST__ Sales B', isActive: true });
+    createdDeptIds.push(deptOpsB.id, deptSalesB.id);
+
+    const lateBloomer = await User.create({
+      name: '__TEST__ LateBloomer', email: `__test_latebloomer_${Date.now()}@example.com`,
+      employeeCode: `TLATE${Date.now()}`, role: 'employee', departmentId: deptOpsB.id,
+      managerId: manager.id, isActive: true, kpiReviewApplicable: true,
+      passwordHash: 'x',
+    });
+    createdUserIds.push(lateBloomer.id);
+
+    const opsBPlan = await KpiPlan.create({
+      financialYear: TEST_FY, departmentId: deptOpsB.id, role: null,
+      isPublished: true, publishedAt: new Date(), createdById: manager.id,
+    });
+    // Sales B plan created but NOT YET published — the exact gap that bit Neha.
+    const salesBPlan = await KpiPlan.create({
+      financialYear: TEST_FY, departmentId: deptSalesB.id, role: null,
+      isPublished: false, createdById: manager.id,
+    });
+    createdPlanIds.push(opsBPlan.id, salesBPlan.id);
+
+    const opsBItem = await KpiPlanItem.create({
+      kpiPlanId: opsBPlan.id, title: 'OPS B TARGET', category: 'Quality', unit: 'Number', monthlyWeightage: 100,
+    });
+    const salesBItem = await KpiPlanItem.create({
+      kpiPlanId: salesBPlan.id, title: 'SALES B TARGET', category: 'Revenue', unit: 'Currency', monthlyWeightage: 100,
+    });
+
+    for (const month of ALL_MONTHS) {
+      const assignment = await KpiAssignment.create({
+        financialYear: TEST_FY, month, quarter: month <= 3 ? 'Q4' : (month <= 6 ? 'Q1' : month <= 9 ? 'Q2' : 'Q3'),
+        employeeId: lateBloomer.id, departmentId: deptOpsB.id, managerId: manager.id,
+        createdById: manager.id, status: KPI_STATUS.ASSIGNED, totalWeightage: 100,
+      });
+      await KpiItem.create({
+        kpiAssignmentId: assignment.id, kpiPlanItemId: opsBItem.id,
+        title: opsBItem.title, category: opsBItem.category, unit: opsBItem.unit, weightage: 100,
+      });
+    }
+
+    // Transfer BEFORE Sales B has a published plan — should be skipped, not broken.
+    await userService.updateUser(lateBloomer.id, { departmentId: deptSalesB.id }, manager.id);
+    const skippedCheck = await KpiAssignment.findAll({ where: { employeeId: lateBloomer.id, financialYear: TEST_FY } });
+    check('with no published plan yet, all 12 months are correctly left on Ops B (skipped, not broken)',
+      skippedCheck.every((a) => a.departmentId === deptOpsB.id));
+
+    // NOW publish Sales B — the automatic retry should sweep lateBloomer up.
+    const { monthsConverted } = await kpiPlanService.publishPlan(salesBPlan.id, { _id: manager.id, id: manager.id, role: 'admin' });
+    check('publishing Sales B reports monthsConverted = 12 for the previously-skipped employee', monthsConverted === 12, monthsConverted);
+
+    const afterRetry = await KpiAssignment.findAll({
+      where: { employeeId: lateBloomer.id, financialYear: TEST_FY },
+      include: [{ model: KpiItem, as: 'items' }],
+    });
+    check('all 12 months now carry the Sales B department snapshot', afterRetry.every((a) => a.departmentId === deptSalesB.id));
+    check('all 12 months now carry SALES B TARGET, not OPS B TARGET',
+      afterRetry.every((a) => a.items.length === 1 && a.items[0].title === 'SALES B TARGET'));
+
+    // Publishing again must be a safe no-op — nothing left to convert.
+    const { monthsConverted: monthsConvertedAgain } = await kpiPlanService.publishPlan(salesBPlan.id, { _id: manager.id, id: manager.id, role: 'admin' });
+    check('re-publishing Sales B a second time converts 0 more (idempotent, no duplicate churn)', monthsConvertedAgain === 0, monthsConvertedAgain);
+
+  } catch (e) {
+    fatal = e;
   } finally {
     const assignmentIds = (await KpiAssignment.findAll({ where: { employeeId: { [Op.in]: createdUserIds } }, attributes: ['id'] })).map(a => a.id);
     if (assignmentIds.length) await KpiItem.destroy({ where: { kpiAssignmentId: { [Op.in]: assignmentIds } }, force: true });
@@ -161,7 +233,8 @@ const ALL_MONTHS = [4, 5, 6, 7, 8, 9, 10, 11, 12, 1, 2, 3];
     const leakDepts = await Department.count({ where: { code: { [Op.like]: '__TEST_%' } } });
     console.log('Leak check — users:', leakUsers, ' depts:', leakDepts);
     console.log('\n=== ' + pass + ' passed, ' + fail + ' failed ===');
+    if (fatal) console.error('FATAL (inside try):', fatal.message, '\n', fatal.stack);
     await sequelize.close();
-    process.exit(fail ? 1 : 0);
+    process.exit(fail || fatal ? 1 : 0);
   }
 })().catch(e => { console.error('FATAL', e.message, e.stack); process.exit(1); });
