@@ -36,7 +36,12 @@ const validateHeadWeightages = (hw) => {
 // the plan they're meant to define/approve.
 const getAccessibleDepartmentIds = async (user) => {
   const ids = new Set();
-  if (user.departmentId) ids.add(String(user.departmentId));
+  // A plain employee's own department membership is NOT enough on its own —
+  // they only reach this at all via an explicit Definer/Approver grant
+  // (kpiPlan.routes.js), so their access must come from an actual grant row,
+  // never automatically from where they sit in the org chart. manager/
+  // sales_director keep their pre-existing automatic own-department access.
+  if (user.departmentId && user.role !== 'employee') ids.add(String(user.departmentId));
 
   const grant = await KpiDefiner.findOne({ where: { userId: uid(user), isActive: true } });
   if (grant) ids.add(String(grant.departmentId));
@@ -277,9 +282,11 @@ const buildItemPayload = (assignmentId, planItems) =>
     remarks: planItem.remarks,
   }));
 
-// Reseeds KPI items for assignments up to COMMITMENT_APPROVED and resets them to ASSIGNED.
-// Assignments at EMPLOYEE_SUBMITTED or later (self-assessment done) are never touched.
-// Creates new assignments for months that have none yet.
+// Creates assignments only for employee × month combinations that have no
+// row yet (new employees, or months never assigned before). Any assignment
+// that already exists — regardless of status — is left completely untouched;
+// editing a published plan's items does NOT retroactively update employees
+// who already have a row for that month.
 const resyncPlanAssignments = async (plan, planItems, actorId) => {
   if (!plan.isPublished) return { synced: 0, created: 0 };
 

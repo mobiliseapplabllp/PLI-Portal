@@ -12,12 +12,33 @@ const includeUserDept = [
   { model: User, as: 'user', attributes: ['id', 'name', 'email', 'role', 'departmentId'] },
 ];
 
+const MANAGER_LEVEL_ROLES = ['manager', 'senior_manager', 'sales_director'];
+
+// Eligible to be granted Definer rights: a manager-level person directly, or
+// a plain employee who actually has a manager set — i.e. reachable by
+// drilling into that manager's own team in the picker. This is checked here
+// (not just narrowed in the UI) so it holds regardless of who's granting —
+// admin directly, or a Definer sub-granting someone else via grantSubDefiner,
+// which calls this same function.
+const assertEligibleDefinerTarget = (user) => {
+  if (MANAGER_LEVEL_ROLES.includes(user.role)) return;
+  if (user.role === 'employee' && user.managerId) return;
+  throw new AppError(
+    'Only a manager-level user, or an employee with a manager assigned, can be granted Definer rights.',
+    400
+  );
+};
+
 // ── Definers ────────────────────────────────────────────────────────────────
 
 const listDefiners = async () => {
   return KpiDefiner.findAll({
     where: { isActive: true },
-    include: [...includeUserDept, { model: Department, as: 'department', attributes: ['id', 'name'] }],
+    include: [
+      ...includeUserDept,
+      { model: Department, as: 'department', attributes: ['id', 'name'] },
+      { model: User, as: 'grantedBy', attributes: ['id', 'name', 'role'] },
+    ],
     order: [['grantedAt', 'DESC']],
   });
 };
@@ -29,6 +50,7 @@ const grantDefiner = async (userId, grantedById) => {
   const user = await User.findByPk(userId);
   if (!user) throw new NotFoundError('User');
   if (!user.departmentId) throw new AppError('This user has no department set — cannot grant Definer rights.', 400);
+  assertEligibleDefinerTarget(user);
 
   let grant = await KpiDefiner.findOne({ where: { userId } });
   if (grant) {
@@ -65,6 +87,7 @@ const listApprovers = async () => {
     include: [
       { model: Department, as: 'department', attributes: ['id', 'name'] },
       { model: User, as: 'user', attributes: ['id', 'name', 'email', 'role'] },
+      { model: User, as: 'assignedBy', attributes: ['id', 'name', 'role'] },
     ],
     order: [['assignedAt', 'DESC']],
   });
@@ -98,6 +121,17 @@ const removeApprover = async (departmentId) => {
   return { departmentId, fallenBackToAdmin: true };
 };
 
+// Everyone this user has personally granted (active or revoked — full
+// history, not just current) — the view a non-admin granter like Renosh
+// needs, since only admin sees the full cross-everyone Definers list.
+const listMyGrantedDefiners = async (user) => {
+  return KpiDefiner.findAll({
+    where: { grantedById: uid(user) },
+    include: [...includeUserDept, { model: Department, as: 'department', attributes: ['id', 'name'] }],
+    order: [['grantedAt', 'DESC']],
+  });
+};
+
 // Self-check for the CURRENT user — drives sidebar visibility for a granted
 // Definer or assigned Approver whose role wouldn't otherwise show these links
 // (e.g. a plain 'employee' like Neha/Veer). Any authenticated user may call this.
@@ -120,4 +154,7 @@ module.exports = {
   assignApprover,
   removeApprover,
   getMyAccess,
+  listMyGrantedDefiners,
+  assertEligibleDefinerTarget,
+  MANAGER_LEVEL_ROLES,
 };

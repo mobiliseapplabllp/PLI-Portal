@@ -1,4 +1,4 @@
-const { Op } = require('sequelize');
+const { Op, fn, col, where: sequelizeWhere } = require('sequelize');
 const KpiPlan = require('../models/KpiPlan');
 const KpiDefiner = require('../models/KpiDefiner');
 const KpiDefinitionApprover = require('../models/KpiDefinitionApprover');
@@ -51,10 +51,14 @@ const canDefine = async (departmentId, user) => {
 };
 
 // "Can publish directly" = may flip isPublished without anyone else's
-// sign-off. Admin ONLY — nobody else ever finalizes a publish (or unpublish)
-// themselves, not even a department Approver. A non-admin always goes
-// through the approval chain below, however short that chain is.
-const canPublishDirectly = (user) => isAdmin(user);
+// sign-off. Admin, or that department's own assigned Approver (being made
+// Approver implies full publish authority for their department — see the
+// role comment above). A granted Definer who is NOT also that department's
+// Approver always goes through the approval chain below, however short.
+const canPublishDirectly = async (departmentId, user) => {
+  if (isAdmin(user)) return true;
+  return isApproverFor(departmentId, user);
+};
 
 const assertCanDefine = async (departmentId, user) => {
   if (!(await canDefine(departmentId, user))) {
@@ -144,6 +148,12 @@ const createPlan = async (data, user) => {
 
 const updatePlan = async (planId, data, user) => {
   const departmentId = await resolveTargetDepartment('updatePlan', { planId });
+  // A plan edit can itself reassign the plan to a DIFFERENT department
+  // (data.departmentId) — rights over the plan's current department don't
+  // imply rights over that new one, so it must be checked separately.
+  if (data.departmentId && String(data.departmentId) !== String(departmentId)) {
+    await assertCanDefine(data.departmentId, user);
+  }
   return defineAction(departmentId, user, () => kpiPlanService.updatePlan(planId, data, user));
 };
 
@@ -179,7 +189,7 @@ const publishPlan = async (planId, user) => {
   if (!plan) throw new NotFoundError('KPI Plan');
   const departmentId = plan.departmentId;
 
-  if (canPublishDirectly(user)) {
+  if (await canPublishDirectly(departmentId, user)) {
     return { status: 'applied', result: await kpiPlanService.publishPlan(planId, user) };
   }
 
@@ -211,8 +221,8 @@ const unpublishPlan = async (planId, user) => {
   const plan = await KpiPlan.findByPk(planId);
   if (!plan) throw new NotFoundError('KPI Plan');
 
-  if (!canPublishDirectly(user)) {
-    throw new ForbiddenError('Only admin can unpublish a KPI plan.');
+  if (!(await canPublishDirectly(plan.departmentId, user))) {
+    throw new ForbiddenError('Only admin or this department\'s Approver can unpublish a KPI plan.');
   }
 
   return { status: 'applied', result: await kpiPlanService.unpublishPlan(planId) };
@@ -225,7 +235,16 @@ const listRequests = async (user, query = {}) => {
   if (query.status) where.status = query.status;
 
   if (user.role !== 'admin') {
-    where[Op.or] = [{ approverId: uid(user) }, { requestedById: uid(user) }];
+    // Visible if: it's your turn right now (approverId), you submitted it
+    // (requestedById), or you were ever a stage in the chain (approvalChain)
+    // — an intermediate reviewer like Renosh must still be able to see a
+    // request's outcome after his own stage has passed, not just while it's
+    // actively sitting with him.
+    where[Op.or] = [
+      { approverId: uid(user) },
+      { requestedById: uid(user) },
+      sequelizeWhere(fn('JSON_CONTAINS', col('approvalChain'), JSON.stringify(String(uid(user)))), true),
+    ];
   }
 
   return KpiDefinitionChangeRequest.findAll({
@@ -311,6 +330,24 @@ const grantSubDefiner = async (granterUser, targetUserId) => {
   return delegationService.grantDefiner(targetUserId, uid(granterUser));
 };
 
+// The people a non-admin has personally granted — only admin sees the full,
+// everyone-everywhere Definers list, so a sub-granter needs their own scoped
+// view instead of flying blind between granting someone and their first
+// publish request showing up.
+const listMyGrantedDefiners = (user) => delegationService.listMyGrantedDefiners(user);
+
+// A non-admin may only revoke someone THEY personally granted — never
+// someone else's grant, and never their own. Admin can still revoke anyone
+// from the Delegation page, unaffected by this.
+const revokeMyGrantedDefiner = async (granterUser, targetUserId) => {
+  const grant = await KpiDefiner.findOne({ where: { userId: targetUserId, isActive: true } });
+  if (!grant) throw new NotFoundError('Active Definer grant');
+  if (String(grant.grantedById) !== String(uid(granterUser))) {
+    throw new ForbiddenError('You can only revoke someone you personally granted.');
+  }
+  return delegationService.revokeDefiner(targetUserId);
+};
+
 module.exports = {
   isAdmin,
   isApproverFor,
@@ -328,6 +365,8 @@ module.exports = {
   publishPlan,
   unpublishPlan,
   listRequests,
+  listMyGrantedDefiners,
+  revokeMyGrantedDefiner,
   approveRequest,
   rejectRequest,
   grantSubDefiner,

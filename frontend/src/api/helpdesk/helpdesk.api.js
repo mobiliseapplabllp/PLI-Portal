@@ -30,6 +30,10 @@ export const deleteHdOptionApi    = (id)         => api.delete(`/helpdesk/option
 
 // Helpdesk ticket documents
 export const getHdDocumentsApi       = (ticketId)        => api.get(`/helpdesk/tickets/${ticketId}/documents`);
-export const uploadHdDocumentApi     = (ticketId, fd)    => api.post(`/helpdesk/tickets/${ticketId}/documents`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+export const uploadHdDocumentApi     = (ticketId, fd)    => api.post(`/helpdesk/tickets/${ticketId}/documents`, fd);
 export const deleteHdDocumentApi     = (ticketId, docId) => api.delete(`/helpdesk/tickets/${ticketId}/documents/${docId}`);
 export const downloadHdDocumentUrl   = (ticketId, docId) => `/api/helpdesk/tickets/${ticketId}/documents/${docId}/download`;
+// Authenticated download — a plain <a href> to the URL above omits the Bearer
+// token, so the endpoint 401s and the browser shows "File wasn't available".
+export const downloadHdDocumentApi   = (ticketId, docId) =>
+  api.get(`/helpdesk/tickets/${ticketId}/documents/${docId}/download`, { responseType: 'blob' });

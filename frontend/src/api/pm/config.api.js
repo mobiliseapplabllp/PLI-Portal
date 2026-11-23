@@ -38,5 +38,5 @@ export const createHolidayApi            = (data)     => api.post('/pm/config/ho
 export const updateHolidayApi            = (id, data) => api.put('/pm/config/holidays/' + id, data);
 export const deleteHolidayApi            = (id)       => api.delete('/pm/config/holidays/' + id);
 export const getHolidayTemplateApi       = ()         => api.get('/pm/config/holidays/import/template', { responseType: 'blob' });
-export const validateHolidayImportApi    = (formData) => api.post('/pm/config/holidays/import/validate', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
+export const validateHolidayImportApi    = (formData) => api.post('/pm/config/holidays/import/validate', formData);
 export const commitHolidayImportApi      = (payload)  => api.post('/pm/config/holidays/import/commit', payload);

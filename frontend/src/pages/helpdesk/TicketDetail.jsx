@@ -37,8 +37,9 @@ import {
   getHdDocumentsApi,
   uploadHdDocumentApi,
   deleteHdDocumentApi,
-  downloadHdDocumentUrl,
+  downloadHdDocumentApi,
 } from '../../api/helpdesk/helpdesk.api';
+import { downloadBlob } from '../../utils/formatters';
 import {
   requestApprovalApi,
   getApprovalStatusApi,
@@ -1439,6 +1440,15 @@ function DocumentsTab({
     return `${(n / 1024 / 1024).toFixed(1)} MB`;
   };
 
+  const handleDownload = async (docId, filename) => {
+    try {
+      const res = await downloadHdDocumentApi(ticketId, docId);
+      downloadBlob(res.data, filename || 'document');
+    } catch (err) {
+      toast.error(err?.response?.data?.error?.message || 'Download failed');
+    }
+  };
+
   return (
     <div className="space-y-4">
       {/* Upload form — managers only */}
@@ -1513,14 +1523,14 @@ function DocumentsTab({
                   </div>
                 </div>
                 <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <a
-                    href={downloadHdDocumentUrl(ticketId, docId)}
-                    download
+                  <button
+                    type="button"
+                    onClick={() => handleDownload(docId, doc.filename || doc.originalName)}
                     className="p-1.5 hover:bg-blue-50 rounded text-gray-400 hover:text-blue-600 transition-colors"
                     title="Download"
                   >
                     <HiOutlineDownload className="w-4 h-4" />
-                  </a>
+                  </button>
                   {canManage && (
                     <button
                       onClick={() => onDelete(docId)}

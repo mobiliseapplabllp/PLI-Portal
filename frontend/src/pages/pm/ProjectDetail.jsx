@@ -704,11 +704,14 @@ export default function ProjectDetail() {
       setAddingMember(false);
     } catch (err) {
       if (err.response?.status === 409) {
-        toast.error(err.response.data?.message || 'Allocation exceeds capacity');
+        toast.error(err.response.data?.error?.message || err.response.data?.message || 'Allocation exceeds capacity');
         setMemberConflict(err.response.data?.conflict || null);
         return; // keep the form open so the user can adjust
       }
-      toast.error(err.response?.data?.message || 'Failed to add member');
+      // Backend errors nest the real message under error.message, not a
+      // top-level message — this was silently showing the hardcoded fallback
+      // for EVERY failure here, never the actual reason.
+      toast.error(err.response?.data?.error?.message || err.response?.data?.message || 'Failed to add member');
     }
   };
 

@@ -4,16 +4,18 @@ const API_URL = import.meta.env.VITE_API_URL || '/api';
 
 /**
  * Upload a file attachment for a ticket.
- * Sends as multipart/form-data; axios sets the boundary automatically.
+ * Sends as multipart/form-data — Content-Type is deliberately NOT set here;
+ * axios only auto-computes the required boundary when you let it detect the
+ * FormData body itself. Setting this header manually (as this used to do,
+ * despite the comment above claiming otherwise) breaks that and the server
+ * can't parse the upload at all.
  * @param {number|string} ticketId
  * @param {File} file
  */
 export const uploadAttachmentApi = (ticketId, file) => {
   const formData = new FormData();
   formData.append('file', file);
-  return api.post(`/helpdesk/tickets/${ticketId}/attachments`, formData, {
-    headers: { 'Content-Type': 'multipart/form-data' },
-  });
+  return api.post(`/helpdesk/tickets/${ticketId}/attachments`, formData);
 };
 
 /**

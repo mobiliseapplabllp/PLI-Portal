@@ -15,7 +15,7 @@ export const downloadBulkImportTemplateApi = async () => {
 
 /** Dry run — server parses + resolves the file, writes nothing. formData: { file }. */
 export const validateBulkImportApi = (formData) =>
-  api.post('/pm/projects/bulk-import/validate', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
+  api.post('/pm/projects/bulk-import/validate', formData);
 
 /** Actually creates the client orgs + projects. payload: { rows, fileName }. */
 export const confirmBulkImportApi = (payload) => api.post('/pm/projects/bulk-import/confirm', payload);

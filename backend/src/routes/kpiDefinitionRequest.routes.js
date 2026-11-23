@@ -19,5 +19,7 @@ router.post('/:id/reject', ctrl.reject);
 // (the caller must already be able to define for the target's department),
 // not at the route layer, same pattern as the KPI-plan write routes.
 router.post('/sub-definers', ctrl.grantSubDefiner);
+router.get('/sub-definers', ctrl.myGrantedDefiners);
+router.delete('/sub-definers/:userId', ctrl.revokeMyGrantedDefiner);
 
 module.exports = router;

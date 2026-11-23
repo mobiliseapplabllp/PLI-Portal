@@ -19,7 +19,6 @@ import {
   createKpiPlanApi,
   updateKpiPlanStatusApi,
   publishKpiPlanApi,
-  unpublishKpiPlanApi,
   addKpiPlanItemApi,
   updateKpiPlanItemApi,
   deleteKpiPlanItemApi,
@@ -101,7 +100,6 @@ export default function KpiPlanManagement() {
   const [draftRows, setDraftRows] = useState([]);
 
   const [showPublishConfirm, setShowPublishConfirm] = useState(false);
-  const [showUnpublishConfirm, setShowUnpublishConfirm] = useState(false);
   const [showWeightageError, setShowWeightageError] = useState(false);
   const [departments, setDepartments] = useState([]);
   const [toast, setToast]         = useState(null);
@@ -216,17 +214,6 @@ export default function KpiPlanManagement() {
       setShowPublishConfirm(false);
       await refreshPlan(selectedPlan.id);
     } catch (e) { showToast(e.response?.data?.error?.message || 'Failed to publish', 'error'); }
-    finally { setSaving(false); }
-  };
-
-  const handleUnpublish = async () => {
-    setSaving(true);
-    try {
-      await unpublishKpiPlanApi(selectedPlan.id);
-      showToast('Plan unpublished.');
-      setShowUnpublishConfirm(false);
-      await refreshPlan(selectedPlan.id);
-    } catch (e) { showToast(e.response?.data?.error?.message || 'Failed to unpublish', 'error'); }
     finally { setSaving(false); }
   };
 
@@ -395,15 +382,6 @@ export default function KpiPlanManagement() {
               <HiOutlineCheck className="h-4 w-4" />
               {selectedPlan.isPublished ? 'Re-sync Assignments' : 'Publish'}
             </button>
-            {selectedPlan.isPublished && (
-              <button
-                onClick={() => setShowUnpublishConfirm(true)}
-                disabled={saving}
-                className="btn-secondary text-xs flex items-center gap-1 whitespace-nowrap text-red-600 hover:bg-red-50"
-              >
-                <HiOutlineX className="h-4 w-4" /> Unpublish
-              </button>
-            )}
           </div>
         )}
       </div>
@@ -694,24 +672,6 @@ export default function KpiPlanManagement() {
         loading={saving}
       />
 
-      {/* ── Unpublish confirm ────────────────────────────────────────────────── */}
-      <ConfirmDialog
-        isOpen={showUnpublishConfirm}
-        title={`Unpublish KPI — ${selectedPlan?.department?.name} FY ${selectedPlan?.financialYear}`}
-        message={
-          <div className="space-y-2 text-sm">
-            <p>This plan will stop being used for any NEW employee assignments until it's published again.</p>
-            <p className="text-gray-600">
-              Blocked automatically if any employee has already submitted a commitment under this plan —
-              nothing already submitted is ever affected either way.
-            </p>
-          </div>
-        }
-        confirmLabel="Unpublish →"
-        onConfirm={handleUnpublish}
-        onCancel={() => setShowUnpublishConfirm(false)}
-        loading={saving}
-      />
     </div>
   );
 }

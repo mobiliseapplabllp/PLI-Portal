@@ -13,5 +13,5 @@ export const updateMilestoneProgressApi  = (projectId, milestoneId, completionPe
 // Export / Import (flat routes, not nested under projectId)
 export const exportMilestonesApi         = (params) => api.get('/pm/milestones/export', { params, responseType: 'blob' });
 export const getMilestoneTemplateApi     = ()        => api.get('/pm/milestones/import/template', { responseType: 'blob' });
-export const validateMilestoneImportApi  = (formData) => api.post('/pm/milestones/import/validate', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
+export const validateMilestoneImportApi  = (formData) => api.post('/pm/milestones/import/validate', formData);
 export const commitMilestoneImportApi    = (payload)  => api.post('/pm/milestones/import/commit', payload);

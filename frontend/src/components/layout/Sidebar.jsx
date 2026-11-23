@@ -80,15 +80,10 @@ const kpiNavItems = {
   ],
   hr_admin: [
     { to: '/hr-admin/dashboard', label: 'Dashboard', icon: HiOutlineHome },
-    {
-      label: 'KPI',
-      icon: HiOutlineClipboardList,
-      children: [
-        { to: '/hr-admin/kpi-plans/create', label: 'Create KPI', icon: HiOutlinePlus },
-        { to: '/hr-admin/kpi-plans', label: 'Edit KPI', icon: HiOutlinePencilAlt },
-        { to: '/kpi-definition-requests', label: 'KPI Definition Requests', icon: HiOutlineMyRequests },
-      ],
-    },
+    // No KPI section by default — hr_admin has no automatic KPI-definition
+    // rights anymore (see kpiDefinitionApproval.service.js canDefine()). It's
+    // injected dynamically below only once this user is actually granted
+    // Definer/Approver access, same as any other role.
     {
       label: 'Miscellaneous',
       icon: HiOutlineViewGridAdd,
@@ -146,12 +141,14 @@ const kpiNavItems = {
     {
       label: 'KPI',
       icon: HiOutlineClipboardList,
+      // Create/Edit KPI and KPI Definition Requests are NOT guaranteed here —
+      // sales_director has no automatic KPI-definition rights anymore (see
+      // kpiDefinitionApproval.service.js canDefine()). Team/My KPIs are
+      // ordinary manager duties, unrelated to definer access, so they stay.
+      // The definer-only links are injected dynamically below once granted.
       children: [
-        { to: '/hr-admin/kpi-plans/create', label: 'Create KPI', icon: HiOutlinePlus },
-        { to: '/hr-admin/kpi-plans', label: 'Edit KPI', icon: HiOutlinePencilAlt },
         { to: '/manager/team-kpi', label: 'Team KPIs', icon: HiOutlineClipboardList },
         { to: '/employee/kpis', label: 'My KPIs', icon: HiOutlineClipboardCheck },
-        { to: '/kpi-definition-requests', label: 'KPI Definition Requests', icon: HiOutlineMyRequests },
       ],
     },
     {
@@ -476,11 +473,11 @@ export default function Sidebar({ collapsed, onToggle, onNavClick }) {
     return () => { alive = false; };
   }, [isAdmin]);
 
-  // Roles that already show KPI-definition links statically (hr_admin,
-  // sales_director, admin) skip this — it only matters for someone granted
-  // Definer/Approver rights whose own role wouldn't otherwise show them
-  // (e.g. a plain 'employee' like Neha/Veer, see kpiDefinitionDelegation.service.js).
-  const hasStaticKpiDefLinks = ['hr_admin', 'sales_director', 'admin'].includes(user?.role);
+  // Only 'admin' has automatic KPI-definition rights — every other role,
+  // including hr_admin and sales_director, needs an explicit Definer/Approver
+  // grant (see kpiDefinitionApproval.service.js canDefine()). So this check
+  // runs for everyone except admin.
+  const hasStaticKpiDefLinks = user?.role === 'admin';
   useEffect(() => {
     if (!user || hasStaticKpiDefLinks) return;
     let alive = true;
@@ -494,25 +491,33 @@ export default function Sidebar({ collapsed, onToggle, onNavClick }) {
   const baseItems = navMap[user?.role] || navMap.employee || [];
 
   // Inject "Create/Edit KPI" and "KPI Definition Requests" into the role's
-  // existing "KPI" section for a granted Definer/Approver — without mutating
-  // the shared module-level nav arrays above.
+  // "KPI" section for a granted Definer/Approver — without mutating the
+  // shared module-level nav arrays above. If the role has no KPI section at
+  // all (e.g. hr_admin, who has no guaranteed KPI items), one is appended.
   const items = (() => {
     if (!kpiDefAccess || (!kpiDefAccess.isDefiner && !kpiDefAccess.isApprover)) return baseItems;
-    return baseItems.map((item) => {
-      if (item.label !== 'KPI' || !item.children) return item;
-      const children = [...item.children];
+
+    const definerLinks = [
+      { to: '/hr-admin/kpi-plans/create', label: 'Create KPI', icon: HiOutlinePlus },
+      { to: '/hr-admin/kpi-plans', label: 'Edit KPI', icon: HiOutlinePencilAlt },
+      { to: '/kpi-definition-requests', label: 'KPI Definition Requests', icon: HiOutlineMyRequests },
+    ];
+
+    const hasKpiSection = baseItems.some((item) => item.label === 'KPI');
+    const withInjected = baseItems.map((item) => {
+      if (item.label !== 'KPI') return item;
+      const children = [...(item.children || [])];
       const hasPath = (to) => children.some((c) => c.to === to);
-      {/* Being made Approver implies Definer rights too (plus publish) — see
-          kpiDefinitionApproval.service.js canDefine(). */}
-      if (kpiDefAccess.isDefiner || kpiDefAccess.isApprover) {
-        if (!hasPath('/hr-admin/kpi-plans/create')) children.push({ to: '/hr-admin/kpi-plans/create', label: 'Create KPI', icon: HiOutlinePlus });
-        if (!hasPath('/hr-admin/kpi-plans')) children.push({ to: '/hr-admin/kpi-plans', label: 'Edit KPI', icon: HiOutlinePencilAlt });
-      }
-      if (!hasPath('/kpi-definition-requests')) {
-        children.push({ to: '/kpi-definition-requests', label: 'KPI Definition Requests', icon: HiOutlineMyRequests });
-      }
+      definerLinks.forEach((link) => { if (!hasPath(link.to)) children.push(link); });
       return { ...item, children };
     });
+
+    if (hasKpiSection) return withInjected;
+
+    // No KPI section existed for this role at all — add one, placed right
+    // after the first (Dashboard) item.
+    const newSection = { label: 'KPI', icon: HiOutlineClipboardList, children: [...definerLinks] };
+    return [withInjected[0], newSection, ...withInjected.slice(1)];
   })();
   const roleConfig = ROLE_CONFIG[user?.role] || ROLE_CONFIG.employee;
 

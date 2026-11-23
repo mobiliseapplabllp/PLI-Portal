@@ -5,6 +5,7 @@ import DataTable from '../../components/common/DataTable';
 import Modal from '../../components/common/Modal';
 import { getUsersApi } from '../../api/users.api';
 import UserSearchSelect from '../../components/common/UserSearchSelect';
+import DefinerTargetPicker from '../../components/common/DefinerTargetPicker';
 import { getDepartmentsApi } from '../../api/departments.api';
 import {
   getKpiDefinersApi, grantKpiDefinerApi, revokeKpiDefinerApi,
@@ -70,9 +71,10 @@ export default function KpiDefinitionDelegation() {
   };
 
   const definerColumns = [
-    { key: 'user', label: 'User', render: (r) => r.user?.name || userName(r.userId) },
     { key: 'department', label: 'Department (auto-derived)', render: (r) => r.department?.name || deptName(r.departmentId) },
-    { key: 'grantedAt', label: 'Granted', render: (r) => r.grantedAt ? new Date(r.grantedAt).toLocaleDateString() : '—' },
+    { key: 'grantedBy', label: 'Delegated By', render: (r) => r.grantedBy?.name || (r.grantedById ? userName(r.grantedById) : '—') },
+    { key: 'user', label: 'Delegated To', render: (r) => r.user?.name || userName(r.userId) },
+    { key: 'grantedAt', label: 'Granted', render: (r) => r.grantedAt ? new Date(r.grantedAt).toLocaleString() : '—' },
     { key: 'actions', label: '', render: (r) => (
       <button onClick={() => handleRevoke(r.userId)} className="text-red-600 text-sm hover:underline">Revoke</button>
     )},
@@ -101,8 +103,9 @@ export default function KpiDefinitionDelegation() {
 
   const approverColumns = [
     { key: 'department', label: 'Department', render: (r) => r.department?.name || deptName(r.departmentId) },
-    { key: 'user', label: 'Approver', render: (r) => r.user?.name || userName(r.userId) },
-    { key: 'assignedAt', label: 'Assigned', render: (r) => r.assignedAt ? new Date(r.assignedAt).toLocaleDateString() : '—' },
+    { key: 'user', label: 'Delegated To (Approver)', render: (r) => r.user?.name || userName(r.userId) },
+    { key: 'assignedBy', label: 'Delegated By', render: (r) => r.assignedBy?.name || (r.assignedById ? userName(r.assignedById) : '—') },
+    { key: 'assignedAt', label: 'Assigned', render: (r) => r.assignedAt ? new Date(r.assignedAt).toLocaleString() : '—' },
     { key: 'actions', label: '', render: (r) => (
       <button onClick={() => handleRemoveApprover(r.departmentId)} className="text-red-600 text-sm hover:underline">Remove</button>
     )},
@@ -115,13 +118,13 @@ export default function KpiDefinitionDelegation() {
     <div className="p-6 space-y-10">
       <PageHeader
         title="KPI Definition Delegation"
-        subtitle="Grant Definer rights (auto-scoped to the user's own department) and assign a department Approver. Only the admin role writes KPI definitions directly — everyone else, including HR Admin and Sales Director, now needs approval."
+        subtitle="Grant Definer rights (auto-scoped to the user's own department) and assign a department Approver. Defining/editing is free for anyone with access; only publishing is gated — a Definer's request climbs the chain of whoever granted them access, up to admin's final sign-off. A Definer can also sub-grant others from KPI Definition Requests."
       />
 
       <div>
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-base font-semibold text-gray-900">Definers</h2>
-          <button onClick={() => setShowGrantModal(true)} className="btn-primary text-sm">+ Grant Definer Rights</button>
+          <button onClick={() => { setGrantUserId(''); setShowGrantModal(true); }} className="btn-primary text-sm">+ Grant Definer Rights</button>
         </div>
         <DataTable columns={definerColumns} data={definers} loading={loadingDefiners} emptyMessage="No one has been granted Definer rights yet." />
       </div>
@@ -131,22 +134,23 @@ export default function KpiDefinitionDelegation() {
           <h2 className="text-base font-semibold text-gray-900">Department Approvers</h2>
           <button onClick={() => setShowApproverModal(true)} className="btn-primary text-sm">+ Assign Approver</button>
         </div>
-        <p className="text-xs text-gray-400 mb-3">A department with no approver assigned here falls back to the admin role automatically.</p>
+        <p className="text-xs text-gray-400 mb-3">An Approver can define/edit for this department too, but publishing still always needs admin's final sign-off.</p>
         <DataTable columns={approverColumns} data={approvers} loading={loadingApprovers} emptyMessage="No department-specific approvers assigned — everything falls back to admin." />
       </div>
 
       <Modal open={showGrantModal} onClose={() => setShowGrantModal(false)} title="Grant KPI Definer Rights">
         <div className="space-y-4">
           <div>
-            <label className="label-text">User</label>
-            <UserSearchSelect
-              users={users.filter((u) => u.departmentId)}
+            <DefinerTargetPicker
+              departments={departments}
+              users={users}
               value={grantUserId}
               onChange={setGrantUserId}
-              placeholder="Search by name, email or role…"
-              getLabel={(u) => `${u.name} — ${u.role} (${deptName(u.departmentId)})`}
             />
-            <p className="text-xs text-gray-400 mt-1">Rights are auto-scoped to this user's own department — not admin-picked.</p>
+            <p className="text-xs text-gray-400 mt-1">
+              Rights are auto-scoped to this user's own department — not admin-picked. Only a
+              manager-level person, or an employee reached through their manager's team, can be granted.
+            </p>
           </div>
           <div className="flex justify-end gap-3">
             <button onClick={() => setShowGrantModal(false)} className="btn-secondary">Cancel</button>

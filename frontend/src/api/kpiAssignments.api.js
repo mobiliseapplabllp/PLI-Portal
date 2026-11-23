@@ -17,7 +17,11 @@ export const employeeSubmitApi = (id, items, file) => {
     const fd = new FormData();
     fd.append('items', JSON.stringify(items));
     fd.append('attachment', file);
-    return api.post(`/kpi-assignments/${id}/employee-submit`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+    // Content-Type deliberately NOT set — axios auto-detects FormData and
+    // computes the correct multipart boundary itself; setting it manually
+    // (even to the "right-looking" value) breaks that and the server can't
+    // parse the file at all (same bug fixed in uploadHdDocumentApi).
+    return api.post(`/kpi-assignments/${id}/employee-submit`, fd);
   }
   return api.post(`/kpi-assignments/${id}/employee-submit`, { items });
 };
@@ -28,7 +32,7 @@ export const managerReviewApi = (id, items, file) => {
     const fd = new FormData();
     fd.append('items', JSON.stringify(items));
     fd.append('attachment', file);
-    return api.post(`/kpi-assignments/${id}/manager-review`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+    return api.post(`/kpi-assignments/${id}/manager-review`, fd);
   }
   return api.post(`/kpi-assignments/${id}/manager-review`, { items });
 };
@@ -42,7 +46,7 @@ export const reopenAssignmentApi = (id, targetStatus) => api.post(`/kpi-assignme
 export const revertManagerReviewApi = (id) => api.post(`/kpi-assignments/${id}/revert-manager-review`);
 export const cloneKpisApi = (data) => api.post('/kpi-assignments/clone', data);
 export const bulkCloneKpisApi = (data) => api.post('/kpi-assignments/bulk-clone', data);
-export const bulkImportKpisApi = (formData) => api.post('/kpi-assignments/bulk-import', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
+export const bulkImportKpisApi = (formData) => api.post('/kpi-assignments/bulk-import', formData);
 export const downloadKpiTemplate = () => api.get('/kpi-assignments/import-template', { responseType: 'blob' });
 export const downloadEmployeeAttachmentApi = (id) => api.get(`/kpi-assignments/${id}/employee-attachment`, { responseType: 'blob' });
 export const downloadManagerAttachmentApi = (id) => api.get(`/kpi-assignments/${id}/manager-attachment`, { responseType: 'blob' });
@@ -51,7 +55,7 @@ export const downloadManagerAttachmentApi = (id) => api.get(`/kpi-assignments/${
 export const uploadItemAttachmentApi = (assignmentId, itemId, file) => {
   const fd = new FormData();
   fd.append('attachment', file);
-  return api.post(`/kpi-assignments/${assignmentId}/items/${itemId}/attachment`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+  return api.post(`/kpi-assignments/${assignmentId}/items/${itemId}/attachment`, fd);
 };
 export const downloadItemAttachmentApi = (assignmentId, itemId) =>
   api.get(`/kpi-assignments/${assignmentId}/items/${itemId}/attachment`, { responseType: 'blob' });

@@ -42,4 +42,23 @@ const grantSubDefiner = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
-module.exports = { listRequests, approve, reject, myAccess, grantSubDefiner };
+// Full history (active + revoked) of everyone THIS user has personally
+// granted — only admin sees the global, everyone-everywhere Definers list.
+const myGrantedDefiners = async (req, res, next) => {
+  try {
+    const rows = await approvalService.listMyGrantedDefiners(req.user);
+    res.json({ success: true, data: rows });
+  } catch (err) { next(err); }
+};
+
+const revokeMyGrantedDefiner = async (req, res, next) => {
+  try {
+    await approvalService.revokeMyGrantedDefiner(req.user, req.params.userId);
+    res.json({ success: true, message: 'Definer rights revoked.' });
+  } catch (err) { next(err); }
+};
+
+module.exports = {
+  listRequests, approve, reject, myAccess, grantSubDefiner,
+  myGrantedDefiners, revokeMyGrantedDefiner,
+};
