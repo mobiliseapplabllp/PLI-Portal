@@ -25,6 +25,7 @@ const HdReminder        = require('./HdReminder');
 const HdAttachment      = require('./HdAttachment');
 const HdDocument        = require('./HdDocument');
 const HdTicketAllocationProposal = require('./HdTicketAllocationProposal');
+const HdSlaPolicy       = require('./HdSlaPolicy');
 const User              = require('../User');
 // PM Project model only depends on config/database — safe to require here without
 // pulling in models/associations.js (no circular load).
@@ -121,6 +122,11 @@ HdTicketAllocationProposal.belongsTo(User, { foreignKey: 'respondedByUserId', as
 User.belongsTo(HdGroup, { foreignKey: 'hdGroupId', as: 'hdGroup',  constraints: false });
 HdGroup.hasMany(User,   { foreignKey: 'hdGroupId', as: 'members', constraints: false });
 
+// ── Attachment ↔ Uploader (alias differs from the FK attribute name
+// 'uploadedBy' itself — a UUID string column — to avoid Sequelize colliding
+// the association with the raw field of the same name) ─────────────────────
+HdAttachment.belongsTo(User, { foreignKey: 'uploadedBy', as: 'uploadedByUser', constraints: false });
+
 module.exports = {
   HdGroup,
   HdProject,
@@ -136,6 +142,7 @@ module.exports = {
   HdAttachment,
   HdDocument,
   HdTicketAllocationProposal,
+  HdSlaPolicy,
   // Re-export User so consumers can `const { HdTicket, User } = require('.../helpdesk')` if needed
   User,
   // PM Project (aliased as 'pmProject' on HdTicket / HdProject)

@@ -15,7 +15,10 @@ const reminderCtrl = require('../../controllers/helpdesk/reminder.controller');
 
 // â”€â”€ Tickets â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 router.get('/',              ticketCtrl.listTickets);
-router.post('/',             upload.single('attachment'), ticketCtrl.createTicket);
+// No file upload here anymore — the Create Ticket "Attachment" field now
+// queues into the Documents endpoint after the ticket exists (same as any
+// other Document), tagged category 'Initial Request Attachment'.
+router.post('/',             ticketCtrl.createTicket);
 router.post('/bulk-assign',  ticketCtrl.bulkAssign);
 // Permission guard mirrors the bulkAssign check: admin or canAssign required.
 // The controller performs the same check for defence-in-depth.
@@ -32,6 +35,7 @@ router.post('/bulk-upload',
 // Static sub-paths must come before /:id to avoid param capture
 router.get('/template/import', ticketCtrl.getImportTemplate);
 router.get('/export',          ticketCtrl.exportTickets);
+router.get('/deleted',         ticketCtrl.listDeletedTickets);
 // Any authenticated helpdesk user (not just admin) needs this single flag to
 // know whether creating/editing an allocation will defer to the agreement
 // workflow — unlike the full /pm/settings endpoint, which is admin-only.
@@ -49,6 +53,15 @@ router.delete('/:id',
     next();
   },
   ticketCtrl.deleteTicket,
+);
+router.post('/:id/restore',
+  (req, res, next) => {
+    if (!req.hdUser?.isAdmin) {
+      return res.status(403).json({ success: false, message: 'Only admins can restore tickets' });
+    }
+    next();
+  },
+  ticketCtrl.restoreTicket,
 );
 
 // â”€â”€ History â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€

@@ -64,6 +64,13 @@ const HdOption = sequelize.define('HdOption', {
     allowNull: true,
     field:     'built_in_key',
   },
+  // Admin-configurable hex color — same pattern as pm_statuses.color.
+  // Only meaningfully used by type 'status' and 'priority' today; other
+  // option types leave this NULL.
+  color: {
+    type:      DataTypes.STRING(20),
+    allowNull: true,
+  },
 }, {
   tableName:   'hd_options',
   underscored: true,

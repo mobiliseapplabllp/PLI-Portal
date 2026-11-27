@@ -81,6 +81,7 @@ import AllocationExceptions from '../pages/pm/AllocationExceptions';
 const HdDashboard          = lazy(() => import('../pages/helpdesk/HdDashboard'));
 const TicketList           = lazy(() => import('../pages/helpdesk/TicketList'));
 const CreateTicket         = lazy(() => import('../pages/helpdesk/CreateTicket'));
+const DeletedTickets       = lazy(() => import('../pages/helpdesk/DeletedTickets'));
 const TicketDetail         = lazy(() => import('../pages/helpdesk/TicketDetail'));
 const KnowledgeBase        = lazy(() => import('../pages/helpdesk/KnowledgeBase'));
 const HdAnnouncements      = lazy(() => import('../pages/helpdesk/HdAnnouncements'));
@@ -98,10 +99,6 @@ import KpiDefinitionRequests from '../pages/common/KpiDefinitionRequests';
 const ALL_ROLES = ['admin', 'manager', 'senior_manager', 'employee', 'hr_admin', 'final_approver', 'md', 'director', 'sales_director'];
 const PM_CREATORS = ['admin', 'manager', 'senior_manager'];
 const HD_MANAGER_ROLES = ['admin', 'manager', 'senior_manager'];
-// A plain employee doesn't self-serve a new ticket — someone with real team/
-// assign visibility raises it on their behalf (backend enforces this too, see
-// ticket.controller.js createTicket's scope:'own' guard).
-const TICKET_CREATOR_ROLES = ALL_ROLES.filter((r) => r !== 'employee');
 
 function HomeRedirect() {
   const { user } = useSelector((state) => state.auth);
@@ -231,7 +228,13 @@ export default function AppRoutes() {
           <Route path="/helpdesk" element={<Navigate to="/helpdesk/dashboard" replace />} />
           <Route path="/helpdesk/dashboard" element={<RoleRoute roles={ALL_ROLES}><HdDashboard /></RoleRoute>} />
           <Route path="/helpdesk/tickets" element={<RoleRoute roles={ALL_ROLES}><TicketList /></RoleRoute>} />
-          <Route path="/helpdesk/tickets/new" element={<RoleRoute roles={TICKET_CREATOR_ROLES}><CreateTicket /></RoleRoute>} />
+          {/* Any authenticated role, including employee, can create a ticket —
+              they just can't assign it directly to a teammate (CreateTicket.jsx
+              hides that field unless the user already has assign rights). */}
+          <Route path="/helpdesk/tickets/new" element={<RoleRoute roles={ALL_ROLES}><CreateTicket /></RoleRoute>} />
+          {/* Admin-only recycle bin (migration 067 soft delete) — must come before
+              the /:id route below so "deleted" is never captured as a ticket id. */}
+          <Route path="/helpdesk/tickets/deleted" element={<RoleRoute roles={['admin']}><DeletedTickets /></RoleRoute>} />
           <Route path="/helpdesk/tickets/:id" element={<RoleRoute roles={ALL_ROLES}><TicketDetail /></RoleRoute>} />
           <Route path="/helpdesk/knowledge-base" element={<RoleRoute roles={ALL_ROLES}><KnowledgeBase /></RoleRoute>} />
           <Route path="/helpdesk/solutions/:id" element={<SolutionDetail />} />

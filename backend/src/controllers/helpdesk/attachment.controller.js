@@ -3,16 +3,20 @@
 /**
  * @module controllers/helpdesk/attachment
  * File upload, serve, and delete for helpdesk attachments.
- * Files are stored on disk via Multer (memoryStorage); metadata in hd_attachments.
+ *
+ * New uploads store bytes directly in the database (hd_attachments.file_blob)
+ * — same pattern as HdDocument. Legacy rows (uploaded before migration 063,
+ * stored_name set, file_blob NULL) keep reading from disk exactly as before;
+ * nothing on disk is touched or migrated.
  */
 
 const path      = require('path');
 const fs        = require('fs');
-const crypto    = require('crypto');
 const { HdAttachment } = require('../../models/helpdesk');
 const { sendSuccess, sendError } = require('../../utils/response');
 const { NotFoundError, ForbiddenError } = require('../../utils/errors');
 
+// Legacy only — new uploads no longer write here.
 const UPLOAD_DIR = process.env.UPLOAD_DIR || 'uploads';
 
 // ─── Controllers ─────────────────────────────────────────────────────────────
@@ -29,24 +33,46 @@ const uploadAttachment = async (req, res, next) => {
 
     const { ticketId, conversationId } = req.body;
 
-    const ext        = path.extname(req.file.originalname);
-    const storedName = `${crypto.randomUUID()}${ext}`;
-    const destPath   = path.resolve(UPLOAD_DIR, storedName);
-
-    fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-    fs.writeFileSync(destPath, req.file.buffer);
-
     const attachment = await HdAttachment.create({
       ticketId:       ticketId       ? Number(ticketId)       : null,
       conversationId: conversationId ? Number(conversationId) : null,
       uploadedBy:     req.hdUser.id,
       filename:       req.file.originalname,
-      storedName,
+      storedName:     null, // blob-stored — nothing on disk for this row
       mimeType:       req.file.mimetype,
       sizeBytes:      req.file.size,
+      fileBlob:       req.file.buffer,
     });
 
-    return sendSuccess(res, attachment, 'File uploaded', 201);
+    const { fileBlob, ...plain } = attachment.get({ plain: true });
+    return sendSuccess(res, plain, 'File uploaded', 201);
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * GET /helpdesk/attachments/:id/download
+ * Serve by primary key — blob-stored rows have no stored_name to key off of.
+ * Dual-read: file_blob first (new uploads), disk fallback (legacy rows).
+ * @type {import('express').RequestHandler}
+ */
+const downloadAttachment = async (req, res, next) => {
+  try {
+    const attachment = await HdAttachment.findByPk(req.params.id);
+    if (!attachment) return sendError(res, 'Attachment not found', 404);
+
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(attachment.filename)}"`);
+    res.setHeader('Content-Type', attachment.mimeType || 'application/octet-stream');
+
+    if (attachment.fileBlob) {
+      return res.send(attachment.fileBlob);
+    }
+
+    if (!attachment.storedName) return sendError(res, 'File not found', 404);
+    const filePath = path.resolve(UPLOAD_DIR, attachment.storedName);
+    if (!fs.existsSync(filePath)) return sendError(res, 'File not found on server', 404);
+    return res.sendFile(filePath);
   } catch (err) {
     next(err);
   }
@@ -54,7 +80,9 @@ const uploadAttachment = async (req, res, next) => {
 
 /**
  * GET /helpdesk/attachments/:storedName
- * Stream a file from disk by its stored name.
+ * Legacy direct-link route — only ever matches disk-stored rows (blob-stored
+ * ones have storedName = NULL, so this 404s for them by construction; use
+ * downloadAttachment (by id) for those instead).
  * @type {import('express').RequestHandler}
  */
 const serveAttachment = async (req, res, next) => {
@@ -82,8 +110,9 @@ const serveAttachment = async (req, res, next) => {
 
 /**
  * DELETE /helpdesk/attachments/:id
- * Delete an attachment record and the corresponding file on disk.
- * Only the uploader or an admin can delete.
+ * Delete an attachment record and the corresponding file on disk (legacy
+ * rows only — a blob-stored row has no file to remove, destroying the row
+ * below is the whole deletion). Only the uploader or an admin can delete.
  * @type {import('express').RequestHandler}
  */
 const deleteAttachment = async (req, res, next) => {
@@ -94,9 +123,11 @@ const deleteAttachment = async (req, res, next) => {
     if (!req.hdUser.isAdmin && attachment.uploadedBy !== req.hdUser.id)
       return next(new ForbiddenError('Only the uploader or an admin can delete this attachment'));
 
-    const filePath = path.resolve(UPLOAD_DIR, attachment.storedName);
-    if (fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
+    if (attachment.storedName) {
+      const filePath = path.resolve(UPLOAD_DIR, attachment.storedName);
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+      }
     }
 
     await attachment.destroy();
@@ -106,4 +137,4 @@ const deleteAttachment = async (req, res, next) => {
   }
 };
 
-module.exports = { uploadAttachment, serveAttachment, deleteAttachment };
+module.exports = { uploadAttachment, downloadAttachment, serveAttachment, deleteAttachment };

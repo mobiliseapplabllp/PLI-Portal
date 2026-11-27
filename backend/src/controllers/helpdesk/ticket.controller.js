@@ -22,6 +22,7 @@ const {
   HdGroup,
   HdProject,
   HdTicketAllocationProposal,
+  HdSlaPolicy,
   User,
   Project: PmProject,
 }                      = require('../../models/helpdesk');
@@ -78,6 +79,28 @@ function getExcelJS() {
 const DEFAULT_PAGE      = 1;
 const DEFAULT_PAGE_SIZE = 20;
 const MAX_PAGE_SIZE     = 100;
+
+// request_type is a controlled picklist, not free text — these are the only
+// two values hd_options seeds for type='request_type'. Every write path
+// (single create, update, bulk import) normalizes through this list so the
+// column can never drift into inconsistent casing/snake_case again (that
+// drift is exactly what broke the Request Type filter for non-admin roles —
+// see normalizeRequestType below).
+const VALID_REQUEST_TYPES = ['Incident', 'Service Request'];
+
+/**
+ * Normalize a request type to its canonical casing, matched case- and
+ * whitespace-insensitively (so "incident", "SERVICE_REQUEST", "service
+ * request" all resolve the same way). Returns null for anything that
+ * doesn't match a known value, rather than storing junk.
+ * @param {string|null|undefined} raw
+ * @returns {string|null}
+ */
+function normalizeRequestType(raw) {
+  if (!raw) return null;
+  const key = String(raw).trim().toLowerCase().replace(/[_-]+/g, ' ');
+  return VALID_REQUEST_TYPES.find((v) => v.toLowerCase() === key) || null;
+}
 
 // groupId is intentionally NOT tracked/writable any more — teams come from the
 // employee master (users.managerId); legacy group_id is read-only.
@@ -268,7 +291,11 @@ async function buildTicketWhere(query, hdUser) {
     const opt = await statusResolver.getBuiltInStatus(statusKey);
     and.push({ statusId: opt.id });
   } else if (status) {
-    and.push({ status });
+    // Comma-separated = match ANY of them (e.g. "open,in-progress"). Sequelize
+    // treats an array value as Op.in automatically; a single value still works
+    // the same as before (array of length 1 ≡ exact match).
+    const statuses = String(status).split(',').map((s) => s.trim()).filter(Boolean);
+    and.push({ status: statuses.length > 1 ? statuses : statuses[0] });
   }
   if (priority)      and.push({ priority });
   if (category)      and.push({ category: { [Op.like]: `%${category}%` } });
@@ -618,13 +645,14 @@ const getTicket = async (req, res, next) => {
           where:    (!hdUser.isAdmin)
             ? { [Op.or]: [{ isInternal: false }, { userId: hdUser.id }] }
             : undefined,
-          include: [{ model: HdAttachment, as: 'files', required: false }],
+          // Never send the raw bytes back in a JSON response.
+          include: [{ model: HdAttachment, as: 'files', required: false, attributes: { exclude: ['fileBlob'] } }],
         },
         { model: HdTicketHistory,  as: 'history',   required: false, order: [['changed_at', 'DESC']] },
         { model: HdTicketAssignee, as: 'assignees',  required: false },
         { model: HdTicketApproval, as: 'approvals',  required: false },
         { model: HdTask,           as: 'tasks',      required: false },
-        { model: HdAttachment,     as: 'attachments', required: false },
+        { model: HdAttachment,     as: 'attachments', required: false, attributes: { exclude: ['fileBlob'] } },
         ...listIncludes(['id', 'name', 'email']),
         { model: HdTicket,  as: 'linkedTicket',  attributes: ['id', 'reqNumber', 'title', 'status', 'priority'], required: false },
       ],
@@ -662,15 +690,13 @@ const getTicket = async (req, res, next) => {
  */
 const createTicket = async (req, res, next) => {
   try {
-    // A plain employee (scope 'own' — sees/updates only their own tickets) does
-    // not self-serve a new ticket; someone with real team/assign visibility
-    // (their manager, an agent, admin) raises it on their behalf instead.
-    if (req.hdUser?.scope === 'own') {
-      return sendClientError(res, 'Employees cannot create tickets — ask your manager or an agent to raise one for you', 403);
-    }
+    // Any authenticated role — including a plain employee — can now raise a
+    // ticket for themselves. What they CANNOT do (see the assignee gate just
+    // below) is hand it directly to a specific teammate; only someone who
+    // already has real assignment authority (canAssign, or admin) may do that.
     const {
       title, category, description, priority, status,
-      projectId, dueDate, assigneeId, teamManagerId,
+      projectId, dueDate, teamManagerId,
       requestType, mode, impact, urgency, site,
       // "On behalf of" fields — admins/managers creating tickets for others
       requesterName, requesterEmail,
@@ -679,6 +705,14 @@ const createTicket = async (req, res, next) => {
     } = req.body;
     // NOTE: body.groupId and body.raisedByTeam are deliberately ignored —
     // team comes from the employee master, requester team is derived.
+
+    // Only an existing assigner (canAssign, or admin) may hand the new ticket
+    // directly to a specific team member at creation. Anyone else (an
+    // employee raising their own ticket, picking any team including their
+    // own) can select the TEAM, but the ticket lands unassigned — their
+    // manager decides who actually works it, as a separate action.
+    const canAssignAtCreate = req.hdUser.isAdmin || !!req.hdUser.permissions?.canAssign;
+    const assigneeId = canAssignAtCreate ? req.body.assigneeId : null;
 
     if (!title) return sendClientError(res, 'title is required');
     // Software tickets are always project work — Project is mandatory for this
@@ -744,7 +778,22 @@ const createTicket = async (req, res, next) => {
       ? await statusResolver.resolveStatusByName(status)
       : await statusResolver.getBuiltInStatus('open');
 
-    let destPath;
+    // Auto-compute a due date from the priority's SLA policy ONLY when the
+    // creator didn't pick one themselves — an explicit dueDate always wins,
+    // so manual due-date entry behaves exactly as it always has. No active
+    // policy for this priority (or the table being empty) leaves dueDate
+    // null, same as before this feature existed — never a hard failure.
+    let resolvedDueDate = dueDate || null;
+    if (!resolvedDueDate) {
+      const effectivePriority = priority || TICKET_PRIORITY.MEDIUM;
+      const policy = await HdSlaPolicy.findOne({
+        where: sequelize.where(sequelize.fn('LOWER', sequelize.col('priority')), String(effectivePriority).toLowerCase()),
+      });
+      if (policy && policy.isActive) {
+        resolvedDueDate = new Date(Date.now() + Number(policy.resolutionHours) * 60 * 60 * 1000);
+      }
+    }
+
     const t = await sequelize.transaction();
     try {
       const reqNumber = await generateReqNumber(t);
@@ -759,7 +808,7 @@ const createTicket = async (req, res, next) => {
           statusId:     statusOpt.id,
           projectId:    projRef.projectId,
           pmProjectId:  projRef.pmProjectId,
-          dueDate:      dueDate      || null,
+          dueDate:      resolvedDueDate,
           assigneeId:   teamRes.assigneeId,
           teamManagerId: teamRes.teamManagerId,
           allocationHoursPerDay: alloc.allocationHoursPerDay,
@@ -768,7 +817,7 @@ const createTicket = async (req, res, next) => {
           allocationMode:        alloc.allocationMode,
           allocationTotalHours:  alloc.allocationTotalHours,
           allocationAgreementStatus: agreementStatus,
-          requestType:  requestType  || null,
+          requestType:  normalizeRequestType(requestType),
           mode:         mode         || null,
           impact:       impact       || null,
           urgency:      urgency      || null,
@@ -797,33 +846,6 @@ const createTicket = async (req, res, next) => {
         }, { transaction: t });
       }
 
-      // Save optional attachment uploaded with ticket creation
-      if (req.file) {
-        const ext        = path.extname(req.file.originalname);
-        const ALLOWED_EXTS = ['.pdf','.png','.jpg','.jpeg','.docx','.xlsx','.csv','.txt','.doc','.xls'];
-        if (!ALLOWED_EXTS.includes(ext.toLowerCase())) {
-          // FIX: rollback the open transaction before returning — otherwise the
-          // connection is leaked and held open until the idle-timeout fires.
-          await t.rollback();
-          return sendClientError(res, `File type ${ext} is not allowed. Allowed: ${ALLOWED_EXTS.join(', ')}`);
-        }
-        const storedName = `${crypto.randomUUID()}${ext}`;
-        destPath   = path.join(UPLOAD_DIR, storedName);
-        fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-        fs.writeFileSync(destPath, req.file.buffer);
-        await HdAttachment.create(
-          {
-            ticketId:   ticket.id,
-            uploadedBy: req.hdUser.id,
-            filename:   req.file.originalname,
-            storedName,
-            mimeType:   req.file.mimetype,
-            sizeBytes:  req.file.size,
-          },
-          { transaction: t },
-        );
-      }
-
       await t.commit();
 
       // Non-blocking email notification — send to requester if provided, else creator
@@ -839,9 +861,6 @@ const createTicket = async (req, res, next) => {
       return sendSuccess(res, ticket, 'Ticket created', 201);
     } catch (err) {
       await t.rollback();
-      if (req.file && destPath && fs.existsSync(destPath)) {
-        try { fs.unlinkSync(destPath); } catch(_) {}
-      }
       throw err;
     }
   } catch (err) {
@@ -890,6 +909,7 @@ const updateTicket = async (req, res, next) => {
       if (hasOwn(req.body, f)) updates[f] = req.body[f];
     });
     // body.groupId is ignored (not in TRACKED_FIELDS) — legacy column is read-only.
+    if (hasOwn(updates, 'requestType')) updates.requestType = normalizeRequestType(updates.requestType);
 
     // statusKey (a permanent built-in identifier — e.g. a "Pick Up" or "Close"
     // quick action) takes priority over status (a display name) when both are
@@ -1246,7 +1266,10 @@ const respondTicketAllocation = async (req, res, next) => {
 
 /**
  * DELETE /helpdesk/tickets/:id
- * Hard delete â€” admin only.
+ * Soft delete — admin only. Sets deleted_at (model is `paranoid: true`);
+ * fully recoverable via POST /:id/restore. Attachment files on disk are
+ * deliberately left alone — a soft delete must never destroy data that a
+ * restore would need back.
  * @type {import('express').RequestHandler}
  */
 const deleteTicket = async (req, res, next) => {
@@ -1256,15 +1279,55 @@ const deleteTicket = async (req, res, next) => {
     const ticket = await HdTicket.findByPk(req.params.id);
     if (!ticket) return next(new NotFoundError('Ticket'));
 
-    const attachments = await HdAttachment.findAll({ where: { ticketId: ticket.id } });
     await ticket.destroy();
-    for (const att of attachments) {
-      const filePath = path.join(UPLOAD_DIR, att.storedName);
-      if (fs.existsSync(filePath)) {
-        try { fs.unlinkSync(filePath); } catch(_) {}
-      }
-    }
     return sendSuccess(res, null, 'Ticket deleted');
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * GET /helpdesk/tickets/deleted
+ * List soft-deleted tickets — admin only. `paranoid: false` explicitly
+ * includes rows the default scope would otherwise hide.
+ * @type {import('express').RequestHandler}
+ */
+const listDeletedTickets = async (req, res, next) => {
+  try {
+    if (!req.hdUser.isAdmin) return next(new ForbiddenError('Admin access required'));
+
+    const { page, pageSize, offset, limit } = paginationParams(req.query);
+    const tickets = await HdTicket.findAll({
+      where: { deleted_at: { [Op.ne]: null } },
+      paranoid: false,
+      include: listIncludes(),
+      order: [['deleted_at', 'DESC']],
+      limit,
+      offset,
+    });
+    const total = await HdTicket.count({ where: { deleted_at: { [Op.ne]: null } }, paranoid: false });
+
+    return sendSuccess(res, { tickets, total, page, pageSize }, 'Deleted tickets fetched');
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * POST /helpdesk/tickets/:id/restore
+ * Undelete a soft-deleted ticket — admin only.
+ * @type {import('express').RequestHandler}
+ */
+const restoreTicket = async (req, res, next) => {
+  try {
+    if (!req.hdUser.isAdmin) return next(new ForbiddenError('Admin access required'));
+
+    const ticket = await HdTicket.findByPk(req.params.id, { paranoid: false });
+    if (!ticket) return next(new NotFoundError('Ticket'));
+    if (!ticket.deleted_at) return sendClientError(res, 'This ticket is not deleted', 400);
+
+    await ticket.restore();
+    return sendSuccess(res, ticket, 'Ticket restored');
   } catch (err) {
     next(err);
   }
@@ -1762,12 +1825,11 @@ const bulkUpload = async (req, res, next) => {
         rowTx = await sequelize.transaction();
         const reqNumber = await generateReqNumber(rowTx);
 
-        // request_type: validate against allowed values; store original casing
-        const VALID_REQUEST_TYPES = ['incident', 'service request'];
-        const rawRequestType      = (r.request_type || '').trim();
-        const requestType         = VALID_REQUEST_TYPES.includes(rawRequestType.toLowerCase())
-          ? rawRequestType
-          : null;
+        // request_type: validated + normalized to canonical casing (not stored
+        // as whatever raw text the spreadsheet happened to contain) — see
+        // normalizeRequestType, which is what fixes the Request Type filter
+        // silently missing rows imported with inconsistent casing.
+        const requestType = normalizeRequestType(r.request_type);
         // dueDate parsed above (before the allocation check, which needs it too)
 
         // status here is a built-in KEY (import only allows open/in-progress/
@@ -1937,7 +1999,7 @@ const getImportTemplate = async (req, res, next) => {
     // Fixed lists
     const priorities   = Object.values(TICKET_PRIORITY); // low, medium, high, critical
     const statuses     = ['open', 'in-progress', 'pending', 'on-hold'];
-    const requestTypes = ['Incident', 'Service Request'];
+    const requestTypes = VALID_REQUEST_TYPES;
     const billableOpts = ['Billable', 'Non-Billable'];
 
     // ── Valid Options sheet (visible tab — users see ALL allowed values here) ────
@@ -2152,6 +2214,8 @@ module.exports = {
   createTicket,
   updateTicket,
   deleteTicket,
+  listDeletedTickets,
+  restoreTicket,
   bulkAssign,
   bulkUpload,
   getHistory,

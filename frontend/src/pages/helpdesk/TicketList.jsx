@@ -51,6 +51,8 @@ import {
   HiViewGrid,
   HiChevronDown,
   HiX,
+  HiOutlineEye,
+  HiOutlineDocumentDuplicate,
 } from 'react-icons/hi';
 
 // ---------------------------------------------------------------------------
@@ -128,6 +130,9 @@ export default function TicketList() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { user } = useSelector((s) => s.auth);
+  // Same gate as TicketDetail.jsx's canManage — the row menu must never offer
+  // an action (Delete) the backend would reject anyway.
+  const canManage = ['admin', 'manager', 'senior_manager', 'md', 'director'].includes(user?.role);
 
   // Redux state
   const tickets = useSelector(selectTickets);
@@ -140,6 +145,24 @@ export default function TicketList() {
   // not a hardcoded list, so it always matches whatever admins have configured.
   const requestTypeOptions = (hdOptions.request_type || []).map(o => o.name);
   const STATUS_OPTIONS = hdOptions.status?.length ? hdOptions.status.map(o => o.name) : STATUS_OPTIONS_FALLBACK;
+
+  // Admin-configured colors (Helpdesk Settings → Operations Customization) —
+  // same source Operations Reports reads, so a status/priority is always the
+  // same color everywhere, not just within Reports. Falls back to the
+  // existing Tailwind classes (STATUS_COLORS/PRIORITY_COLORS below) when a
+  // color hasn't been configured, so nothing visually changes until an admin
+  // actually sets one. Lowercased on both sides — ticket.priority is stored
+  // lowercase but hd_options priority names are Title Case.
+  const statusColorMap = Object.fromEntries((hdOptions.status || []).map(o => [o.name.toLowerCase(), o.color]).filter(([, c]) => c));
+  const priorityColorMap = Object.fromEntries((hdOptions.priority || []).map(o => [o.name.toLowerCase(), o.color]).filter(([, c]) => c));
+  const statusStyle = (s) => {
+    const c = statusColorMap[String(s ?? '').toLowerCase()];
+    return c ? { backgroundColor: `${c}1A`, color: c } : undefined;
+  };
+  const priorityStyle = (p) => {
+    const c = priorityColorMap[String(p ?? '').toLowerCase()];
+    return c ? { backgroundColor: `${c}1A`, color: c, borderColor: `${c}4D` } : undefined;
+  };
 
   // Local state
   const [pageSize, setPageSize] = useState(20);
@@ -200,6 +223,16 @@ export default function TicketList() {
   const [showDownloadMenu, setShowDownloadMenu] = useState(false);
   const [downloading,      setDownloading]      = useState(false);
   const downloadMenuRef = useRef(null);
+
+  // Status filter — multi-select popover (filters.status is a comma-separated
+  // list of status names; backend matches ANY of them via Sequelize's
+  // automatic Op.in-on-array behavior).
+  const [showStatusMenu, setShowStatusMenu] = useState(false);
+  const statusMenuRef = useRef(null);
+
+  // Row quick-actions menu (the three-dot button) — one open row at a time.
+  const [openRowMenuId, setOpenRowMenuId] = useState(null);
+  const rowMenuRef = useRef(null);
 
   // Template download
   const [templateDownloading, setTemplateDownloading] = useState(false);
@@ -415,6 +448,30 @@ export default function TicketList() {
     document.addEventListener('mousedown', onClick);
     return () => document.removeEventListener('mousedown', onClick);
   }, [showDownloadMenu]);
+
+  // Close status filter popover on outside click
+  useEffect(() => {
+    if (!showStatusMenu) return;
+    const onClick = (e) => {
+      if (statusMenuRef.current && !statusMenuRef.current.contains(e.target)) {
+        setShowStatusMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', onClick);
+    return () => document.removeEventListener('mousedown', onClick);
+  }, [showStatusMenu]);
+
+  // Close row quick-actions menu on outside click
+  useEffect(() => {
+    if (openRowMenuId == null) return;
+    const onClick = (e) => {
+      if (rowMenuRef.current && !rowMenuRef.current.contains(e.target)) {
+        setOpenRowMenuId(null);
+      }
+    };
+    document.addEventListener('mousedown', onClick);
+    return () => document.removeEventListener('mousedown', onClick);
+  }, [openRowMenuId]);
 
   // -------------------------------------------------------------------------
   // Search — debounced 300 ms
@@ -671,6 +728,38 @@ export default function TicketList() {
   };
 
   // -------------------------------------------------------------------------
+  // Row quick-actions menu (the three-dot button) — was previously wired to
+  // nothing at all. Open/Duplicate reuse the same navigation CreateTicket.jsx
+  // and TicketDetail.jsx already support; Delete mirrors handleDeleteSelected
+  // one row at a time, gated behind the same canManage the backend enforces.
+  // -------------------------------------------------------------------------
+  const handleDuplicateRow = (t) => {
+    setOpenRowMenuId(null);
+    navigate('/helpdesk/tickets/new', {
+      state: {
+        duplicateFrom: {
+          title: t.title, description: t.description, priority: t.priority,
+          category: t.category, mode: t.mode, impact: t.impact, urgency: t.urgency,
+          site: t.site, requestType: t.requestType,
+          teamManagerId: t.teamManagerId || t.teamManager?._id || t.teamManager?.id || undefined,
+        },
+      },
+    });
+  };
+
+  const handleDeleteRow = async (id) => {
+    setOpenRowMenuId(null);
+    if (!window.confirm('Delete this request?')) return;
+    setOpError(null);
+    try {
+      await deleteTicketApi(id);
+      load();
+    } catch (e) {
+      setOpError(e.response?.data?.error?.message || e.message || 'Delete failed');
+    }
+  };
+
+  // -------------------------------------------------------------------------
   // Bulk assign
   // -------------------------------------------------------------------------
   const isoDay = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -900,7 +989,7 @@ export default function TicketList() {
                     >
                       <span className="text-gray-800">{label}</span>
                       {value && (
-                        <span className={`px-1.5 py-0.5 rounded-full text-[9px] font-medium ${STATUS_COLORS[value] || 'bg-gray-100 text-gray-700'}`}>
+                        <span className={`px-1.5 py-0.5 rounded-full text-[9px] font-medium ${STATUS_COLORS[value] || 'bg-gray-100 text-gray-700'}`} style={statusStyle(value)}>
                           {label}
                         </span>
                       )}
@@ -919,17 +1008,27 @@ export default function TicketList() {
               Bulk Upload
             </button>
 
-            {/* New Request — a plain employee doesn't self-serve; someone with
-                real team/assign visibility raises it on their behalf instead. */}
-            {user?.role !== 'employee' && (
+            {/* Deleted Tickets (recycle bin) — admin only, mirrors the backend's
+                admin-only GET /tickets/deleted + POST /:id/restore gate. */}
+            {user?.role === 'admin' && (
               <button
-                onClick={() => navigate('/helpdesk/tickets/new')}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-[#2196f3] text-white rounded-lg hover:bg-[#1976d2] transition-colors text-[11px] font-medium"
+                onClick={() => navigate('/helpdesk/tickets/deleted')}
+                className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors text-[11px] font-medium"
               >
-                <HiOutlinePlus className="w-3.5 h-3.5" />
-                New Request
+                <HiOutlineTrash className="w-3.5 h-3.5" />
+                Deleted Tickets
               </button>
             )}
+
+            {/* New Request — any role, including employee, can raise one now;
+                they just can't assign it directly to a teammate. */}
+            <button
+              onClick={() => navigate('/helpdesk/tickets/new')}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-[#2196f3] text-white rounded-lg hover:bg-[#1976d2] transition-colors text-[11px] font-medium"
+            >
+              <HiOutlinePlus className="w-3.5 h-3.5" />
+              New Request
+            </button>
           </div>
         </div>
 
@@ -952,17 +1051,51 @@ export default function TicketList() {
             <div className="flex flex-wrap items-center gap-1.5">
               <HiOutlineFilter className="w-3.5 h-3.5 text-gray-400" />
 
-              {/* Status */}
-              <select
-                value={filters.status || ''}
-                onChange={(e) => handleFilter('status', e.target.value)}
-                className="px-2 py-1.5 border border-gray-300 rounded-lg text-[11px] bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                <option value="">All Status</option>
-                {STATUS_OPTIONS.map((s) => (
-                  <option key={s} value={s}>{fmtLabel(s)}</option>
-                ))}
-              </select>
+              {/* Status — multi-select: pick Open + WIP together, etc. */}
+              <div className="relative" ref={statusMenuRef}>
+                <button
+                  type="button"
+                  onClick={() => setShowStatusMenu((v) => !v)}
+                  className="px-2 py-1.5 border border-gray-300 rounded-lg text-[11px] bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 whitespace-nowrap"
+                >
+                  {(() => {
+                    const selected = (filters.status || '').split(',').filter(Boolean);
+                    if (selected.length === 0) return 'All Status';
+                    if (selected.length === 1) return fmtLabel(selected[0]);
+                    return `${selected.length} statuses`;
+                  })()}
+                </button>
+                {showStatusMenu && (
+                  <div className="absolute z-20 mt-1 w-48 bg-white border border-gray-200 rounded-lg shadow-lg p-2">
+                    <label className="flex items-center gap-2 px-2 py-1 text-[11px] text-gray-500 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={!filters.status}
+                        onChange={() => handleFilter('status', '')}
+                      />
+                      All Status
+                    </label>
+                    <div className="border-t border-gray-100 my-1" />
+                    {STATUS_OPTIONS.map((s) => {
+                      const selected = (filters.status || '').split(',').filter(Boolean);
+                      const checked = selected.includes(s);
+                      return (
+                        <label key={s} className="flex items-center gap-2 px-2 py-1 text-[11px] text-gray-700 hover:bg-gray-50 rounded cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => {
+                              const next = checked ? selected.filter((v) => v !== s) : [...selected, s];
+                              handleFilter('status', next.join(','));
+                            }}
+                          />
+                          {fmtLabel(s)}
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
 
               {/* Priority */}
               <select
@@ -1060,7 +1193,11 @@ export default function TicketList() {
                     <option value="">
                       {bulkStatusUpdating ? 'Updating…' : `Set Status (${selected.length})…`}
                     </option>
-                    {STATUS_OPTIONS.map((s) => (
+                    {/* 'closed' is deliberately excluded here — closing always
+                        needs the resolution-capture flow (CloseTicketModal),
+                        which a bulk window.confirm() bypassed entirely. Close
+                        tickets one at a time from the ticket page instead. */}
+                    {STATUS_OPTIONS.filter((s) => s !== 'closed').map((s) => (
                       <option key={s} value={s}>{fmtLabel(s)}</option>
                     ))}
                   </select>
@@ -1204,19 +1341,15 @@ export default function TicketList() {
             </div>
             <h3 className="text-lg font-medium text-gray-800 mb-2">No Requests Yet</h3>
             <p className="text-gray-500 text-sm mb-6 text-center max-w-md">
-              {user?.role === 'employee'
-                ? 'No tickets have been raised or assigned to you yet.'
-                : 'Create your first request to start tracking and managing your support tickets.'}
+              Create your first request to start tracking and managing your support tickets.
             </p>
-            {user?.role !== 'employee' && (
-              <button
-                onClick={() => navigate('/helpdesk/tickets/new')}
-                className="flex items-center gap-2 px-6 py-3 bg-[#2196f3] text-white rounded-lg hover:bg-[#1976d2] transition-colors font-medium"
-              >
-                <HiOutlinePlus className="w-5 h-5" />
-                Create First Request
-              </button>
-            )}
+            <button
+              onClick={() => navigate('/helpdesk/tickets/new')}
+              className="flex items-center gap-2 px-6 py-3 bg-[#2196f3] text-white rounded-lg hover:bg-[#1976d2] transition-colors font-medium"
+            >
+              <HiOutlinePlus className="w-5 h-5" />
+              Create First Request
+            </button>
           </div>
 
         /* Empty state — filters active but no matching results */
@@ -1318,14 +1451,14 @@ export default function TicketList() {
 
                     {/* Status badge */}
                     <td className="px-2 py-1.5 align-middle">
-                      <span className={`inline-block px-1.5 py-0.5 rounded-full text-[10px] font-medium ${STATUS_COLORS[t.status] || 'bg-gray-100 text-gray-700'}`}>
+                      <span className={`inline-block px-1.5 py-0.5 rounded-full text-[10px] font-medium ${STATUS_COLORS[t.status] || 'bg-gray-100 text-gray-700'}`} style={statusStyle(t.status)}>
                         {fmtLabel(t.status)}
                       </span>
                     </td>
 
                     {/* Priority badge */}
                     <td className="px-2 py-1.5 align-middle">
-                      <span className={`inline-block px-1.5 py-0.5 rounded border text-[10px] font-medium ${PRIORITY_COLORS[t.priority] || 'bg-gray-100 text-gray-700 border-gray-200'}`}>
+                      <span className={`inline-block px-1.5 py-0.5 rounded border text-[10px] font-medium ${PRIORITY_COLORS[t.priority] || 'bg-gray-100 text-gray-700 border-gray-200'}`} style={priorityStyle(t.priority)}>
                         {fmtLabel(t.priority)}
                       </span>
                     </td>
@@ -1365,11 +1498,45 @@ export default function TicketList() {
                       </span>
                     </td>
 
-                    {/* Row menu */}
-                    <td className="px-1 py-1.5 align-middle" onClick={(e) => e.stopPropagation()}>
-                      <button type="button" className="p-0.5 hover:bg-gray-100 rounded">
+                    {/* Row menu — used to have no onClick at all */}
+                    <td className="px-1 py-1.5 align-middle relative" onClick={(e) => e.stopPropagation()}>
+                      <button
+                        type="button"
+                        onClick={() => setOpenRowMenuId((v) => (v === (t._id ?? t.id) ? null : (t._id ?? t.id)))}
+                        className="p-0.5 hover:bg-gray-100 rounded"
+                      >
                         <HiDotsVertical className="w-3.5 h-3.5 text-gray-400" />
                       </button>
+                      {openRowMenuId === (t._id ?? t.id) && (
+                        <div ref={rowMenuRef} className="absolute right-1 top-full mt-1 z-30 w-40 bg-white border border-gray-200 rounded-lg shadow-lg py-1">
+                          <button
+                            type="button"
+                            onClick={() => { setOpenRowMenuId(null); navigate(`/helpdesk/tickets/${t._id ?? t.id}`); }}
+                            className="w-full text-left px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+                          >
+                            <HiOutlineEye className="w-3.5 h-3.5 text-gray-400" /> Open
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDuplicateRow(t)}
+                            className="w-full text-left px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+                          >
+                            <HiOutlineDocumentDuplicate className="w-3.5 h-3.5 text-gray-400" /> Duplicate
+                          </button>
+                          {canManage && (
+                            <>
+                              <div className="border-t border-gray-100 my-1" />
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteRow(t._id ?? t.id)}
+                                className="w-full text-left px-3 py-1.5 text-xs text-red-600 hover:bg-red-50 flex items-center gap-2"
+                              >
+                                <HiOutlineTrash className="w-3.5 h-3.5" /> Delete
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -1430,7 +1597,7 @@ export default function TicketList() {
                   <span className="text-blue-600 font-medium text-[11px]">
                     {t.req_number || t.reqNumber || t.ticket_id || `#${String(t.id).slice(-6)}`}
                   </span>
-                  <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-medium ${STATUS_COLORS[t.status] || 'bg-gray-100 text-gray-700'}`}>
+                  <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-medium ${STATUS_COLORS[t.status] || 'bg-gray-100 text-gray-700'}`} style={statusStyle(t.status)}>
                     {fmtLabel(t.status)}
                   </span>
                 </div>
@@ -1439,7 +1606,7 @@ export default function TicketList() {
                 </h3>
                 <div className="flex items-center justify-between text-[11px] text-gray-500">
                   <span className="truncate">{t.requester?.name || t.requesterName || '—'}</span>
-                  <span className={`px-1.5 py-0.5 rounded border text-[10px] shrink-0 ${PRIORITY_COLORS[t.priority] || 'bg-gray-100 text-gray-700 border-gray-200'}`}>
+                  <span className={`px-1.5 py-0.5 rounded border text-[10px] shrink-0 ${PRIORITY_COLORS[t.priority] || 'bg-gray-100 text-gray-700 border-gray-200'}`} style={priorityStyle(t.priority)}>
                     {fmtLabel(t.priority)}
                   </span>
                 </div>

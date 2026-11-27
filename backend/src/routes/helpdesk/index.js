@@ -61,5 +61,6 @@ router.use('/dashboard',     hdDashboardRouter);
 router.use('/attachments',   attachmentsRouter);
 router.use('/tickets/:ticketId/documents', require('./hdDocuments.routes'));
 router.use('/user-groups',   require('./hdUserGroups.routes'));
+router.use('/sla-policies',  require('./hdSlaPolicies.routes'));
 
 module.exports = router;

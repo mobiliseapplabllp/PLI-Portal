@@ -6,19 +6,15 @@
  */
 
 const { Op }    = require('sequelize');
-const path      = require('path');
-const fs        = require('fs');
-const crypto    = require('crypto');
 const {
   HdConversation,
   HdTicket,
   HdAttachment,
+  HdTicketHistory,
 }               = require('../../models/helpdesk');
 const { sendSuccess, sendError } = require('../../utils/response');
 const { NotFoundError, ForbiddenError } = require('../../utils/errors');
 const { sendEmail } = require('../../utils/emailService');
-
-const UPLOAD_DIR = process.env.UPLOAD_DIR || 'uploads';
 
 // ─── Controllers ─────────────────────────────────────────────────────────────
 
@@ -46,7 +42,8 @@ const listConversations = async (req, res, next) => {
 
     const conversations = await HdConversation.findAll({
       where,
-      include: [{ model: HdAttachment, as: 'files', required: false }],
+      // Never send the raw bytes back in a JSON response.
+      include: [{ model: HdAttachment, as: 'files', required: false, attributes: { exclude: ['fileBlob'] } }],
       order:   [['created_at', 'ASC']],
     });
 
@@ -82,23 +79,18 @@ const addConversation = async (req, res, next) => {
       isInternal:  isInternal === true || isInternal === 'true',
     });
 
-    // Handle uploaded file (multer memoryStorage)
+    // Handle uploaded file (multer memoryStorage) — blob-stored, same pattern
+    // as HdDocument / the standalone attachment upload endpoint.
     if (req.file) {
-      const ext        = path.extname(req.file.originalname);
-      const storedName = `${crypto.randomUUID()}${ext}`;
-      const destPath   = path.join(UPLOAD_DIR, storedName);
-
-      fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-      fs.writeFileSync(destPath, req.file.buffer);
-
       await HdAttachment.create({
         ticketId,
         conversationId: conversation.id,
         uploadedBy:     hdUser.id,
         filename:       req.file.originalname,
-        storedName,
+        storedName:     null,
         mimeType:       req.file.mimetype,
         sizeBytes:      req.file.size,
+        fileBlob:       req.file.buffer,
       });
     }
 
@@ -119,7 +111,12 @@ const addConversation = async (req, res, next) => {
 
 /**
  * PUT /helpdesk/conversations/:id
- * Edit a conversation. Only the author or an admin can edit.
+ * Edit a conversation. Only the author or an admin can edit, and only while
+ * the ticket is still open — once closed, replies are frozen (matches the
+ * same "closed means closed" reasoning as everything else on a closed
+ * ticket). Every message edit is logged to hd_ticket_history (old → new,
+ * who, when) so nothing is silently rewritten — the same append-only audit
+ * trail every other ticket field change already goes through.
  * @type {import('express').RequestHandler}
  */
 const updateConversation = async (req, res, next) => {
@@ -131,11 +128,27 @@ const updateConversation = async (req, res, next) => {
     if (!hdUser.isAdmin && conv.userId !== hdUser.id)
       return next(new ForbiddenError('Only the author or an admin can edit this conversation'));
 
+    const ticket = await HdTicket.findByPk(conv.ticketId, { attributes: ['id', 'status'] });
+    if (ticket?.status === 'closed')
+      return sendError(res, 'This ticket is closed — replies can no longer be edited', 409);
+
     const { message, isInternal } = req.body;
+    const oldMessage = conv.message;
     if (message !== undefined) conv.message = message.trim();
     if (isInternal !== undefined) conv.isInternal = isInternal === true || isInternal === 'true';
 
     await conv.save();
+
+    if (message !== undefined && message.trim() !== oldMessage) {
+      await HdTicketHistory.create({
+        ticketId:  conv.ticketId,
+        changedBy: hdUser.id,
+        field:     'conversation_message',
+        oldValue:  oldMessage,
+        newValue:  conv.message,
+      });
+    }
+
     return sendSuccess(res, conv, 'Conversation updated');
   } catch (err) {
     next(err);

@@ -6,6 +6,7 @@
  * monthly trend, agent stats, and project stats.
  */
 import { useEffect, useState } from 'react';
+import { useDispatch, useSelector } from 'react-redux';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, PieChart, Pie, Cell, AreaChart, Area,
@@ -20,6 +21,7 @@ import {
   getAgentStatsApi,
   getProjectStatsApi,
 } from '../../api/helpdesk/hdDashboard.api';
+import { fetchHdOptions, selectHdOptions } from '../../store/helpdeskSlice';
 import {
   HiOutlineTicket,
   HiOutlineCheckCircle,
@@ -32,8 +34,15 @@ import {
 // ---------------------------------------------------------------------------
 // Colour palettes
 // ---------------------------------------------------------------------------
-const STATUS_COLORS  = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#64748b'];
-const PRIORITY_COLORS = { Critical: '#dc2626', High: '#ea580c', Medium: '#d97706', Low: '#16a34a' };
+// Real colors come from hd_options.color (admin-configurable in Helpdesk
+// Settings → Operations Customization — same pattern PM Settings already
+// uses for pm_statuses). These are fallbacks ONLY: used before hdOptions has
+// loaded, or for a status/priority that was never assigned a color — so the
+// pie chart, the priority chart, and the KPI cards all agree with whatever
+// the admin configured, instead of each picking colors independently (which
+// is exactly why "Open" could show as a different color in each place).
+const STATUS_COLOR_FALLBACK   = '#94a3b8';
+const PRIORITY_COLOR_FALLBACK = '#6366f1';
 const TEAM_COLOR     = '#6366f1';
 const TEAM_PENDING_COLOR = '#f59e0b';
 const AREA_CREATED   = '#6366f1';
@@ -44,7 +53,10 @@ const AREA_CLOSED    = '#10b981';
 // ---------------------------------------------------------------------------
 const fmt = (v) => (v == null ? '—' : new Intl.NumberFormat('en-IN').format(v));
 
-function KpiCard({ icon: Icon, label, value, sub, color = 'blue' }) {
+// hexColor (admin-configured, e.g. the "open" status's color) takes priority
+// over the named `color` prop (a fixed Tailwind palette, kept as a fallback
+// for cards that aren't tied to a specific configurable status/priority).
+function KpiCard({ icon: Icon, label, value, sub, color = 'blue', hexColor }) {
   const palette = {
     blue:   { bg: 'bg-blue-50',   text: 'text-blue-600',   icon: 'bg-blue-100' },
     green:  { bg: 'bg-green-50',  text: 'text-green-600',  icon: 'bg-green-100' },
@@ -52,14 +64,17 @@ function KpiCard({ icon: Icon, label, value, sub, color = 'blue' }) {
     red:    { bg: 'bg-red-50',    text: 'text-red-600',    icon: 'bg-red-100' },
   };
   const p = palette[color] || palette.blue;
+  const style = hexColor
+    ? { bg: { backgroundColor: `${hexColor}1A` }, icon: { backgroundColor: `${hexColor}33` }, text: { color: hexColor } }
+    : null;
   return (
-    <div className={`${p.bg} rounded-xl p-4 flex items-start gap-3`}>
-      <div className={`${p.icon} rounded-xl p-2.5 shrink-0`}>
-        <Icon className={`w-5 h-5 ${p.text}`} />
+    <div className={style ? 'rounded-xl p-4 flex items-start gap-3' : `${p.bg} rounded-xl p-4 flex items-start gap-3`} style={style?.bg}>
+      <div className={style ? 'rounded-xl p-2.5 shrink-0' : `${p.icon} rounded-xl p-2.5 shrink-0`} style={style?.icon}>
+        <Icon className={style ? 'w-5 h-5' : `w-5 h-5 ${p.text}`} style={style?.text} />
       </div>
       <div className="min-w-0">
         <p className="text-xs font-medium text-gray-500 truncate">{label}</p>
-        <p className={`text-2xl font-bold ${p.text} leading-tight`}>{value}</p>
+        <p className={style ? 'text-2xl font-bold leading-tight' : `text-2xl font-bold ${p.text} leading-tight`} style={style?.text}>{value}</p>
         {sub && <p className="text-xs text-gray-400 mt-0.5">{sub}</p>}
       </div>
     </div>
@@ -82,6 +97,20 @@ function Section({ title, children }) {
 // ---------------------------------------------------------------------------
 
 export default function HdReports() {
+  const dispatch = useDispatch();
+  const hdOptions = useSelector(selectHdOptions);
+  useEffect(() => {
+    if (!hdOptions || Object.keys(hdOptions).length === 0) dispatch(fetchHdOptions());
+  }, [dispatch, hdOptions]);
+  // name -> hex color, built from admin-configured hd_options (the single
+  // source of truth every status/priority color must come from).
+  // Lowercased keys on both sides — hd_tickets.priority is stored lowercase
+  // ('low'/'medium'/'high') while hd_options.priority names are Title Case
+  // ('Low'/'Medium'/'High'/'Critical'); a case-sensitive lookup here would
+  // silently never match and always fall back to the generic color.
+  const statusColorMap = Object.fromEntries((hdOptions?.status || []).map(o => [o.name.toLowerCase(), o.color]).filter(([, c]) => c));
+  const priorityColorMap = Object.fromEntries((hdOptions?.priority || []).map(o => [o.name.toLowerCase(), o.color]).filter(([, c]) => c));
+
   const [stats,    setStats]    = useState(null);
   const [byStatus, setByStatus] = useState([]);
   const [byPri,    setByPri]    = useState([]);
@@ -201,8 +230,8 @@ export default function HdReports() {
       {/* KPI Cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <KpiCard icon={HiOutlineTicket}           label="Total Tickets"  value={fmt(totalTickets)}   color="blue" />
-        <KpiCard icon={HiOutlineClock}            label="Open"           value={fmt(openTickets)}    color="amber" />
-        <KpiCard icon={HiOutlineCheckCircle}      label="Closed"         value={fmt(closedTickets)}  color="green" />
+        <KpiCard icon={HiOutlineClock}            label="Open"           value={fmt(openTickets)}    color="amber" hexColor={statusColorMap.open} />
+        <KpiCard icon={HiOutlineCheckCircle}      label="Closed"         value={fmt(closedTickets)}  color="green" hexColor={statusColorMap.closed} />
         <KpiCard icon={HiOutlineExclamationCircle} label="Overdue"       value={fmt(overdueTickets)} color="red" />
       </div>
 
@@ -224,8 +253,8 @@ export default function HdReports() {
                   label={({ label, count }) => `${label}: ${count}`}
                   labelLine={false}
                 >
-                  {byStatus.map((_, i) => (
-                    <Cell key={i} fill={STATUS_COLORS[i % STATUS_COLORS.length]} />
+                  {byStatus.map((r, i) => (
+                    <Cell key={i} fill={statusColorMap[String(r.label).toLowerCase()] || STATUS_COLOR_FALLBACK} />
                   ))}
                 </Pie>
                 <Tooltip formatter={(v, n) => [v, n]} />
@@ -244,7 +273,7 @@ export default function HdReports() {
                 <Tooltip />
                 <Bar dataKey="count" name="Tickets" radius={[6, 6, 0, 0]}>
                   {byPri.map((r, i) => (
-                    <Cell key={i} fill={PRIORITY_COLORS[r.label] || '#6366f1'} />
+                    <Cell key={i} fill={priorityColorMap[String(r.label).toLowerCase()] || PRIORITY_COLOR_FALLBACK} />
                   ))}
                 </Bar>
               </BarChart>

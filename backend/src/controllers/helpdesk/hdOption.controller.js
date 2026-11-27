@@ -44,7 +44,7 @@ const createOption = async (req, res, next) => {
     if (!req.hdUser.isAdmin && !req.hdUser.permissions.canManageTickets)
       return next(new ForbiddenError('Admin access required to manage options'));
 
-    const { type, name, description, sortOrder } = req.body;
+    const { type, name, description, sortOrder, color } = req.body;
 
     if (!type || !name)
       return sendError(res, 'type and name are required', 400);
@@ -65,9 +65,37 @@ const createOption = async (req, res, next) => {
       name:        name.trim(),
       description: description?.trim() || null,
       sortOrder:   sortOrder ?? 0,
+      color:       color || null,
     });
 
     return sendSuccess(res, option, 'Option created', 201);
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * PUT /helpdesk/options/:id
+ * Update an option's color (and/or description) — never name/type, which
+ * stay fixed once created (isBuiltIn rows especially: code elsewhere keys
+ * off the exact string value, see HdOption.js's comment on isBuiltIn).
+ * Body: { color?, description? }
+ * @type {import('express').RequestHandler}
+ */
+const updateOption = async (req, res, next) => {
+  try {
+    if (!req.hdUser.isAdmin && !req.hdUser.permissions.canManageTickets)
+      return next(new ForbiddenError('Admin access required to manage options'));
+
+    const option = await HdOption.findByPk(req.params.id);
+    if (!option) return next(new NotFoundError('Option'));
+
+    const { color, description } = req.body;
+    if (color !== undefined) option.color = color || null;
+    if (description !== undefined) option.description = description?.trim() || null;
+    await option.save();
+
+    return sendSuccess(res, option, 'Option updated');
   } catch (err) {
     next(err);
   }
@@ -125,4 +153,4 @@ const listAllOptions = async (req, res, next) => {
   }
 };
 
-module.exports = { listOptions, createOption, deleteOption, listAllOptions };
+module.exports = { listOptions, createOption, updateOption, deleteOption, listAllOptions };

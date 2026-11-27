@@ -6,13 +6,17 @@
  */
 import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useSelector } from 'react-redux';
+import { useSelector, useDispatch } from 'react-redux';
+import { fetchHdOptions } from '../../store/helpdeskSlice';
 import toast from 'react-hot-toast';
 import PublicWidgetSettings from '../../components/helpdesk/PublicWidgetSettings';
 import {
   getHdOptionsApi,
   createHdOptionApi,
+  updateHdOptionApi,
   deleteHdOptionApi,
+  getSlaPoliciesApi,
+  updateSlaPolicyApi,
 } from '../../api/helpdesk/helpdesk.api';
 import {
   HiOutlineCog,
@@ -69,6 +73,7 @@ const MENU_ITEMS = [
     id: 'data-admin', label: 'Data Administration', icon: HiOutlineDatabase, adminOnly: true,
     items: [
       { id: 'sites',  label: 'Sites' },
+      { id: 'sla-policy', label: 'SLA Policy' },
     ],
   },
   {
@@ -264,6 +269,7 @@ function MailFilterSettings() {
 
 // ─── Section: Helpdesk Customization (ticket field options) ──────────────────
 function HelpdeskCustomization() {
+  const dispatch = useDispatch();
   const [activeType, setActiveType] = useState('category');
   const [items,       setItems]     = useState([]);
   const [loading,     setLoading]   = useState(false);
@@ -273,6 +279,7 @@ function HelpdeskCustomization() {
   const [saving,      setSaving]    = useState(false);
   const [deletingId,  setDeletingId] = useState(null);
   const [addError,    setAddError]  = useState('');
+  const [savingColorId, setSavingColorId] = useState(null);
 
   const load = useCallback(async (type) => {
     if (type === 'priority_matrix') { setItems([]); return; }
@@ -300,6 +307,7 @@ function HelpdeskCustomization() {
       toast.success('Option added');
       setNewName(''); setNewDesc(''); setShowAdd(false);
       await load(activeType);
+      dispatch(fetchHdOptions()); // refresh the shared Redux cache every other page reads from
     } catch (err) {
       setAddError(err?.response?.data?.error?.message || 'Failed to add option');
     } finally { setSaving(false); }
@@ -312,9 +320,32 @@ function HelpdeskCustomization() {
       await deleteHdOptionApi(id);
       toast.success('Option removed');
       await load(activeType);
+      dispatch(fetchHdOptions()); // refresh the shared Redux cache every other page reads from
     } catch (err) {
       toast.error(err?.response?.data?.error?.message || 'Failed to remove option');
     } finally { setDeletingId(null); }
+  };
+
+  // Status/priority colors drive the Operations Reports pie chart + KPI
+  // widgets, TicketList/TicketDetail badges, etc. — all read from Redux's
+  // hdOptions, NOT this component's own local `items` state. That Redux
+  // cache is only fetched once per session, so without explicitly refreshing
+  // it here, a saved color change here would be correct in the DB and on
+  // THIS page, yet every other already-loaded page keeps showing the old
+  // color until a full reload — confirmed via a direct backend round-trip
+  // test (PUT persists + both read endpoints return it fresh immediately;
+  // the staleness is purely this page never touching the Redux cache).
+  const showColorColumn = activeType === 'status' || activeType === 'priority';
+  const handleColorChange = async (id, color) => {
+    setSavingColorId(id);
+    setItems(prev => prev.map(it => ((it._id || it.id) === id ? { ...it, color } : it)));
+    try {
+      await updateHdOptionApi(id, { color });
+      dispatch(fetchHdOptions());
+    } catch (err) {
+      toast.error(err?.response?.data?.error?.message || 'Failed to save color');
+      await load(activeType);
+    } finally { setSavingColorId(null); }
   };
 
   const activeTab   = OPTION_TABS.find(t => t.key === activeType);
@@ -418,6 +449,7 @@ function HelpdeskCustomization() {
                   <tr>
                     <th className="px-4 py-2 text-left">Name</th>
                     <th className="px-4 py-2 text-left">Description</th>
+                    {showColorColumn && <th className="px-4 py-2 w-28 text-left">Color</th>}
                     <th className="px-4 py-2 w-12">Remove</th>
                   </tr>
                 </thead>
@@ -435,6 +467,21 @@ function HelpdeskCustomization() {
                           )}
                         </td>
                         <td className="px-4 py-2 text-gray-500">{item.description || '—'}</td>
+                        {showColorColumn && (
+                          <td className="px-4 py-2">
+                            <div className="relative inline-block w-7 h-7 rounded-full border border-gray-200 shadow-sm"
+                              style={{ backgroundColor: item.color || '#d1d5db' }}>
+                              <input
+                                type="color"
+                                value={item.color || '#6b7280'}
+                                onChange={e => handleColorChange(itemId, e.target.value)}
+                                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                                title="Pick a color"
+                                disabled={savingColorId === itemId}
+                              />
+                            </div>
+                          </td>
+                        )}
                         <td className="px-4 py-2">
                           {isReadOnly || item.isBuiltIn ? (
                             <span className="text-xs text-gray-300" title={item.isBuiltIn ? 'Built-in — used by ticket workflow logic, cannot be removed' : undefined}>—</span>
@@ -824,6 +871,140 @@ function AdditionalFieldsSettings() {
   );
 }
 
+// ─── Section: SLA Policy (admin-configurable, per priority) ──────────────────
+function SlaPolicySettings() {
+  const [policies, setPolicies] = useState([]);
+  const [loading,  setLoading]  = useState(false);
+  const [savingId, setSavingId] = useState(null);
+  const [drafts,   setDrafts]   = useState({}); // id -> { resolutionHours, atRiskThresholdHours } while editing
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await getSlaPoliciesApi();
+      setPolicies(res.data?.data || []);
+    } catch { setPolicies([]); }
+    finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  // The API renames id -> _id (renameIdsForClient). Every lookup below MUST
+  // go through this, or every row silently falls back to the SAME
+  // drafts[undefined] slot — which is exactly the bug: editing one
+  // priority's threshold appeared to edit all of them, because they were
+  // all reading/writing one shared key.
+  const pid = (p) => p._id ?? p.id;
+
+  const draftFor = (p) => drafts[pid(p)] ?? { resolutionHours: p.resolutionHours, atRiskThresholdHours: p.atRiskThresholdHours };
+  const setDraftField = (id, field, value) => {
+    setDrafts(prev => ({ ...prev, [id]: { ...draftFor(policies.find(p => pid(p) === id)), ...prev[id], [field]: value } }));
+  };
+
+  const handleSave = async (p) => {
+    const id = pid(p);
+    const draft = draftFor(p);
+    setSavingId(id);
+    try {
+      await updateSlaPolicyApi(id, { resolutionHours: draft.resolutionHours, atRiskThresholdHours: draft.atRiskThresholdHours });
+      toast.success(`${p.priority} SLA updated`);
+      setDrafts(prev => { const n = { ...prev }; delete n[id]; return n; });
+      await load();
+    } catch (err) {
+      toast.error(err?.response?.data?.error?.message || 'Failed to save');
+    } finally { setSavingId(null); }
+  };
+
+  const handleToggleActive = async (p) => {
+    const id = pid(p);
+    setSavingId(id);
+    try {
+      await updateSlaPolicyApi(id, { isActive: !p.isActive });
+      await load();
+    } catch (err) {
+      toast.error(err?.response?.data?.error?.message || 'Failed to update');
+    } finally { setSavingId(null); }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <h2 className="text-base font-semibold text-gray-800">SLA Policy</h2>
+        <p className="text-sm text-gray-500 mt-0.5">
+          How long each priority has to be resolved, and how early a ticket is flagged "At Risk" before
+          breaching — drives the live SLA status on every ticket. A new ticket's due date is auto-computed
+          from this ONLY when nobody picks one explicitly; a manually chosen due date always wins.
+          Turn a priority off to fall back to fully manual due dates for it.
+        </p>
+      </div>
+
+      {loading ? (
+        <div className="py-8 text-center text-gray-400 text-sm">Loading…</div>
+      ) : (
+        <div className="bg-white rounded-lg border border-gray-200 overflow-hidden max-w-2xl">
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50 text-xs text-gray-500 uppercase tracking-wider">
+              <tr>
+                <th className="px-4 py-2 text-left">Priority</th>
+                <th className="px-4 py-2 text-left">Resolution (hours)</th>
+                <th className="px-4 py-2 text-left">At-Risk Threshold (hours)</th>
+                <th className="px-4 py-2 text-left">Active</th>
+                <th className="px-4 py-2 w-20">Save</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-50">
+              {policies.map(p => {
+                const id = pid(p);
+                const draft = draftFor(p);
+                const dirty = drafts[id] !== undefined;
+                return (
+                  <tr key={id} className={!p.isActive ? 'opacity-50' : ''}>
+                    <td className="px-4 py-2 font-medium text-gray-900">{p.priority}</td>
+                    <td className="px-4 py-2">
+                      <input
+                        type="number" min="0.5" step="0.5" value={draft.resolutionHours}
+                        onChange={e => setDraftField(id, 'resolutionHours', e.target.value)}
+                        disabled={!p.isActive}
+                        className="w-24 px-2 py-1 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-50"
+                      />
+                    </td>
+                    <td className="px-4 py-2">
+                      <input
+                        type="number" min="0" step="0.5" value={draft.atRiskThresholdHours}
+                        onChange={e => setDraftField(id, 'atRiskThresholdHours', e.target.value)}
+                        disabled={!p.isActive}
+                        className="w-24 px-2 py-1 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-50"
+                      />
+                    </td>
+                    <td className="px-4 py-2">
+                      <button
+                        onClick={() => handleToggleActive(p)}
+                        disabled={savingId === id}
+                        className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${p.isActive ? 'bg-emerald-500' : 'bg-gray-300'}`}
+                      >
+                        <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${p.isActive ? 'translate-x-5' : 'translate-x-1'}`} />
+                      </button>
+                    </td>
+                    <td className="px-4 py-2">
+                      <button
+                        onClick={() => handleSave(p)}
+                        disabled={!dirty || savingId === id || !p.isActive}
+                        className="px-2.5 py-1 bg-[#2196f3] text-white rounded-lg text-xs font-medium hover:bg-[#1976d2] disabled:opacity-40 transition-colors"
+                      >
+                        {savingId === id ? '…' : 'Save'}
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Content router ────────────────────────────────────────────────────────────
 function ContentPanel({ activeId }) {
   switch (activeId) {
@@ -841,6 +1022,7 @@ function ContentPanel({ activeId }) {
     case 'automation':       return <AutomationSettings />;
     case 'survey':           return <PlaceholderContent title="User Survey" />;
     case 'sites':            return <SimpleOptionSettings type="site" title="Sites" description="Add or remove site locations used when raising tickets." />;
+    case 'sla-policy':       return <SlaPolicySettings />;
     case 'advanced-portal':  return <AdvancedPortalSettings />;
     case 'requester-portal': return <PlaceholderContent title="Requester Portal" />;
     case 'apps':             return <PlaceholderContent title="Apps & Add-ons" />;

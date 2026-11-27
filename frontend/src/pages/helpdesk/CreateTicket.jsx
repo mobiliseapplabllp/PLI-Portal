@@ -5,7 +5,7 @@
  *         → Card 2: Requester Details (Search, Name+Email, Project)
  *   RIGHT → Card 3: Classification (Priority, Impact+Urgency, Due Date)
  *         → Card 4: Assignment (Team / Manager, Assign to)
- *         → Attachment + Action buttons
+ *         → Documents + Action buttons
  *
  * PLI adaptations: Redux dispatch, lowercase ENUM values, ID-based team/assignee,
  * react-hot-toast, PLI API wrappers.
@@ -38,7 +38,6 @@ import QuickCreateProjectModal from '../../components/helpdesk/QuickCreateProjec
 import {
   HiOutlineArrowLeft,
   HiOutlineSave,
-  HiOutlineChevronDown,
   HiOutlineSearch,
   HiOutlinePlus,
 } from 'react-icons/hi';
@@ -93,7 +92,15 @@ const MODE_VALUE = {
   'Phone Call': 'phone',
 };
 
+// Mirrors helpdeskAuth.js's resolveRoleMapping() canAssign set exactly — the
+// same roles the backend trusts to assign a ticket directly to a teammate.
+// Anyone else (an employee, hr_admin, final_approver, sales_director) can
+// still pick a TEAM, but the ticket always lands unassigned for the manager
+// to pick up — see createTicket's canAssignAtCreate gate.
+const CAN_ASSIGN_ROLES = ['admin', 'md', 'director', 'senior_manager', 'manager'];
+
 const HD_DOC_CATEGORIES = [
+  'Initial Request Attachment',
   'SOW / Client Contracts',
   'Requirement Documents / BRD',
   'Solution Architecture Documents',
@@ -264,6 +271,7 @@ export default function CreateTicket() {
   const hdOptions  = useSelector(selectHdOptions);
   const authUser   = useSelector(s => s.auth.user);
   const authUserId = authUser?._id ?? authUser?.id ?? '';
+  const canAssign  = CAN_ASSIGN_ROLES.includes(authUser?.role);
 
   // ── Derive live option arrays from Redux (fall back to sensible defaults) ───
   const optCategory    = (hdOptions.category    || []).map(o => o.name);
@@ -322,7 +330,6 @@ export default function CreateTicket() {
   const [errors,      setErrors]      = useState({});
   const [saving,      setSaving]      = useState(false);
   const [submitError, setSubmitError] = useState('');
-  const [attachment,  setAttachment]  = useState(null);
   // Ticket Allocation Agreement feature flag (PM Settings). When on, a manager
   // assigning someone else never gets an immediate capacity refusal — it goes
   // to the assignee as a proposal instead, checked for real only once they
@@ -388,9 +395,15 @@ export default function CreateTicket() {
 
   // ── Document entries ────────────────────────────────────────────────────────
   const [docEntries,              setDocEntries]              = useState([]); // [{file, category, categoryOther}]
-  const [pendingDocCategory,      setPendingDocCategory]      = useState('SOW / Client Contracts');
+  const [pendingDocCategory,      setPendingDocCategory]      = useState('Initial Request Attachment');
   const [pendingDocCategoryOther, setPendingDocCategoryOther] = useState('');
   const [pendingDocFile,          setPendingDocFile]          = useState(null);
+
+  // Own reporting manager's id — used to default-select Team/Manager for
+  // anyone who ISN'T themselves a manager (an employee's "team" is their own
+  // manager's team, not a team they lead). Redux auth doesn't carry this, so
+  // it's filled in once the full user record loads below.
+  const [ownManagerId, setOwnManagerId] = useState('');
 
   // ── Requester search ────────────────────────────────────────────────────────
   const [requesters,            setRequesters]            = useState([]);
@@ -455,7 +468,11 @@ export default function CreateTicket() {
     if (authUserId && !location.state?.duplicateFrom) {
       setRequesterMeta(metaFromUser(authUser));
       getUserByIdApi(authUserId)
-        .then(res => setRequesterMeta(metaFromUser(res.data?.data?.user || res.data?.data)))
+        .then(res => {
+          const fullUser = res.data?.data?.user || res.data?.data;
+          setRequesterMeta(metaFromUser(fullUser));
+          setOwnManagerId(fullUser?.managerId || fullUser?.manager?._id || fullUser?.manager?.id || '');
+        })
         .catch(() => {});
     }
 
@@ -470,6 +487,22 @@ export default function CreateTicket() {
       .then(res => setAgreementEnabled(!!(res.data?.data ?? res.data)?.ticketAllocationAgreementEnabled))
       .catch(() => {});
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Default Team/Manager to the CREATOR's own reporting manager when they
+  // aren't themselves a manager — same "one less click for the common case"
+  // reasoning as the manager/senior_manager default above, just resolved from
+  // a different source (ownManagerId loads asynchronously, separately from
+  // the teams list, so this runs whenever either becomes available).
+  useEffect(() => {
+    if (!ownManagerId || !teams.length) return;
+    if (location.state?.duplicateFrom) return;
+    if (['manager', 'senior_manager'].includes(authUser?.role)) return;
+    setFormData(prev => {
+      if (prev.teamManagerId) return prev;
+      if (!teams.some(t => String(t._id ?? t.id) === String(ownManagerId))) return prev;
+      return { ...prev, teamManagerId: ownManagerId };
+    });
+  }, [ownManagerId, teams]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── C3: when the team changes, (re)load its members ─────────────────────────
   useEffect(() => {
@@ -614,8 +647,8 @@ export default function CreateTicket() {
 
   // ── Payload builder ─────────────────────────────────────────────────────────
   /**
-   * Build the create payload (plain object, or FormData when an attachment is
-   * attached — identical either way apart from the file).
+   * Build the create payload (plain object — attachments travel separately,
+   * via docEntries/uploadQueuedDocs, never with this request).
    * `withAllocation: false` omits every allocation field: that is the exception
    * path, where the ticket must be created unallocated and the hours are then
    * requested as an exception against the new id.
@@ -643,13 +676,7 @@ export default function CreateTicket() {
       normalized.allocationTo          = alloc.to;
     }
 
-    if (!attachment) return normalized;
-    const fd = new FormData();
-    Object.entries(normalized).forEach(([k, v]) => {
-      if (v !== '' && v !== null && v !== undefined) fd.append(k, v);
-    });
-    fd.append('attachment', attachment);
-    return fd;
+    return normalized;
   };
 
   /** Upload the documents queued on the form against a freshly created ticket. */
@@ -758,64 +785,33 @@ export default function CreateTicket() {
     }
   };
 
-  // ── Attachment file-size guard ──────────────────────────────────────────────
-  const MAX_ATTACHMENT_SIZE = 5 * 1024 * 1024; // 5 MB
-
-  const handleFileChange = (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    if (file.size > MAX_ATTACHMENT_SIZE) {
-      toast.error(`File is too large (${(file.size / 1024 / 1024).toFixed(1)} MB). Maximum size is 5 MB.`);
-      e.target.value = ''; // reset the file input
-      return;
-    }
-    setAttachment(file);
-  };
-
-  const attachmentInputRef = useRef(null);
-  const handleRemoveAttachment = () => {
-    setAttachment(null);
-    if (attachmentInputRef.current) attachmentInputRef.current.value = '';
-  };
-
   // Current priority's display label (e.g. 'medium' → 'Medium')
   const activePriorityLabel = PRIORITY_LABEL[formData.priority];
 
   // ── Render ──────────────────────────────────────────────────────────────────
   return (
-    <div className="h-full flex flex-col bg-[#f5f5f5]">
+    <div className="bg-[#f5f5f5]">
 
-      {/* ── Header bar — matches original exactly ───────────────────────────── */}
-      <div className="bg-white border-b border-gray-200 px-4 py-3">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              onClick={() => navigate(-1)}
-              className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-            >
-              <HiOutlineArrowLeft className="w-5 h-5" />
-            </button>
-            <h1 className="text-lg font-semibold">New Request</h1>
-          </div>
-          {/* Template selector (UI element matching original) */}
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-gray-500">Template:</span>
-            <button
-              type="button"
-              className="flex items-center gap-2 px-3 py-1.5 border border-gray-300 rounded-lg text-sm bg-white hover:bg-gray-50"
-            >
-              <span className="w-3 h-3 rounded-full bg-yellow-400 inline-block" />
-              Default Request
-              <HiOutlineChevronDown className="w-4 h-4 text-gray-400" />
-            </button>
-          </div>
+      {/* ── Header bar — tightened to reclaim vertical space for the form;
+          the Template selector was removed entirely (non-functional — a
+          static "Default Request" button with no onClick, nothing wired
+          to it at all). ─────────────────────────────────────────────── */}
+      <div className="sticky top-0 z-10 bg-white border-b border-gray-200 px-4 py-2">
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => navigate(-1)}
+            className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors"
+          >
+            <HiOutlineArrowLeft className="w-4 h-4" />
+          </button>
+          <h1 className="text-sm font-semibold">New Request</h1>
         </div>
       </div>
 
       {/* ── Form body ───────────────────────────────────────────────────────── */}
-      <div className="flex-1 overflow-auto p-4">
-        <form onSubmit={handleSubmit} className="max-w-5xl mx-auto text-xs">
+      <div className="p-3">
+        <form onSubmit={handleSubmit} className="text-xs">
 
           {/* Submit-level error */}
           {submitError && (
@@ -901,8 +897,9 @@ export default function CreateTicket() {
                     </div>
                   </div>
 
-                  {/* Mode + Category — same row as original */}
-                  <div className="grid grid-cols-2 gap-3">
+                  {/* Mode + Category + Site — one row, per explicit request
+                      (previously Mode+Category then Site on its own row). */}
+                  <div className="grid grid-cols-3 gap-3">
                     <div>
                       <label className={LBL}>Mode</label>
                       <select
@@ -933,22 +930,20 @@ export default function CreateTicket() {
                       </select>
                       {errors.category && <p className={ERR}>{errors.category}</p>}
                     </div>
-                  </div>
-
-                  {/* Site — optional; the same field the Excel bulk import already accepts */}
-                  <div>
-                    <label className={LBL}>Site</label>
-                    <select
-                      name="site"
-                      value={formData.site}
-                      onChange={handleChange}
-                      className={sel()}
-                    >
-                      <option value="">-- Select --</option>
-                      {optSite.map(o => (
-                        <option key={o} value={o}>{o}</option>
-                      ))}
-                    </select>
+                    <div>
+                      <label className={LBL}>Site</label>
+                      <select
+                        name="site"
+                        value={formData.site}
+                        onChange={handleChange}
+                        className={sel()}
+                      >
+                        <option value="">-- Select --</option>
+                        {optSite.map(o => (
+                          <option key={o} value={o}>{o}</option>
+                        ))}
+                      </select>
+                    </div>
                   </div>
 
                 </div>
@@ -1133,6 +1128,8 @@ export default function CreateTicket() {
                 </div>
               </div>
 
+              
+
             </div>
             {/* ═════════════════ END LEFT COLUMN ══════════════════════════ */}
 
@@ -1183,8 +1180,8 @@ export default function CreateTicket() {
                     {errors.priority && <p className={ERR}>{errors.priority}</p>}
                   </div>
 
-                  {/* Impact + Urgency — same row (matches original) */}
-                  <div className="grid grid-cols-2 gap-3">
+                  {/* Impact + Urgency + Due Date — one row (per explicit request) */}
+                  <div className="grid grid-cols-3 gap-3">
                     <div>
                       <label className={LBL}>Impact</label>
                       <select
@@ -1211,20 +1208,18 @@ export default function CreateTicket() {
                         ))}
                       </select>
                     </div>
-                  </div>
-
-                  {/* Due Date — in Classification card (matches original) */}
-                  <div>
-                    <label className={LBL}>Due Date</label>
-                    <input
-                      type="datetime-local"
-                      name="dueDate"
-                      value={formData.dueDate}
-                      onChange={handleChange}
-                      min={new Date().toISOString().slice(0, 16)}
-                      className={inp(!!errors.dueDate)}
-                    />
-                    {errors.dueDate && <span className={ERR}>{errors.dueDate}</span>}
+                    <div>
+                      <label className={LBL}>Due Date</label>
+                      <input
+                        type="datetime-local"
+                        name="dueDate"
+                        value={formData.dueDate}
+                        onChange={handleChange}
+                        min={new Date().toISOString().slice(0, 16)}
+                        className={inp(!!errors.dueDate)}
+                      />
+                      {errors.dueDate && <span className={ERR}>{errors.dueDate}</span>}
+                    </div>
                   </div>
 
                 </div>
@@ -1237,43 +1232,61 @@ export default function CreateTicket() {
                 </h2>
                 <div className="space-y-3">
 
-                  {/* C3 — Team / Manager (reporting manager from the employee master) */}
-                  <div>
-                    <label className={LBL}>Team / Manager</label>
-                    <p className={HINT}>A team is a manager and their direct reports</p>
-                    <SearchSelect
-                      options={teamOptions}
-                      value={formData.teamManagerId}
-                      onChange={handleTeamChange}
-                      placeholder={teamsLoading ? 'Loading teams…' : '— Select team —'}
-                      loading={teamsLoading}
-                      emptyText="No teams found"
-                    />
-                  </div>
+                  {/* C3 — Team / Manager + Assign to — one row (per explicit
+                      request). Assign to only renders for canAssign roles —
+                      for anyone else this row is just the one column. */}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className={LBL}>Team / Manager</label>
+                      <p className={HINT}>A team is a manager and their direct reports</p>
+                      <SearchSelect
+                        options={teamOptions}
+                        value={formData.teamManagerId}
+                        onChange={handleTeamChange}
+                        placeholder={teamsLoading ? 'Loading teams…' : '— Select team —'}
+                        loading={teamsLoading}
+                        emptyText="No teams found"
+                      />
+                    </div>
 
-                  {/* C3 — Assign to: members of the chosen team, manager first */}
-                  <div>
-                    <label className={LBL}>Assign to</label>
-                    <SearchSelect
-                      options={memberOptions}
-                      value={formData.assigneeId}
-                      onChange={(v) => setFormData(prev => ({ ...prev, assigneeId: v || '' }))}
-                      placeholder={
-                        !formData.teamManagerId
-                          ? 'Select a team first'
-                          : membersLoading ? 'Loading members…' : '— Unassigned —'
-                      }
-                      disabled={!formData.teamManagerId}
-                      loading={membersLoading}
-                      emptyText="No members in this team"
-                    />
+                    {/* C3 — Assign to: members of the chosen team, manager first.
+                        Only someone who already has real assignment authority
+                        (manager/senior_manager/admin) may hand a new ticket
+                        directly to a teammate — anyone else just picks the team
+                        above, and the ticket lands unassigned for that team's
+                        manager to pick up themselves. */}
+                    {canAssign && (
+                      <div>
+                        <label className={LBL}>Assign to</label>
+                        {/* Invisible spacer matching Team/Manager's hint line
+                            height — without it the two dropdowns don't align
+                            on the same visual row despite sharing one grid row. */}
+                        <p className={`${HINT} invisible`} aria-hidden="true">&nbsp;</p>
+                        <SearchSelect
+                          options={memberOptions}
+                          value={formData.assigneeId}
+                          onChange={(v) => setFormData(prev => ({ ...prev, assigneeId: v || '' }))}
+                          placeholder={
+                            !formData.teamManagerId
+                              ? 'Select a team first'
+                              : membersLoading ? 'Loading members…' : '— Unassigned —'
+                          }
+                          disabled={!formData.teamManagerId}
+                          loading={membersLoading}
+                          emptyText="No members in this team"
+                        />
+                      </div>
+                    )}
                   </div>
 
                   {/* Phase 3 — effort allocation (revealed once an agent is chosen) */}
-                  {formData.assigneeId && (
+                  {canAssign && formData.assigneeId && (
                     <div className="rounded border border-indigo-100 bg-indigo-50/40 p-2.5">
                       <p className="text-[10px] font-semibold text-indigo-700 uppercase tracking-wide mb-2">Effort allocation</p>
-                      <div className="grid grid-cols-2 gap-2 mb-2">
+                      {/* Start date + End date + Total hours — one row (per
+                          explicit request; previously dates were their own
+                          row, Total hours below on its own). */}
+                      <div className="grid grid-cols-3 gap-2 mb-2">
                         <div>
                           <label className={LBL}>Start date</label>
                           <input
@@ -1293,29 +1306,29 @@ export default function CreateTicket() {
                             className={inp(false)}
                           />
                         </div>
-                      </div>
-                      {/* Total hours only — tickets are never allocated per day */}
-                      <div>
-                        <label className={LBL}>Total hours</label>
-                        <div className="flex items-center gap-2">
-                          <input
-                            type="number"
-                            min="0.5"
-                            step="0.5"
-                            value={alloc.allocationTotalHours}
-                            onChange={e => setAlloc(p => ({ ...p, allocationTotalHours: e.target.value }))}
-                            placeholder="e.g. 10"
-                            className={inp(!allocHoursValid)}
-                          />
-                          <span className="text-[11px] text-gray-400 whitespace-nowrap">hours</span>
+                        {/* Total hours only — tickets are never allocated per day */}
+                        <div>
+                          <label className={LBL}>Total hours</label>
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="number"
+                              min="0.5"
+                              step="0.5"
+                              value={alloc.allocationTotalHours}
+                              onChange={e => setAlloc(p => ({ ...p, allocationTotalHours: e.target.value }))}
+                              placeholder="e.g. 10"
+                              className={inp(!allocHoursValid)}
+                            />
+                            <span className="text-[11px] text-gray-400 whitespace-nowrap">hours</span>
+                          </div>
                         </div>
-                        <AllocationDerivedLine
-                          total={allocHoursValid ? allocRaw : null}
-                          from={alloc.from || null}
-                          to={alloc.to || null}
-                          onDerived={setAllocDerived}
-                        />
                       </div>
+                      <AllocationDerivedLine
+                        total={allocHoursValid ? allocRaw : null}
+                        from={alloc.from || null}
+                        to={alloc.to || null}
+                        onDerived={setAllocDerived}
+                      />
                       {!allocHoursValid && <span className={ERR}>Total hours must be at least 0.5 in steps of 0.5</span>}
                       {!allocDatesValid && alloc.from && alloc.to && <span className={ERR}>Start date must be on or before end date</span>}
                       {/* Real capacity for the chosen agent + window (projects AND their other tickets) */}
@@ -1356,32 +1369,7 @@ export default function CreateTicket() {
                 </div>
               </div>
 
-              {/* ── Attachment ────────────────────────────────────────────── */}
-              <div className="bg-white rounded-lg border border-gray-200 p-4">
-                <h2 className="text-xs font-semibold text-gray-800 mb-3 uppercase tracking-wide">
-                  Attachment
-                </h2>
-                <input
-                  ref={attachmentInputRef}
-                  type="file"
-                  accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg,.gif,.zip,.txt"
-                  onChange={handleFileChange}
-                  className="w-full text-xs text-gray-500 file:mr-3 file:py-1 file:px-3 file:rounded file:border-0 file:text-xs file:font-medium file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
-                />
-                {attachment && (
-                  <p className="text-[10px] text-gray-500 mt-1 flex items-center gap-1.5">
-                    Selected: <span className="font-medium">{attachment.name}</span> ({(attachment.size / 1024).toFixed(1)} KB)
-                    <button
-                      type="button"
-                      onClick={handleRemoveAttachment}
-                      className="text-red-400 hover:text-red-600 ml-1"
-                      title="Remove attachment"
-                    >
-                      ✕
-                    </button>
-                  </p>
-                )}
-              </div>
+              
 
               {/* ── Documents ─────────────────────────────────────────────── */}
               <div className="bg-white rounded-lg border border-gray-200 p-4">

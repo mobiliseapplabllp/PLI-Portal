@@ -109,12 +109,15 @@ const getStats = async (req, res, next) => {
       HdTicket.count({ where: and(vis, { statusId: ids.pending }) }),
       HdTicket.count({ where: and(vis, { statusId: ids.resolved }) }),
       HdTicket.count({ where: and(vis, { statusId: ids.closed }) }),
-      // BUG M10 FIX: exclude closed/resolved tickets from the sla-breached (overdue) count
-      // so the dashboard only shows tickets that still need action.
+      // slaBreached is computed live from dueDate, never from the stored
+      // sla_breached column — that column is never written anywhere in the
+      // codebase, so filtering on it always silently returned 0 regardless
+      // of how many tickets were actually overdue. on-hold is excluded too
+      // (paused, not breached — matches the ticket detail page's SLA logic).
       HdTicket.count({
         where: and(vis, {
-          slaBreached: true,
-          statusId: { [Op.notIn]: [ids.closed, ids.resolved] },
+          dueDate: { [Op.lt]: new Date() },
+          status: { [Op.notIn]: ['closed', 'resolved', 'on-hold'] },
         }),
       }),
     ]);
@@ -182,6 +185,7 @@ const getByGroup = async (req, res, next) => {
         COUNT(t.id) AS count
       FROM hd_tickets t
       LEFT JOIN hd_groups g ON g.id = t.group_id
+      WHERE t.deleted_at IS NULL
       GROUP BY g.id, g.name
       ORDER BY count DESC
       LIMIT 50
@@ -213,7 +217,7 @@ const getByTeam = async (req, res, next) => {
                COUNT(t.id) AS total, ${PENDING} AS pending
         FROM hd_tickets t
         JOIN users u ON u.id = t.team_manager_id
-        WHERE t.team_manager_id IS NOT NULL${v.sql}
+        WHERE t.team_manager_id IS NOT NULL AND t.deleted_at IS NULL${v.sql}
         GROUP BY t.team_manager_id, u.name
         ORDER BY total DESC
       `, opts),
@@ -222,14 +226,14 @@ const getByTeam = async (req, res, next) => {
                COUNT(t.id) AS total, ${PENDING} AS pending
         FROM hd_tickets t
         JOIN hd_groups g ON g.id = t.group_id
-        WHERE t.team_manager_id IS NULL AND t.group_id IS NOT NULL${v.sql}
+        WHERE t.team_manager_id IS NULL AND t.group_id IS NOT NULL AND t.deleted_at IS NULL${v.sql}
         GROUP BY g.id, g.name
         ORDER BY total DESC
       `, opts),
       sequelize.query(`
         SELECT COUNT(t.id) AS total, COALESCE(${PENDING}, 0) AS pending
         FROM hd_tickets t
-        WHERE t.team_manager_id IS NULL AND t.group_id IS NULL${v.sql}
+        WHERE t.team_manager_id IS NULL AND t.group_id IS NULL AND t.deleted_at IS NULL${v.sql}
       `, opts),
     ]);
 
@@ -290,7 +294,7 @@ const getAgentStats = async (req, res, next) => {
         SUM(CASE WHEN t.status_id NOT IN (${closedList}) THEN 1 ELSE 0 END) AS pending
       FROM hd_tickets t
       JOIN users u ON u.id = t.assignee_id
-      WHERE t.assignee_id IS NOT NULL
+      WHERE t.assignee_id IS NOT NULL AND t.deleted_at IS NULL
       GROUP BY u.id, u.name
       ORDER BY total DESC
       LIMIT 20
@@ -311,6 +315,7 @@ const getRaisedByTeam = async (req, res, next) => {
         COALESCE(raised_by_team, 'Unknown') AS team,
         COUNT(*) AS count
       FROM hd_tickets
+      WHERE deleted_at IS NULL
       GROUP BY raised_by_team
       ORDER BY count DESC
       LIMIT 20
@@ -344,7 +349,7 @@ const getProjectStats = async (req, res, next) => {
           LEFT JOIN pm_projects pm  ON pm.id  = t.pm_project_id
           LEFT JOIN hd_projects hp  ON hp.id  = t.project_id
           LEFT JOIN pm_projects pm2 ON pm2.id = hp.pm_project_id
-         WHERE (t.pm_project_id IS NOT NULL OR t.project_id IS NOT NULL)${v.sql}
+         WHERE (t.pm_project_id IS NOT NULL OR t.project_id IS NOT NULL) AND t.deleted_at IS NULL${v.sql}
       ) x
       GROUP BY projectName
       ORDER BY total DESC
@@ -386,7 +391,8 @@ const getDeadlines = async (req, res, next) => {
         LEFT JOIN hd_projects hp  ON hp.id  = t.project_id
         LEFT JOIN pm_projects pm2 ON pm2.id = hp.pm_project_id
        WHERE t.status_id NOT IN (${closedList})
-         AND (t.sla_breached = 1 OR t.due_date IS NOT NULL)${v.sql}
+         AND (t.sla_breached = 1 OR t.due_date IS NOT NULL)
+         AND t.deleted_at IS NULL${v.sql}
     `, { replacements: { tz, ...v.rep } });
 
     const list = rows.map((r) => ({
@@ -428,7 +434,7 @@ const getBillingTickets = async (req, res, next) => {
         LEFT JOIN hd_projects hp  ON hp.id  = t.project_id
         LEFT JOIN pm_projects pm2 ON pm2.id = hp.pm_project_id
         LEFT JOIN users u         ON u.id   = t.assignee_id
-       WHERE t.status_id NOT IN (${closedList})${v.sql}
+       WHERE t.status_id NOT IN (${closedList}) AND t.deleted_at IS NULL${v.sql}
        ORDER BY t.created_at DESC
     `, { replacements: v.rep });
     const billable    = rows.filter((r) => r.billingType === 'Billable');
@@ -455,7 +461,7 @@ const getMyStats = async (req, res, next) => {
         SUM(CASE WHEN status_id IN (${inProgressList}) THEN 1 ELSE 0 END) AS inProgress,
         SUM(CASE WHEN status_id IN (${closedList}) THEN 1 ELSE 0 END) AS closed
       FROM hd_tickets
-      WHERE assignee_id = ?
+      WHERE assignee_id = ? AND deleted_at IS NULL
     `, { replacements: [userId] });
     return sendSuccess(res, rows[0] || { total: 0, open: 0, inProgress: 0, closed: 0 }, 'My stats fetched');
   } catch (err) { next(err); }
@@ -513,7 +519,7 @@ const getWeeklyTrend = async (req, res, next) => {
         COUNT(*) AS received,
         SUM(CASE WHEN status_id IN (${closedList}) THEN 1 ELSE 0 END) AS completed
       FROM hd_tickets
-      WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
+      WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL 7 DAY) AND deleted_at IS NULL
       GROUP BY DATE(created_at)
       ORDER BY date ASC
     `);
@@ -533,6 +539,7 @@ const getModeStats = async (req, res, next) => {
         COALESCE(mode, 'Unknown') AS mode,
         COUNT(*) AS count
       FROM hd_tickets
+      WHERE deleted_at IS NULL
       GROUP BY mode
       ORDER BY count DESC
     `);

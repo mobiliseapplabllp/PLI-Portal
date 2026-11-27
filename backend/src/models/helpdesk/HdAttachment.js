@@ -40,9 +40,11 @@ const HdAttachment = sequelize.define('HdAttachment', {
     allowNull: false,
     comment:   'Original filename as provided by the uploader',
   },
+  // NULL for a blob-stored row (new uploads) — set only on legacy disk-stored
+  // rows, which the serve endpoint falls back to.
   storedName: {
     type:      DataTypes.STRING(300),
-    allowNull: false,
+    allowNull: true,
     field:     'stored_name',
     comment:   'UUID-based filename on disk (prevents collisions and path traversal)',
   },
@@ -56,6 +58,12 @@ const HdAttachment = sequelize.define('HdAttachment', {
     allowNull: true,
     field:     'size_bytes',
     validate:  { min: 0 },
+  },
+  // New uploads store bytes directly here — same pattern as HdDocument.fileBlob.
+  fileBlob: {
+    type:      DataTypes.BLOB('long'),
+    allowNull: true,
+    field:     'file_blob',
   },
 }, {
   tableName:  'hd_attachments',

@@ -23,6 +23,7 @@ import {
 import {
   getConversationsApi,
   addConversationApi,
+  updateConversationApi,
 } from '../../api/helpdesk/conversations.api';
 // updateTicketApi is called directly (not via the thunk) wherever an allocation is
 // sent: the thunk collapses errors to a message string and the HTTP 409 `conflict`
@@ -38,7 +39,9 @@ import {
   uploadHdDocumentApi,
   deleteHdDocumentApi,
   downloadHdDocumentApi,
+  getSlaPoliciesApi,
 } from '../../api/helpdesk/helpdesk.api';
+import { downloadAttachmentApi, deleteAttachmentApi } from '../../api/helpdesk/attachments.api';
 import { downloadBlob } from '../../utils/formatters';
 import {
   requestApprovalApi,
@@ -121,6 +124,25 @@ const PRIORITY_COLORS = {
   low:      'text-emerald-600',
 };
 
+// Admin-configured colors (Helpdesk Settings → Operations Customization) —
+// same source Operations Reports reads, so a status/priority is always the
+// same color everywhere in the app, not just within Reports. Returns
+// undefined (no override) when nothing's configured, so the Tailwind maps
+// above still apply unchanged until an admin actually sets a color.
+// Lowercased both sides — ticket.priority is stored lowercase but
+// hd_options priority names are Title Case.
+function buildColorMap(hdOptions, type) {
+  return Object.fromEntries((hdOptions?.[type] || []).map(o => [o.name.toLowerCase(), o.color]).filter(([, c]) => c));
+}
+function statusStyleFrom(hdOptions, status) {
+  const c = buildColorMap(hdOptions, 'status')[String(status ?? '').toLowerCase()];
+  return c ? { backgroundColor: `${c}1A`, color: c } : undefined;
+}
+function priorityStyleFrom(hdOptions, priority) {
+  const c = buildColorMap(hdOptions, 'priority')[String(priority ?? '').toLowerCase()];
+  return c ? { color: c } : undefined;
+}
+
 const PRIORITY_BTN = {
   critical: 'bg-red-100 text-red-700 ring-red-300',
   high:     'bg-orange-100 text-orange-700 ring-orange-300',
@@ -151,6 +173,46 @@ function fmtDate(d) {
 function fmtLabel(s) {
   if (!s) return '—';
   return String(s).replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+// ── SLA status — computed live from dueDate/status, never from the stored
+// slaBreached column (that column is never written anywhere in the backend
+// and was always stale/false, which is why "On Track" used to show even
+// with no due date set or a due date already in the past). Five states,
+// not a bare boolean — "At Risk" gives a warning before a ticket actually
+// breaches, and "On Hold" is shown as paused rather than still counting
+// down, since the clock isn't meaningfully ticking while waiting on someone.
+// atRiskThresholdHours comes from the admin-configurable hd_sla_policies
+// table (Helpdesk Settings → SLA Policy), keyed by the ticket's own
+// priority — NOT a hardcoded value. slaPolicies is the raw array fetched
+// from GET /helpdesk/sla-policies; 4 hours is only a last-resort fallback
+// for when policies haven't loaded yet or no row exists for this priority
+// (so the page never breaks while that request is in flight).
+function atRiskThresholdFor(ticket, slaPolicies) {
+  const policy = (slaPolicies || []).find(
+    (p) => p.isActive && String(p.priority).toLowerCase() === String(ticket.priority || '').toLowerCase()
+  );
+  return (policy ? Number(policy.atRiskThresholdHours) : 4) * 60 * 60 * 1000;
+}
+function computeSlaStatus(ticket, slaPolicies) {
+  const isClosed = ticket.status === 'closed' || ticket.status === 'resolved';
+  const due = ticket.dueDate ? new Date(ticket.dueDate) : null;
+
+  if (isClosed) {
+    if (!due) return { key: 'no_due_date', label: 'No Due Date', className: 'text-gray-400' };
+    const closedAt = ticket.closedAt || ticket.closed_at;
+    const finishedAt = closedAt ? new Date(closedAt) : null;
+    if (finishedAt && finishedAt > due) return { key: 'breached', label: 'Breached (Closed Late)', className: 'text-red-600 font-semibold' };
+    return { key: 'met', label: 'Met', className: 'text-emerald-600 font-semibold' };
+  }
+
+  if (!due) return { key: 'no_due_date', label: 'No Due Date', className: 'text-gray-400' };
+  if (ticket.status === 'on-hold') return { key: 'paused', label: 'Paused (On Hold)', className: 'text-blue-500 font-semibold' };
+
+  const msRemaining = due.getTime() - Date.now();
+  if (msRemaining < 0) return { key: 'breached', label: 'Breached', className: 'text-red-600 font-semibold' };
+  if (msRemaining <= atRiskThresholdFor(ticket, slaPolicies)) return { key: 'at_risk', label: 'At Risk', className: 'text-amber-600 font-semibold' };
+  return { key: 'on_track', label: 'On Track', className: 'text-emerald-600 font-semibold' };
 }
 
 // ── Team = reporting manager + direct reports (GET /helpdesk/teams) ──────────
@@ -272,6 +334,11 @@ export default function TicketDetail() {
 
   // ── Documents tab ──────────────────────────────────────────────────────────
   const [hdDocs, setHdDocs]                           = useState([]);
+  // Admin-configurable SLA timing (Helpdesk Settings → SLA Policy) — fetched
+  // once per page load, read by computeSlaStatus() instead of a hardcoded
+  // threshold. [] default means "not loaded yet", handled by the fallback
+  // inside atRiskThresholdFor().
+  const [slaPolicies, setSlaPolicies]                 = useState([]);
   const [hdDocsLoading, setHdDocsLoading]             = useState(false);
   const [hdDocFile, setHdDocFile]                     = useState(null);
   const [hdDocCategory, setHdDocCategory]             = useState('SOW / Client Contracts');
@@ -308,6 +375,23 @@ export default function TicketDetail() {
     if (!hdOptions || Object.keys(hdOptions).length === 0) {
       dispatch(fetchHdOptions());
     }
+    // SLA policies are global (not per-ticket) — fetch once, reused across
+    // every ticket this session visits.
+    if (slaPolicies.length === 0) {
+      getSlaPoliciesApi().then(res => setSlaPolicies(res.data?.data || [])).catch(() => {});
+    }
+    // Reset Documents state too — this component instance is reused by the
+    // router when navigating straight from one ticket to another, so without
+    // this, hdDocsLoaded would stay true from the PREVIOUS ticket and the
+    // Documents tab/count would silently never refetch for the new one.
+    setHdDocs([]);
+    setHdDocsLoaded(false);
+    // Fetch Documents eagerly (not just on tab click) — the tab's count badge
+    // (`Documents (N)`) is visible from the moment the page opens, so it must
+    // never show a stale/false "(0)" while the real count just hasn't loaded
+    // yet. loadHdDocs() falls back to route `id` directly when `ticket` isn't
+    // loaded yet, so this is safe to call before the ticket fetch resolves.
+    loadHdDocs();
     return () => { dispatch(clearCurrentTicket()); };
   }, [dispatch, id]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -387,14 +471,21 @@ export default function TicketDetail() {
   };
 
   const handleDuplicate = () => {
+    // CreateTicket.jsx only ever reads location.state.duplicateFrom (it then
+    // prefixes the title with "Copy of " itself) — this used to send
+    // { duplicate, ticketData } instead, a field-name mismatch that made
+    // Duplicate silently open a blank form everywhere it was used.
     navigate('/helpdesk/tickets/new', {
       state: {
-        duplicate: true,
-        ticketData: {
-          title:       `[Copy] ${ticket.title}`,
+        duplicateFrom: {
+          title:       ticket.title,
           description: ticket.description,
           priority:    ticket.priority,
           category:    ticket.category,
+          mode:        ticket.mode,
+          impact:      ticket.impact,
+          urgency:     ticket.urgency,
+          site:        ticket.site,
           requestType:   ticket.requestType,
           teamManagerId: ticketTeamManagerId(ticket) || undefined,
         },
@@ -489,6 +580,18 @@ export default function TicketDetail() {
     } finally { setRespondingId(null); }
   };
 
+  // ── Conversation attachment download ────────────────────────────────────────
+  // Authenticated endpoint — must fetch as a blob (token attached by axios'
+  // interceptor) rather than a plain <a href>, which would 401 silently.
+  const handleConversationAttachmentDownload = async (attachmentId, filename) => {
+    try {
+      const res = await downloadAttachmentApi(attachmentId);
+      downloadBlob(res.data, filename || 'attachment');
+    } catch (err) {
+      toast.error(err?.response?.data?.error?.message || 'Download failed');
+    }
+  };
+
   // ── Document handlers ──────────────────────────────────────────────────────
 
   const handleHdDocUpload = async () => {
@@ -511,11 +614,18 @@ export default function TicketDetail() {
     } finally { setHdDocUploading(false); }
   };
 
-  const handleHdDocDelete = async (docId) => {
+  const handleHdDocDelete = async (doc) => {
+    const docId = doc._id || doc.id;
     const ticketId = ticket?._id ?? ticket?.id ?? id;
     if (!window.confirm('Delete this document?')) return;
     try {
-      await deleteHdDocumentApi(ticketId, docId);
+      // Legacy ticket-level attachments (pre-dating the Documents merge) live
+      // in a different table/endpoint — route by source.
+      if (doc.source === 'attachment') {
+        await deleteAttachmentApi(docId);
+      } else {
+        await deleteHdDocumentApi(ticketId, docId);
+      }
       toast.success('Document deleted');
       setHdDocs(prev => prev.filter(d => (d._id || d.id) !== docId));
     } catch { toast.error('Failed to delete document'); }
@@ -618,7 +728,7 @@ export default function TicketDetail() {
                   {ticket.reqNumber || `#${String(id).slice(-6).toUpperCase()}`}
                 </span>
                 {/* Status badge */}
-                <span className={`px-2 py-0.5 rounded-full text-xs font-medium capitalize ${STATUS_COLORS[ticket.status] || 'bg-gray-100 text-gray-700'}`}>
+                <span className={`px-2 py-0.5 rounded-full text-xs font-medium capitalize ${STATUS_COLORS[ticket.status] || 'bg-gray-100 text-gray-700'}`} style={statusStyleFrom(hdOptions, ticket.status)}>
                   {fmtLabel(ticket.status)}
                 </span>
                 {/* Source badge */}
@@ -695,6 +805,7 @@ export default function TicketDetail() {
                   onAddReminder={() => { setShowReminderModal(true); setShowActions(false); }}
                   onDuplicate={() => { handleDuplicate(); setShowActions(false); }}
                   onDelete={canManage ? handleDelete : null}
+                  canManage={canManage}
                   onStatusChange={(s) => {
                     if (s === 'closed') {
                       setShowActions(false);
@@ -720,13 +831,20 @@ export default function TicketDetail() {
         </div>
       )}
 
+      {/* ── Properties bar — Status/Priority/Requester/Assignee/Created/SLA,
+          one horizontal row spanning the full page width, directly above
+          the tab strip. Replaces the old vertical "Properties" card that
+          used to sit in the right sidebar — same fields, same data/colors,
+          just laid out horizontally per explicit request. ────────────── */}
+      <PropertiesBar ticket={ticket} hdOptions={hdOptions} slaPolicies={slaPolicies} />
+
       {/* ── Main two-column layout ─────────────────────────────────────────── */}
       <div className="flex-1 flex gap-5 p-6 overflow-auto min-h-0">
 
         {/* ── Left Panel ──────────────────────────────────────────────────── */}
         <div className="flex-1 flex flex-col min-w-0 bg-white rounded-xl border border-gray-200 overflow-hidden">
           {/* Tab bar */}
-          <div className="flex border-b border-gray-200 bg-white overflow-x-auto">
+          <div className="flex border-b border-gray-200 bg-white">
             {tabs.map(t => (
               <button
                 key={t.id}
@@ -759,10 +877,13 @@ export default function TicketDetail() {
                 fileInputRef={fileInputRef}
                 sending={sendingReply}
                 onSend={handleSendReply}
+                currentUserId={user?._id ?? user?.id}
+                onReloaded={loadConversations}
+                onDownloadAttachment={handleConversationAttachmentDownload}
               />
             )}
             {activeTab === 'details' && (
-              <DetailsTab ticket={ticket} />
+              <DetailsTab ticket={ticket} slaPolicies={slaPolicies} />
             )}
             {activeTab === 'documents' && (
               <DocumentsTab
@@ -817,7 +938,6 @@ export default function TicketDetail() {
             user={user}
             onChanged={() => dispatch(fetchTicketById(id))}
           />
-          <PropertiesPanel ticket={ticket} />
           <AssignmentPanel
             ticket={ticket}
             user={user}
@@ -945,7 +1065,7 @@ export default function TicketDetail() {
 // ActionsDropdown
 // ---------------------------------------------------------------------------
 
-function ActionsDropdown({ onClose, onAddNote, onAddTask, onAddReminder, onDuplicate, onDelete, onStatusChange }) {
+function ActionsDropdown({ onClose, onAddNote, onAddTask, onAddReminder, onDuplicate, onDelete, canManage, onStatusChange }) {
   const hdOptions = useSelector(selectHdOptions);
   const statusOptions = hdOptions?.status?.length ? hdOptions.status.map(o => o.name) : STATUS_OPTIONS;
   return (
@@ -981,17 +1101,24 @@ function ActionsDropdown({ onClose, onAddNote, onAddTask, onAddReminder, onDupli
           Duplicate
         </button>
 
-        <div className="border-t border-gray-100 my-1" />
-        <p className="px-4 py-1 text-[11px] text-gray-400 font-semibold uppercase tracking-wider">Change Status</p>
-        {statusOptions.map(s => (
-          <button
-            key={s}
-            onClick={() => onStatusChange(s)}
-            className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 pl-8"
-          >
-            {fmtLabel(s)}
-          </button>
-        ))}
+        {/* Changing status (including Close) is a manage-only action — same
+            gate as the main Close button, so this dropdown can never offer
+            an action the backend would reject anyway. */}
+        {canManage && (
+          <>
+            <div className="border-t border-gray-100 my-1" />
+            <p className="px-4 py-1 text-[11px] text-gray-400 font-semibold uppercase tracking-wider">Change Status</p>
+            {statusOptions.map(s => (
+              <button
+                key={s}
+                onClick={() => onStatusChange(s)}
+                className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 pl-8"
+              >
+                {fmtLabel(s)}
+              </button>
+            ))}
+          </>
+        )}
 
         {onDelete && (
           <>
@@ -1019,8 +1146,29 @@ function ConversationsTab({
   reply, setReply, isInternal, setIsInternal,
   attachFile, setAttachFile, fileInputRef,
   sending, onSend,
+  currentUserId, onReloaded, onDownloadAttachment,
 }) {
   const MAX_ATTACHMENT_SIZE = 5 * 1024 * 1024; // 5 MB
+  const isClosed = ticket.status === 'closed';
+  const [editingId, setEditingId]   = useState(null);
+  const [editDraft, setEditDraft]   = useState('');
+  const [savingEdit, setSavingEdit] = useState(false);
+
+  const startEdit = (c) => { setEditingId(c._id || c.id); setEditDraft(c.message); };
+  const cancelEdit = () => { setEditingId(null); setEditDraft(''); };
+  const saveEdit = async (convId) => {
+    if (!editDraft.trim()) return;
+    setSavingEdit(true);
+    try {
+      await updateConversationApi(convId, { message: editDraft.trim() });
+      toast.success('Reply updated');
+      setEditingId(null);
+      setEditDraft('');
+      await onReloaded?.();
+    } catch (err) {
+      toast.error(err?.response?.data?.error?.message || 'Failed to update reply');
+    } finally { setSavingEdit(false); }
+  };
 
   const handleAttachFileChange = (e) => {
     const file = e.target.files?.[0];
@@ -1076,7 +1224,7 @@ function ConversationsTab({
             .map(c => (
               <div
                 key={c._id || c.id}
-                className={`rounded-xl border p-4 ${
+                className={`group rounded-xl border p-4 ${
                   c.isInternal || c.is_internal
                     ? 'bg-yellow-50 border-yellow-200'
                     : 'bg-white border-gray-200'
@@ -1095,19 +1243,73 @@ function ConversationsTab({
                         </span>
                       )}
                       <span className="text-xs text-gray-400">{fmtDate(c.created_at)}</span>
+                      {c.updated_at && c.created_at && new Date(c.updated_at) - new Date(c.created_at) > 1000 && (
+                        <span className="text-[11px] text-gray-400 italic">· edited</span>
+                      )}
+                      {/* Edit — author only, only while the ticket is still
+                          open (server enforces the same rule; this just
+                          avoids showing an action that would always be
+                          rejected). Reveals on row hover, like GitHub/Slack. */}
+                      {editingId !== (c._id || c.id) && !isClosed && currentUserId
+                        && String(c.userId ?? c.user?._id ?? c.user?.id ?? '') === String(currentUserId) && (
+                        <button
+                          type="button"
+                          onClick={() => startEdit(c)}
+                          title="Edit reply"
+                          className="ml-auto flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] text-gray-400 opacity-0 group-hover:opacity-100 hover:text-blue-600 hover:bg-blue-50 transition-all"
+                        >
+                          <HiOutlinePencil className="w-3.5 h-3.5" />
+                          Edit
+                        </button>
+                      )}
                     </div>
-                    <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{c.message}</p>
-                    {c.attachmentUrl && (
-                      <a
-                        href={c.attachmentUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
+                    {editingId === (c._id || c.id) ? (
+                      <div className="space-y-2">
+                        <textarea
+                          rows={3}
+                          value={editDraft}
+                          autoFocus
+                          onFocus={e => e.target.setSelectionRange(e.target.value.length, e.target.value.length)}
+                          onChange={e => setEditDraft(e.target.value)}
+                          onKeyDown={e => {
+                            if (e.key === 'Escape') cancelEdit();
+                            if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') saveEdit(c._id || c.id);
+                          }}
+                          className="w-full px-3 py-2 border border-blue-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none bg-white"
+                        />
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => saveEdit(c._id || c.id)}
+                            disabled={savingEdit || !editDraft.trim()}
+                            className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-semibold hover:bg-blue-700 disabled:opacity-50 transition-colors"
+                          >
+                            {savingEdit ? 'Saving…' : 'Save changes'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={cancelEdit}
+                            className="px-3 py-1.5 text-xs text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
+                          >
+                            Cancel
+                          </button>
+                          <span className="text-[11px] text-gray-400 ml-auto">Esc to cancel · ⌘/Ctrl+Enter to save</span>
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{c.message}</p>
+                    )}
+                    {(c.files || []).map((f) => (
+                      <button
+                        key={f._id || f.id}
+                        type="button"
+                        onClick={() => onDownloadAttachment?.(f._id || f.id, f.filename)}
                         className="mt-2 inline-flex items-center gap-1 text-xs text-blue-600 hover:underline"
                       >
                         <HiOutlinePaperClip className="w-3.5 h-3.5" />
-                        {c.attachmentName || 'Attachment'}
-                      </a>
-                    )}
+                        {f.filename || 'Attachment'}
+                      </button>
+                    ))}
                   </div>
                 </div>
               </div>
@@ -1183,7 +1385,7 @@ function ConversationsTab({
 // DetailsTab
 // ---------------------------------------------------------------------------
 
-function DetailsTab({ ticket }) {
+function DetailsTab({ ticket, slaPolicies }) {
   const fields = [
     ['Request Type', fmtLabel(ticket.requestType)],
     ['Mode',         fmtLabel(ticket.mode)],
@@ -1195,11 +1397,10 @@ function DetailsTab({ ticket }) {
     ['Team',         ticket.teamManager?.name || ticket.group?.name || ticket.groupName || '—'],
     ['Project',      ticket.pmProject?.name || ticket.project?.name || ticket.projectName || '—'],
     ['Raised by Team', ticket.raisedByTeam || ticket.team || '—'],
-    ['SLA Status',   ticket.slaBreached === true
-      ? <span className="text-red-600 font-semibold">Breached</span>
-      : ticket.slaBreached === false
-        ? <span className="text-emerald-600 font-semibold">On Track</span>
-        : '—'],
+    ['SLA Status',   (() => {
+      const sla = computeSlaStatus(ticket, slaPolicies);
+      return <span className={sla.className}>{sla.label}</span>;
+    })()],
   ];
 
   return (
@@ -1420,6 +1621,7 @@ function HistoryTab({ history, loading }) {
 // ---------------------------------------------------------------------------
 
 const HD_DOC_CATEGORY_COLORS = {
+  'Initial Request Attachment': 'bg-rose-100 text-rose-700',
   'SOW / Client Contracts': 'bg-blue-100 text-blue-700',
   'Requirement Documents / BRD': 'bg-purple-100 text-purple-700',
   'Solution Architecture Documents': 'bg-emerald-100 text-emerald-700',
@@ -1440,10 +1642,15 @@ function DocumentsTab({
     return `${(n / 1024 / 1024).toFixed(1)} MB`;
   };
 
-  const handleDownload = async (docId, filename) => {
+  const handleDownload = async (doc) => {
+    const docId = doc._id || doc.id;
     try {
-      const res = await downloadHdDocumentApi(ticketId, docId);
-      downloadBlob(res.data, filename || 'document');
+      // Legacy ticket-level attachments (pre-dating the Documents merge) are
+      // served from a different endpoint — route by source.
+      const res = doc.source === 'attachment'
+        ? await downloadAttachmentApi(docId)
+        : await downloadHdDocumentApi(ticketId, docId);
+      downloadBlob(res.data, doc.filename || doc.originalName || 'document');
     } catch (err) {
       toast.error(err?.response?.data?.error?.message || 'Download failed');
     }
@@ -1525,7 +1732,7 @@ function DocumentsTab({
                 <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                   <button
                     type="button"
-                    onClick={() => handleDownload(docId, doc.filename || doc.originalName)}
+                    onClick={() => handleDownload(doc)}
                     className="p-1.5 hover:bg-blue-50 rounded text-gray-400 hover:text-blue-600 transition-colors"
                     title="Download"
                   >
@@ -1533,7 +1740,7 @@ function DocumentsTab({
                   </button>
                   {canManage && (
                     <button
-                      onClick={() => onDelete(docId)}
+                      onClick={() => onDelete(doc)}
                       className="p-1.5 hover:bg-red-50 rounded text-gray-400 hover:text-red-600 transition-colors"
                       title="Delete"
                     >
@@ -1626,70 +1833,58 @@ function ResolutionTab({ ticket, canManage, editing, draft, setDraft, submitting
 }
 
 // ---------------------------------------------------------------------------
-// PropertiesPanel  (right sidebar, panel 1)
+// PropertiesBar  (horizontal, above the tab strip)
 // ---------------------------------------------------------------------------
 
-function PropertiesPanel({ ticket }) {
+// Same fields/data/colors the old vertical sidebar card used — just laid out
+// as one horizontal row above the tab strip, per explicit request, instead
+// of stacked in the sidebar.
+function PropertiesBar({ ticket, hdOptions, slaPolicies }) {
   const requesterName  = ticket.requesterUser?.name  || ticket.requester?.name  || ticket.requesterName  || '—';
   const requesterEmail = ticket.requesterUser?.email || ticket.requester?.email || ticket.requesterEmail || '';
   const assigneeName   = ticket.assigneeUser?.name   || ticket.assignee?.name   || ticket.assigneeName   || null;
+  const sla = computeSlaStatus(ticket, slaPolicies);
 
-  const slaEl = ticket.slaBreached === true
-    ? <span className="text-red-600 font-semibold text-xs">Breached</span>
-    : ticket.slaBreached === false
-      ? <span className="text-emerald-600 font-semibold text-xs">On Track</span>
-      : <span className="text-gray-400 text-xs">—</span>;
+  const Field = ({ label, children }) => (
+    <div className="flex-1 min-w-0 px-4 first:pl-6 last:pr-6">
+      <p className="text-[11px] text-gray-400 uppercase tracking-wider mb-1">{label}</p>
+      {children}
+    </div>
+  );
 
   return (
-    <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-4">
-      <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Properties</h3>
-
-      {/* Status */}
-      <div>
-        <p className="text-[11px] text-gray-400 uppercase tracking-wider mb-1">Status</p>
-        <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold capitalize ${STATUS_COLORS[ticket.status] || 'bg-gray-100 text-gray-600'}`}>
-          {fmtLabel(ticket.status)}
-        </span>
-      </div>
-
-      {/* Priority */}
-      <div>
-        <p className="text-[11px] text-gray-400 uppercase tracking-wider mb-1">Priority</p>
-        <span className={`text-sm font-semibold capitalize ${PRIORITY_COLORS[ticket.priority] || 'text-gray-600'}`}>
-          {fmtLabel(ticket.priority)}
-        </span>
-      </div>
-
-      {/* Requester */}
-      <div>
-        <p className="text-[11px] text-gray-400 uppercase tracking-wider mb-1">Requester</p>
-        <p className="text-sm font-medium text-gray-800">{requesterName}</p>
-        {requesterEmail && <p className="text-xs text-gray-400 mt-0.5 truncate">{requesterEmail}</p>}
-      </div>
-
-      {/* Assignee */}
-      <div>
-        <p className="text-[11px] text-gray-400 uppercase tracking-wider mb-1">Assignee</p>
-        {assigneeName ? (
-          <div className="flex items-center gap-2">
-            <Avatar name={assigneeName} size="sm" />
-            <p className="text-sm font-medium text-gray-800">{assigneeName}</p>
-          </div>
-        ) : (
-          <p className="text-sm text-gray-400">Unassigned</p>
-        )}
-      </div>
-
-      {/* Created */}
-      <div>
-        <p className="text-[11px] text-gray-400 uppercase tracking-wider mb-1">Created</p>
-        <p className="text-xs text-gray-600">{fmtDate(ticket.created_at)}</p>
-      </div>
-
-      {/* SLA */}
-      <div>
-        <p className="text-[11px] text-gray-400 uppercase tracking-wider mb-1">SLA</p>
-        {slaEl}
+    <div className="bg-white border-b border-gray-200">
+      <div className="flex items-stretch divide-x divide-gray-100 py-3">
+        <Field label="Status">
+          <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold capitalize inline-block ${STATUS_COLORS[ticket.status] || 'bg-gray-100 text-gray-600'}`} style={statusStyleFrom(hdOptions, ticket.status)}>
+            {fmtLabel(ticket.status)}
+          </span>
+        </Field>
+        <Field label="Priority">
+          <span className={`text-sm font-semibold capitalize ${PRIORITY_COLORS[ticket.priority] || 'text-gray-600'}`} style={priorityStyleFrom(hdOptions, ticket.priority)}>
+            {fmtLabel(ticket.priority)}
+          </span>
+        </Field>
+        <Field label="Requester">
+          <p className="text-sm font-medium text-gray-800 truncate">{requesterName}</p>
+          {requesterEmail && <p className="text-xs text-gray-400 mt-0.5 truncate">{requesterEmail}</p>}
+        </Field>
+        <Field label="Assignee">
+          {assigneeName ? (
+            <div className="flex items-center gap-2 min-w-0">
+              <Avatar name={assigneeName} size="sm" />
+              <p className="text-sm font-medium text-gray-800 truncate">{assigneeName}</p>
+            </div>
+          ) : (
+            <p className="text-sm text-gray-400">Unassigned</p>
+          )}
+        </Field>
+        <Field label="Created">
+          <p className="text-xs text-gray-600">{fmtDate(ticket.created_at)}</p>
+        </Field>
+        <Field label="SLA">
+          <span className={`text-xs ${sla.className}`}>{sla.label}</span>
+        </Field>
       </div>
     </div>
   );
@@ -3012,6 +3207,7 @@ function CloseTicketModal({ ticket, id, onClose }) {
  */
 function LinkedTeamsPanel({ ticket, id, canManage, dispatch }) {
   const navigate = useNavigate();
+  const hdOptions = useSelector(selectHdOptions);
   const [linkTicketId, setLinkTicketId] = useState('');
   const [linkType, setLinkType]         = useState('related');
   const [showForm, setShowForm]         = useState(false);
@@ -3073,7 +3269,7 @@ function LinkedTeamsPanel({ ticket, id, canManage, dispatch }) {
             )}
           </div>
           {linkedTicket?.status && (
-            <span className={`mt-1 inline-block px-2 py-0.5 rounded-full text-[11px] font-semibold capitalize ${STATUS_COLORS[linkedTicket.status] || 'bg-gray-100 text-gray-600'}`}>
+            <span className={`mt-1 inline-block px-2 py-0.5 rounded-full text-[11px] font-semibold capitalize ${STATUS_COLORS[linkedTicket.status] || 'bg-gray-100 text-gray-600'}`} style={statusStyleFrom(hdOptions, linkedTicket.status)}>
               {fmtLabel(linkedTicket.status)}
             </span>
           )}

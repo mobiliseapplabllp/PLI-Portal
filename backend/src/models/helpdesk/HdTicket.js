@@ -287,6 +287,13 @@ const HdTicket = sequelize.define('HdTicket', {
   timestamps:  true,
   createdAt:   'created_at',
   updatedAt:   'updated_at',
+  // Soft delete (migration 067) — .destroy() becomes UPDATE deleted_at=NOW()
+  // instead of a real DELETE. Every normal Sequelize query (findAll,
+  // findByPk, count, etc.) automatically excludes soft-deleted rows from
+  // here on; pass `paranoid: false` explicitly to intentionally include them
+  // (used by the deleted-tickets list and restore lookup).
+  paranoid:    true,
+  deletedAt:   'deleted_at',
   hooks: {
     /**
      * Auto-stamp closedAt when status transitions to resolved or closed.

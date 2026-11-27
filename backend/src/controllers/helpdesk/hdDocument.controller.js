@@ -3,6 +3,7 @@ const path    = require('path');
 const fs      = require('fs');
 const multer  = require('multer');
 const HdDocument = require('../../models/helpdesk/HdDocument');
+const HdAttachment = require('../../models/helpdesk/HdAttachment');
 
 // Legacy only — new uploads no longer write here, this stays purely so
 // documents uploaded before migration 061 keep downloading correctly.
@@ -51,7 +52,36 @@ exports.listDocuments = async (req, res) => {
       include: [{ association: 'uploadedBy', attributes: ['id', 'name'] }],
       order: [['createdAt', 'DESC']],
     });
-    return res.json({ data: docs });
+
+    // Merge in legacy ticket-level attachments — files uploaded via the old
+    // Create Ticket "Attachment" field (before it folded into Documents).
+    // conversationId IS NULL excludes conversation-reply attachments, which
+    // are shown inline on the reply itself, not here. Each row is shaped to
+    // look like a document (source: 'attachment' tells the frontend which
+    // download endpoint to call — these were never blob-migrated).
+    const legacyAttachments = await HdAttachment.findAll({
+      where: { ticketId: Number(ticketId), conversationId: null },
+      include: [{ association: 'uploadedByUser', attributes: ['id', 'name'] }],
+      // HdAttachment maps createdAt -> created_at explicitly (no `underscored:
+      // true` on this model, unlike HdDocument) — the raw column name is
+      // required here, 'createdAt' is not a recognized order-by alias.
+      order: [['created_at', 'DESC']],
+    });
+    const legacyAsDocuments = legacyAttachments.map((a) => ({
+      id: a.id,
+      source: 'attachment',
+      category: 'Initial Request Attachment',
+      filename: a.filename,
+      mimeType: a.mimeType,
+      sizeBytes: a.sizeBytes,
+      uploadedBy: a.uploadedByUser,
+      createdAt: a.createdAt,
+    }));
+
+    const merged = [...docs.map((d) => ({ ...d.get({ plain: true }), source: 'document' })), ...legacyAsDocuments]
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+    return res.json({ data: merged });
   } catch (err) {
     return res.status(500).json({ error: { message: err.message } });
   }

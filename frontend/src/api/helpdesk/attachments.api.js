@@ -32,3 +32,13 @@ export const deleteAttachmentApi = (id) => api.delete(`/helpdesk/attachments/${i
  */
 export const getAttachmentUrl = (storedName) =>
   `${API_URL}/helpdesk/attachments/${storedName}`;
+
+/**
+ * Authenticated download, by id — dual-read server-side (blob-stored new
+ * uploads, or disk fallback for legacy rows). A plain <a href> would 401
+ * since this requires a Bearer token; fetch as a blob through the shared
+ * axios instance instead and save it with utils/formatters.js's downloadBlob().
+ * @param {number|string} id
+ */
+export const downloadAttachmentApi = (id) =>
+  api.get(`/helpdesk/attachments/${id}/download`, { responseType: 'blob' });

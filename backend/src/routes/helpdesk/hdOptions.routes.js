@@ -17,6 +17,9 @@ router.get('/',    ctrl.listOptions);
 // POST /helpdesk/options
 router.post('/',   ctrl.createOption);
 
+// PUT /helpdesk/options/:id — color/description only, never name/type
+router.put('/:id', ctrl.updateOption);
+
 // DELETE /helpdesk/options/:id
 router.delete('/:id', ctrl.deleteOption);
 
